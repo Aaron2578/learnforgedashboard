@@ -20,3 +20,4 @@ where code in ('TMIT01', 'TMIT02', 'TMIT03') or name ilike '%JAVA%' or name ilik
 update public.courses
 set department = 'SAP'
 where code in ('TMSAP01') or name ilike '%SAP%' or name ilike '%FICO%';
+
