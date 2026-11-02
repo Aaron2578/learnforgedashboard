@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ArrowRight, Award, BookOpen, CalendarClock, CheckCircle2, ClipboardList,
-  Clock, Download, ExternalLink, Eye, FileText, Mail, MapPin, MessageSquare,
+  Clock, Download, ExternalLink, Eye, EyeOff, FileText, Mail, MapPin, MessageSquare,
   Pencil, Plus, Send, Trash2, Users, X,
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
@@ -147,7 +147,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       }
     } else if (view === "Tests") {
       const [testResult, attemptResult, studentResult, recipientResult] = await Promise.all([
-        supabase.from("assessments").select("id, title, description, due_at, external_url, created_at").order("created_at", { ascending: false }),
+        supabase.from("assessments").select("id, title, description, due_at, external_url, show_marks, created_at").order("created_at", { ascending: false }),
         supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").order("submitted_at", { ascending: false }),
         supabase.from("profiles").select("id, full_name, email").eq("role", "student").eq("is_approved", true),
         supabase.from("assessment_recipients").select("assessment_id, student_id"),
@@ -441,6 +441,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
         description: form.description.trim(),
         due_at: form.due ? new Date(form.due).toISOString() : null,
         external_url: form.testType === "external" ? form.externalUrl.trim() : null,
+        show_marks: form.showMarks !== undefined ? Boolean(form.showMarks) : false,
       }).eq("id", testId);
       if (updateError) throw updateError;
 
@@ -478,6 +479,22 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       await loadAdminData();
     } catch (err) {
       setError(`Could not update test: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function togglePublishMarks(test) {
+    const nextVal = !test.show_marks;
+    setBusy(true);
+    setError("");
+    try {
+      const { error: updErr } = await supabase.from("assessments").update({ show_marks: nextVal }).eq("id", test.id);
+      if (updErr) throw updErr;
+      onToast(nextVal ? `Marks released to students for “${test.title}”.` : `Marks hidden from students for “${test.title}”.`);
+      await loadAdminData();
+    } catch (err) {
+      setError(`Could not update marks visibility: ${err.message}`);
     } finally {
       setBusy(false);
     }
@@ -635,6 +652,17 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
                     <span>Open link</span>
                   </a>
                 )}
+                <button
+                  className={`button compact ${test.show_marks ? "primary" : ""}`}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => togglePublishMarks(test)}
+                  title={test.show_marks ? "Marks currently visible to students. Click to hide." : "Marks hidden from students. Click to release."}
+                  style={{ gap: "5px" }}
+                >
+                  {test.show_marks ? <CheckCircle2 size={13} /> : <EyeOff size={13} />}
+                  <span>{test.show_marks ? "Marks Released" : "Marks Hidden (Permit)"}</span>
+                </button>
                 <button
                   className="button compact"
                   type="button"

@@ -122,14 +122,14 @@ export default function EditCourseModal({
 
           <div className="form-grid-2" style={{ marginTop: "12px" }}>
             <label className="form-field">
-              <span>Department</span>
+              <span>Department (e.g. IT or SAP)</span>
               <input
                 type="text"
                 name="department"
                 maxLength={100}
                 value={formData.department}
                 onChange={handleChange}
-                placeholder="e.g. Computer Science"
+                placeholder="e.g. IT or SAP"
               />
             </label>
 
@@ -141,36 +141,22 @@ export default function EditCourseModal({
                 maxLength={100}
                 value={formData.instructor}
                 onChange={handleChange}
-                placeholder="e.g. Prof. Alan Turing"
+                placeholder="e.g. Lead Trainer"
               />
             </label>
           </div>
 
-          <div className="form-grid-2" style={{ marginTop: "12px" }}>
-            <label className="form-field">
-              <span>Class Schedule / Timing</span>
-              <input
-                type="text"
-                name="schedule"
-                maxLength={120}
-                value={formData.schedule}
-                onChange={handleChange}
-                placeholder="e.g. Tue, Thu 10:00 AM - 11:30 AM"
-              />
-            </label>
-
-            <label className="form-field">
-              <span>Room / Venue</span>
-              <input
-                type="text"
-                name="room"
-                maxLength={80}
-                value={formData.room}
-                onChange={handleChange}
-                placeholder="e.g. Hall B-102 / Lab 4"
-              />
-            </label>
-          </div>
+          <label className="form-field" style={{ marginTop: "12px" }}>
+            <span>Room / Lab Venue</span>
+            <input
+              type="text"
+              name="room"
+              maxLength={80}
+              value={formData.room}
+              onChange={handleChange}
+              placeholder="e.g. Lab 4 / Virtual Classroom"
+            />
+          </label>
 
           <label className="form-field" style={{ marginTop: "12px" }}>
             <span>Description / Syllabus Summary</span>

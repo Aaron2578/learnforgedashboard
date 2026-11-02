@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, BookOpen, Check, Clock3, Copy, Database, GraduationCap,
   HardDrive, Link2, Mail, MapPin, Pencil, Plus, RefreshCw, Search, Trash2, Users, X
@@ -7,6 +7,7 @@ import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
+import AttendanceCalendar from "../components/AttendanceCalendar";
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
@@ -43,6 +44,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [inviteMode, setInviteMode] = useState("single");
   const [studentStatus, setStudentStatus] = useState("all");
   const [studentSearch, setStudentSearch] = useState("");
+  const [courseSessionFilter, setCourseSessionFilter] = useState("all");
+  const [attendancePrefillDate, setAttendancePrefillDate] = useState("");
   const [recentInvites, setRecentInvites] = useState([]);
 
   const loadData = useCallback(async (forceLoading = false) => {
@@ -50,7 +53,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     setError("");
     try {
       const [studentResult, courseResult, enrollmentResult, storageResult] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, is_approved, created_at").eq("role", "student").order("created_at", { ascending: false }),
+        supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
@@ -225,7 +228,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       code: String(values.get("code")).trim().toUpperCase(),
       department: String(values.get("department") || "").trim(),
       instructor: String(values.get("instructor") || "").trim(),
-      schedule: String(values.get("schedule") || "").trim(),
+      schedule: null,
       room: String(values.get("room") || "").trim(),
       description: String(values.get("description") || "").trim(),
       created_by: user.id,
@@ -398,11 +401,187 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     return matchesQuery && matchesStatus;
   });
   const filteredCourses = courses.filter((course) => {
-    const hay = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.schedule || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
+    const hay = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
     return hay.includes(query.trim().toLowerCase());
   });
+
+  const itCourses = useMemo(() => {
+    return filteredCourses.filter(
+      (c) => (c.department || "").toUpperCase() === "IT" ||
+             (c.code || "").toUpperCase().startsWith("TMIT") ||
+             /JAVA|PYTHON|REACT|WEB|SQL|CLOUD|NODE|FULL STACK/i.test(c.name || "")
+    );
+  }, [filteredCourses]);
+
+  const sapCourses = useMemo(() => {
+    return filteredCourses.filter(
+      (c) => (c.department || "").toUpperCase() === "SAP" ||
+             (c.code || "").toUpperCase().startsWith("TMSAP") ||
+             /SAP|FICO|MM|SD|ABAP|HANA/i.test(c.name || "")
+    );
+  }, [filteredCourses]);
+
+  const otherCourses = useMemo(() => {
+    const itIds = new Set(itCourses.map((c) => c.id));
+    const sapIds = new Set(sapCourses.map((c) => c.id));
+    return filteredCourses.filter((c) => !itIds.has(c.id) && !sapIds.has(c.id));
+  }, [filteredCourses, itCourses, sapCourses]);
+
   const studentsById = Object.fromEntries(students.map((student) => [student.id, student]));
   const coursesById = Object.fromEntries(courses.map((course) => [course.id, course]));
+
+  function renderCourseCard(course) {
+    const enrolled = enrollments.filter((row) => row.course_id === course.id);
+    const enrolledIds = new Set(enrolled.map((r) => r.student_id));
+    const eligibleStudents = students.filter((s) => s.is_approved && !enrolledIds.has(s.id));
+    return (
+      <article
+        className="card interactive-course-card"
+        key={course.id}
+        onClick={() => setEditingCourse(course)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setEditingCourse(course);
+          }
+        }}
+        title="Click anywhere to edit this course"
+      >
+        <div className="course-card-top">
+          <div className="course-badges-group">
+            <span className="course-code-badge">{course.code}</span>
+            {course.department && <span className="course-dept-badge">{course.department}</span>}
+          </div>
+          <div className="course-card-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="button compact course-edit-btn"
+              onClick={() => setEditingCourse(course)}
+              title="Edit course details"
+            >
+              <Pencil size={12} /> Edit
+            </button>
+            <button
+              type="button"
+              className="quiet-icon danger-icon"
+              onClick={() => deleteCourse(course)}
+              title={`Delete course ${course.name}`}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="course-card-body">
+          <h3 className="course-card-title">{course.name}</h3>
+          {course.description ? (
+            <p className="course-card-description">{course.description}</p>
+          ) : (
+            <p className="course-card-description placeholder">No description or syllabus added yet.</p>
+          )}
+        </div>
+
+        <div className="course-meta-chips">
+          {course.instructor && (
+            <span className="course-meta-chip" title="Instructor / Faculty">
+              <GraduationCap size={13} /> {course.instructor}
+            </span>
+          )}
+          {course.room && (
+            <span className="course-meta-chip" title="Classroom / Lab">
+              <MapPin size={13} /> {course.room}
+            </span>
+          )}
+          {!course.instructor && !course.room && (
+            <span className="course-meta-chip muted">
+              <GraduationCap size={13} /> Faculty TBA
+            </span>
+          )}
+        </div>
+
+        <div className="course-card-roster" onClick={(e) => e.stopPropagation()}>
+          <div className="roster-header">
+            <strong><Users size={13} /> Enrolled students ({enrolled.length})</strong>
+          </div>
+
+          <div className="enrolled-chips-list mini">
+            {enrolled.map((row) => {
+              const student = studentsById[row.student_id];
+              const name = student?.full_name || student?.email || "Student";
+              return (
+                <span key={row.student_id} className="enrolled-student-chip">
+                  <span className="chip-avatar">{name.slice(0, 1).toUpperCase()}</span>
+                  <span className="chip-label" title={student?.email}>{name}</span>
+                  <button
+                    type="button"
+                    className="chip-remove-btn"
+                    title={`Remove ${name} from course`}
+                    onClick={() => unenrollStudentFromCourse(course.id, row.student_id)}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              );
+            })}
+            {!enrolled.length && (
+              <span style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic" }}>
+                No students enrolled yet
+              </span>
+            )}
+          </div>
+
+          {eligibleStudents.length > 0 && (
+            <div className="course-quick-enroll">
+              <select
+                id={`enroll-${course.id}`}
+                defaultValue=""
+                className="status-select"
+                style={{
+                  height: "32px",
+                  flex: "1",
+                  padding: "0 8px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--line)",
+                  background: "#ffffff",
+                  fontSize: "12px",
+                }}
+              >
+                <option value="" disabled>Enroll student…</option>
+                {eligibleStudents.map((s) => (
+                  <option key={s.id} value={s.id}>{s.full_name || s.email}</option>
+                ))}
+              </select>
+              <button
+                className="button compact primary"
+                style={{ height: "32px", fontSize: "12px" }}
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`enroll-${course.id}`);
+                  if (el?.value) {
+                    enrollStudentInCourse(course.id, el.value);
+                    el.value = "";
+                  }
+                }}
+              >
+                <Plus size={12} /> Enroll
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="course-card-foot">
+          <span className="click-to-edit-hint">
+            <Pencil size={11} /> Click card to edit
+          </span>
+          <span className="course-card-date">
+            {formatCourseDate(course.created_at)}
+          </span>
+        </div>
+      </article>
+    );
+  }
   const [eyebrow, title, description] = headings[view];
 
   return <div className="admin-workspace">
@@ -446,13 +625,10 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         <label className="form-field"><span>Course code *</span><input name="code" required maxLength="40" placeholder="e.g. CS-201" /></label>
       </div>
       <div className="form-grid-2" style={{ marginTop: "10px" }}>
-        <label className="form-field"><span>Department</span><input name="department" maxLength="100" placeholder="e.g. Computer Science" /></label>
-        <label className="form-field"><span>Instructor / Faculty</span><input name="instructor" maxLength="100" placeholder="e.g. Prof. Alan Turing" /></label>
+        <label className="form-field"><span>Department (e.g. IT or SAP)</span><input name="department" maxLength="100" placeholder="e.g. IT or SAP" /></label>
+        <label className="form-field"><span>Instructor / Faculty</span><input name="instructor" maxLength="100" placeholder="e.g. Faculty Name" /></label>
       </div>
-      <div className="form-grid-2" style={{ marginTop: "10px" }}>
-        <label className="form-field"><span>Class Schedule / Timing</span><input name="schedule" maxLength="120" placeholder="e.g. Tue, Thu 10:00 AM - 11:30 AM" /></label>
-        <label className="form-field"><span>Classroom / Room</span><input name="room" maxLength="80" placeholder="e.g. Hall B-102 / Lab 4" /></label>
-      </div>
+      <label className="form-field" style={{ marginTop: "10px" }}><span>Classroom / Lab Venue</span><input name="room" maxLength="80" placeholder="e.g. Lab 4 / Virtual Hall" /></label>
       <label className="form-field" style={{ marginTop: "10px" }}><span>Description &amp; Syllabus</span><textarea name="description" rows="3" maxLength="3000" placeholder="Outline course syllabus, prerequisites, and learning objectives..." /></label>
       <fieldset className="admin-options" style={{ marginTop: "12px" }}><legend>Enroll approved students</legend>{students.filter((student) => student.is_approved).map((student) => <label className="admin-option" key={student.id}><input type="checkbox" name="student_ids" value={student.id} /><span>{student.full_name || student.email}</span><small>{student.email}</small></label>)}{!students.some((student) => student.is_approved) && <p>Approve a student before creating an enrollment.</p>}</fieldset>
       <div className="form-actions"><button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={busy}>{busy ? "Creating…" : "Create course"}</button></div>
@@ -462,7 +638,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       <label className="form-field"><span>Student</span><select name="student_id" required defaultValue=""><option value="" disabled>Select a student</option>{students.filter((student) => student.is_approved).map((student) => <option key={student.id} value={student.id}>{student.full_name || student.email} · {student.email}</option>)}</select></label>
       <label className="form-field"><span>Course (optional)</span><select name="course_id" defaultValue=""><option value="">No course</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.name}</option>)}</select></label>
       {view === "Attendance" ? <>
-        <label className="form-field"><span>Date</span><input name="attendance_date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></label>
+        <label className="form-field"><span>Date</span><input name="attendance_date" type="date" required defaultValue={attendancePrefillDate || new Date().toISOString().slice(0, 10)} /></label>
         <label className="form-field"><span>Status</span><select name="status" defaultValue="present"><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select></label>
         <label className="form-field"><span>Note (optional)</span><input name="note" maxLength="1000" /></label>
       </> : <>
@@ -587,7 +763,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
         </div>
         <section className="admin-work-list">
-          {filteredStudents.map((student) => <article className="card admin-assignment-card" key={student.id}><div className="panel-heading"><div className="admin-student"><span className="student-avatar">{(student.full_name || student.email).slice(0, 1).toUpperCase()}</span><span><strong>{student.full_name || "Student"}</strong><small>{student.email}</small><small>Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}</small></span></div><span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>{student.is_approved ? "Approved" : "Pending approval"}</span></div><div className="form-actions"><button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}><Pencil size={13} /> Edit</button><button className="button" disabled={busy} onClick={() => approveStudent(student, !student.is_approved)}>{student.is_approved ? "Suspend access" : <><Check size={14} />Approve access</>}</button><button className="button" disabled={busy} type="button" onClick={() => copyInviteLink(student)} title="Copy sign-in / invite link for student"><Link2 size={14} />Copy invite link</button><button className="button danger-icon" disabled={busy} onClick={() => deleteStudent(student)}><Trash2 size={14} />Delete account</button></div></article>)}
+          {filteredStudents.map((student) => <article className="card admin-assignment-card" key={student.id}><div className="panel-heading"><div className="admin-student"><span className="student-avatar">{(student.full_name || student.email).slice(0, 1).toUpperCase()}</span><span><strong>{student.full_name || "Student"}</strong><small>{student.email}</small><small>Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}</small><span className="student-timing-chip"><Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong></span></span></div><span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>{student.is_approved ? "Approved" : "Pending approval"}</span></div><div className="form-actions"><button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}><Pencil size={13} /> Edit Profile &amp; Timing</button><button className="button" disabled={busy} onClick={() => approveStudent(student, !student.is_approved)}>{student.is_approved ? "Suspend access" : <><Check size={14} />Approve access</>}</button><button className="button" disabled={busy} type="button" onClick={() => copyInviteLink(student)} title="Copy sign-in / invite link for student"><Link2 size={14} />Copy invite link</button><button className="button danger-icon" disabled={busy} onClick={() => deleteStudent(student)}><Trash2 size={14} />Delete account</button></div></article>)}
           {!filteredStudents.length && <div className="card portal-empty"><Users size={22} /><strong>{students.length ? "No students match this filter" : "No student accounts yet"}</strong><span>{students.length ? "Change the search or approval filter." : "Add a student to send a secure sign-in invitation."}</span></div>}
         </section>
       </section>
@@ -615,175 +791,113 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         </article>
       </section>
 
-      <section className="courses-grid">
-        {filteredCourses.map((course) => {
-          const enrolled = enrollments.filter((row) => row.course_id === course.id);
-          const enrolledIds = new Set(enrolled.map((r) => r.student_id));
-          const eligibleStudents = students.filter((s) => s.is_approved && !enrolledIds.has(s.id));
-          return (
-            <article
-              className="card interactive-course-card"
-              key={course.id}
-              onClick={() => setEditingCourse(course)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setEditingCourse(course);
-                }
-              }}
-              title="Click anywhere to edit this course"
-            >
-              <div className="course-card-top">
-                <div className="course-badges-group">
-                  <span className="course-code-badge">{course.code}</span>
-                  {course.department && <span className="course-dept-badge">{course.department}</span>}
-                </div>
-                <div className="course-card-actions" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="button compact course-edit-btn"
-                    onClick={() => setEditingCourse(course)}
-                    title="Edit course details"
-                  >
-                    <Pencil size={12} /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="quiet-icon danger-icon"
-                    onClick={() => deleteCourse(course)}
-                    title={`Delete course ${course.name}`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+      {/* Course Session Tabs */}
+      <div className="course-session-tabs">
+        <button
+          type="button"
+          className={`course-session-tab ${courseSessionFilter === "all" ? "active" : ""}`}
+          onClick={() => setCourseSessionFilter("all")}
+        >
+          All Programs ({filteredCourses.length})
+        </button>
+        <button
+          type="button"
+          className={`course-session-tab ${courseSessionFilter === "it" ? "active" : ""}`}
+          onClick={() => setCourseSessionFilter("it")}
+        >
+          🖥️ IT Courses Session ({itCourses.length})
+        </button>
+        <button
+          type="button"
+          className={`course-session-tab ${courseSessionFilter === "sap" ? "active" : ""}`}
+          onClick={() => setCourseSessionFilter("sap")}
+        >
+          💼 SAP Courses Session ({sapCourses.length})
+        </button>
+      </div>
+
+      <div className="course-sessions-container">
+        {/* IT Courses Session */}
+        {(courseSessionFilter === "all" || courseSessionFilter === "it") && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>🖥️ IT &amp; Software Engineering Programs</span>
+                <span className="course-session-pill">{itCourses.length} Courses</span>
               </div>
-
-              <div className="course-card-body">
-                <h3 className="course-card-title">{course.name}</h3>
-                {course.description ? (
-                  <p className="course-card-description">{course.description}</p>
-                ) : (
-                  <p className="course-card-description placeholder">No description or syllabus added yet.</p>
-                )}
-              </div>
-
-              <div className="course-meta-chips">
-                {course.instructor && (
-                  <span className="course-meta-chip" title="Instructor / Faculty">
-                    <GraduationCap size={13} /> {course.instructor}
-                  </span>
-                )}
-                {course.schedule && (
-                  <span className="course-meta-chip" title="Class Schedule">
-                    <Clock3 size={13} /> {course.schedule}
-                  </span>
-                )}
-                {course.room && (
-                  <span className="course-meta-chip" title="Classroom / Lab">
-                    <MapPin size={13} /> {course.room}
-                  </span>
-                )}
-                {!course.instructor && !course.schedule && !course.room && (
-                  <span className="course-meta-chip muted">
-                    <Clock3 size={13} /> Schedule &amp; faculty TBA
-                  </span>
-                )}
-              </div>
-
-              <div className="course-card-roster" onClick={(e) => e.stopPropagation()}>
-                <div className="roster-header">
-                  <strong><Users size={13} /> Enrolled students ({enrolled.length})</strong>
-                </div>
-
-                <div className="enrolled-chips-list mini">
-                  {enrolled.map((row) => {
-                    const student = studentsById[row.student_id];
-                    const name = student?.full_name || student?.email || "Student";
-                    return (
-                      <span key={row.student_id} className="enrolled-student-chip">
-                        <span className="chip-avatar">{name.slice(0, 1).toUpperCase()}</span>
-                        <span className="chip-label" title={student?.email}>{name}</span>
-                        <button
-                          type="button"
-                          className="chip-remove-btn"
-                          title={`Remove ${name} from course`}
-                          onClick={() => unenrollStudentFromCourse(course.id, row.student_id)}
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    );
-                  })}
-                  {!enrolled.length && (
-                    <span style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic" }}>
-                      No students enrolled yet
-                    </span>
-                  )}
-                </div>
-
-                {eligibleStudents.length > 0 && (
-                  <div className="course-quick-enroll">
-                    <select
-                      id={`enroll-${course.id}`}
-                      defaultValue=""
-                      className="status-select"
-                      style={{
-                        height: "32px",
-                        flex: "1",
-                        padding: "0 8px",
-                        borderRadius: "6px",
-                        border: "1px solid var(--line)",
-                        background: "#ffffff",
-                        fontSize: "12px",
-                      }}
-                    >
-                      <option value="" disabled>Enroll student…</option>
-                      {eligibleStudents.map((s) => (
-                        <option key={s.id} value={s.id}>{s.full_name || s.email}</option>
-                      ))}
-                    </select>
-                    <button
-                      className="button compact primary"
-                      style={{ height: "32px", fontSize: "12px" }}
-                      type="button"
-                      onClick={() => {
-                        const el = document.getElementById(`enroll-${course.id}`);
-                        if (el?.value) {
-                          enrollStudentInCourse(course.id, el.value);
-                          el.value = "";
-                        }
-                      }}
-                    >
-                      <Plus size={12} /> Enroll
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="course-card-foot">
-                <span className="click-to-edit-hint">
-                  <Pencil size={11} /> Click card to edit
-                </span>
-                <span className="course-card-date">
-                  {formatCourseDate(course.created_at)}
-                </span>
-              </div>
-            </article>
-          );
-        })}
-        {!filteredCourses.length && (
-          <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
-            <BookOpen size={22} />
-            <strong>No courses match your filter</strong>
-            <span>Add a course above or clear your search term.</span>
+            </div>
+            {itCourses.length > 0 ? (
+              <section className="courses-grid">
+                {itCourses.map(renderCourseCard)}
+              </section>
+            ) : (
+              <p style={{ color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                No IT courses currently in this list.
+              </p>
+            )}
           </div>
         )}
-      </section>
-    </> : <section className="admin-work-list">
-      {records.map((record) => <article className="card admin-assignment-card" key={record.id}><div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment">{view === "Attendance" ? <Clock3 size={16} /> : <GraduationCap size={16} />}</span><span><h2>{view === "Attendance" ? `${studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"} · ${record.status}` : record.title}</h2><p>{view === "Attendance" ? `${record.attendance_date} · ${coursesById[record.course_id]?.name || "No course"}${record.note ? ` · ${record.note}` : ""}` : `${studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}${record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}`}</p>{view === "Notes" && <small>{record.body}</small>}</span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingRecord(record)}><Pencil size={13} /> Edit</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label={view === "Attendance" ? "Delete attendance" : "Delete note"}><Trash2 size={15} /></button></div></div></article>)}
-      {!records.length && <div className="card portal-empty"><GraduationCap size={22} /><strong>No {view.toLowerCase()} records yet</strong><span>Use the button above to add one.</span></div>}
+
+        {/* SAP Courses Session */}
+        {(courseSessionFilter === "all" || courseSessionFilter === "sap") && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>💼 SAP Enterprise Modules &amp; ERP Programs</span>
+                <span className="course-session-pill sap">{sapCourses.length} Courses</span>
+              </div>
+            </div>
+            {sapCourses.length > 0 ? (
+              <section className="courses-grid">
+                {sapCourses.map(renderCourseCard)}
+              </section>
+            ) : (
+              <p style={{ color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                No SAP courses currently in this list.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Other Courses if any */}
+        {otherCourses.length > 0 && courseSessionFilter === "all" && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>General &amp; Additional Courses</span>
+                <span className="course-session-pill">{otherCourses.length} Courses</span>
+              </div>
+            </div>
+            <section className="courses-grid">
+              {otherCourses.map(renderCourseCard)}
+            </section>
+          </div>
+        )}
+
+        {!filteredCourses.length && (
+          <div className="card portal-empty">
+            <BookOpen size={22} />
+            <strong>No courses found</strong>
+            <span>Create a course using the button above or clear search filters.</span>
+          </div>
+        )}
+      </div>
+    </> : view === "Attendance" ? (
+      <AttendanceCalendar
+        records={records}
+        students={students}
+        courses={courses}
+        isAdmin={true}
+        onEditRecord={(record) => setEditingRecord(record)}
+        onDeleteRecord={(record) => deleteRecord(record)}
+        onAddRecord={(selectedDate) => {
+          setAttendancePrefillDate(selectedDate);
+          setShowForm(true);
+        }}
+      />
+    ) : <section className="admin-work-list">
+      {records.map((record) => <article className="card admin-assignment-card" key={record.id}><div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><GraduationCap size={16} /></span><span><h2>{record.title}</h2><p>{studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}{record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}</p><small>{record.body}</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingRecord(record)}><Pencil size={13} /> Edit</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note"><Trash2 size={15} /></button></div></div></article>)}
+      {!records.length && <div className="card portal-empty"><GraduationCap size={22} /><strong>No notes records yet</strong><span>Use the button above to add one.</span></div>}
     </section>}
 
     {editingCourse && (

@@ -71,3 +71,4 @@ on conflict (assessment_id, student_id) do update set
   score = excluded.score,
   max_score = excluded.max_score,
   submitted_at = coalesce(assessment_attempts.submitted_at, now());
+

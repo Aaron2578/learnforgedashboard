@@ -29,6 +29,7 @@ export default function EditTestModal({
     }
   });
   const [recipientIds, setRecipientIds] = useState(() => currentRecipients || []);
+  const [showMarks, setShowMarks] = useState(Boolean(test.show_marks));
   const [saving, setSaving] = useState(false);
   const [loadingQuestions, setLoadingQuestions] = useState(!isExternalInitial);
   const [error, setError] = useState("");
@@ -102,6 +103,7 @@ export default function EditTestModal({
         correctIndex,
         due,
         recipientIds,
+        showMarks,
       });
     } catch (err) {
       setError(err.message || "Failed to update test.");
@@ -234,6 +236,21 @@ export default function EditTestModal({
               onChange={(e) => setDue(e.target.value)}
             />
           </label>
+
+          <div style={{ marginTop: "14px", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontWeight: 600, fontSize: "13px" }}>
+              <input
+                type="checkbox"
+                checked={showMarks}
+                onChange={(e) => setShowMarks(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: "pointer" }}
+              />
+              <span>Permit Students to View Marks / Scores</span>
+            </label>
+            <small style={{ display: "block", marginTop: "4px", color: "var(--muted)", fontSize: "12px", marginLeft: "26px" }}>
+              When unchecked, students will only see <strong>&quot;Completed&quot;</strong> on their dashboard. Check to release actual marks.
+            </small>
+          </div>
 
           <fieldset className="admin-options" style={{ marginTop: "16px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>

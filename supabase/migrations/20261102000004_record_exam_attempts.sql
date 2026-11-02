@@ -113,3 +113,4 @@ end;
 $$;
 
 grant execute on function public.admin_record_assessment_attempt(uuid, uuid, integer, integer) to authenticated;
+

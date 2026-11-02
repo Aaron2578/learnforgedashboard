@@ -147,7 +147,7 @@ export default function AuthGate() {
     setLoading(true);
     supabase
       .from("profiles")
-      .select("id, email, full_name, role, is_approved")
+      .select("id, email, full_name, role, is_approved, timing")
       .eq("id", userId)
       .single()
       .then(({ data, error }) => {

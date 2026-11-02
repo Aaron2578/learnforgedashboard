@@ -3,6 +3,7 @@ import { Users, X } from "lucide-react";
 
 export default function EditStudentModal({ student, onClose, onSave, onDelete }) {
   const [fullName, setFullName] = useState(student.full_name || "");
+  const [timing, setTiming] = useState(student.timing || "");
   const [isApproved, setIsApproved] = useState(Boolean(student.is_approved));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -19,6 +20,7 @@ export default function EditStudentModal({ student, onClose, onSave, onDelete })
     try {
       await onSave(student.id, {
         full_name: fullName.trim(),
+        timing: timing.trim(),
         is_approved: isApproved,
       });
     } catch (err) {
@@ -78,6 +80,20 @@ export default function EditStudentModal({ student, onClose, onSave, onDelete })
               onChange={(e) => setFullName(e.target.value)}
               placeholder="e.g. Alex Johnson"
             />
+          </label>
+
+          <label className="form-field" style={{ marginTop: "14px" }}>
+            <span>Class / Batch Timing</span>
+            <input
+              type="text"
+              maxLength={100}
+              value={timing}
+              onChange={(e) => setTiming(e.target.value)}
+              placeholder="e.g. 10:00 AM - 12:00 PM (or Morning / Evening batch)"
+            />
+            <small style={{ display: "block", marginTop: "3px", color: "var(--muted)", fontSize: "11.5px" }}>
+              Set this student's individual lecture or batch time. Appears on their dashboard.
+            </small>
           </label>
 
           <div style={{ marginTop: "18px", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>

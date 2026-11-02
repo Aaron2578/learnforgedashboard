@@ -6,6 +6,7 @@ import {
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import AttendanceCalendar from "../components/AttendanceCalendar";
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -77,6 +78,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
+  const [courseSessionFilter, setCourseSessionFilter] = useState("all");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const loadPortal = useCallback(async (forceLoading = false) => {
@@ -97,7 +99,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
-      supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
+      supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", user.id),
       supabase.from("conversations").select("id, subject, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
       supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room").order("name"),
@@ -471,10 +473,25 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         <div className="portal-item-heading"><span className="portal-item-icon test"><ClipboardList size={17} /></span><span className="portal-item-title"><strong>{test.title}</strong><small><CalendarClock size={12} />Due {dateLabel(test.due_at)} · {test.external_url ? "External test" : `${count} questions`}</small></span><span className={`portal-status ${attempt ? "submitted" : closed ? "overdue" : "pending"}`}>{attempt ? "Completed" : closed ? "Closed" : "Ready"}</span></div>
         {test.description && <p className="portal-description">{test.description}</p>}
         {attempt ? (
-          <div className="test-score">
-            <CheckCircle2 size={16} />
-            <strong>Score: {attempt.score} / {attempt.max_score} ({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</strong>
-            <span>Submitted {dateLabel(attempt.submitted_at)}</span>
+          <div className="test-completion-card">
+            <div className="test-score-header">
+              <span className="cohort-status-pill completed">
+                <CheckCircle2 size={13} /> Completed
+              </span>
+              <span className="submission-date">Submitted {dateLabel(attempt.submitted_at)}</span>
+            </div>
+            {test.show_marks ? (
+              <div className="test-score" style={{ marginTop: "6px" }}>
+                <CheckCircle2 size={15} />
+                <strong>Score: {attempt.score} / {attempt.max_score} ({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</strong>
+                <span className="marks-verified-tag">Marks Released by Admin</span>
+              </div>
+            ) : (
+              <div className="test-marks-pending">
+                <Lock size={13} />
+                <span>Marks pending evaluation · Will be released by administrator</span>
+              </div>
+            )}
           </div>
         ) : test.external_url ? (
           <div className="portal-actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
@@ -640,64 +657,161 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderCourses() {
     const filtered = courses.filter((course) => {
-      const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.schedule || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
+      const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
       return search.includes(query.trim().toLowerCase());
     });
-    return (
-      <section className="courses-grid student-courses">
-        {filtered.map((course) => (
-          <article className="card interactive-course-card student-course-card" key={course.id}>
-            <div className="course-card-top">
-              <div className="course-badges-group">
-                <span className="course-code-badge">{course.code}</span>
-                {course.department && <span className="course-dept-badge">{course.department}</span>}
-              </div>
-              <span className="portal-status submitted" style={{ fontSize: "11px", padding: "3px 8px" }}>
-                Enrolled
+
+    const itCourses = filtered.filter(
+      (c) => (c.department || "").toUpperCase() === "IT" ||
+             (c.code || "").toUpperCase().startsWith("TMIT") ||
+             /JAVA|PYTHON|REACT|WEB|SQL|CLOUD|NODE|FULL STACK/i.test(c.name || "")
+    );
+
+    const sapCourses = filtered.filter(
+      (c) => (c.department || "").toUpperCase() === "SAP" ||
+             (c.code || "").toUpperCase().startsWith("TMSAP") ||
+             /SAP|FICO|MM|SD|ABAP|HANA/i.test(c.name || "")
+    );
+
+    const otherCourses = filtered.filter(
+      (c) => !itCourses.some((it) => it.id === c.id) && !sapCourses.some((sap) => sap.id === c.id)
+    );
+
+    function renderSingleCourseCard(course) {
+      return (
+        <article className="card interactive-course-card student-course-card" key={course.id}>
+          <div className="course-card-top">
+            <div className="course-badges-group">
+              <span className="course-code-badge">{course.code}</span>
+              {course.department && <span className="course-dept-badge">{course.department}</span>}
+            </div>
+            <span className="portal-status submitted" style={{ fontSize: "11px", padding: "3px 8px" }}>
+              Enrolled
+            </span>
+          </div>
+
+          <div className="course-card-body">
+            <h3 className="course-card-title">{course.name}</h3>
+            {course.description ? (
+              <p className="course-card-description">{course.description}</p>
+            ) : (
+              <p className="course-card-description placeholder">No syllabus outline provided yet.</p>
+            )}
+          </div>
+
+          <div className="course-meta-chips">
+            {course.instructor && (
+              <span className="course-meta-chip" title="Instructor / Faculty">
+                <GraduationCap size={13} /> {course.instructor}
               </span>
-            </div>
+            )}
+            {course.room && (
+              <span className="course-meta-chip" title="Classroom / Lab">
+                <MapPin size={13} /> {course.room}
+              </span>
+            )}
+            {!course.instructor && !course.room && (
+              <span className="course-meta-chip muted">
+                <GraduationCap size={13} /> Faculty TBA
+              </span>
+            )}
+          </div>
+        </article>
+      );
+    }
 
-            <div className="course-card-body">
-              <h3 className="course-card-title">{course.name}</h3>
-              {course.description ? (
-                <p className="course-card-description">{course.description}</p>
-              ) : (
-                <p className="course-card-description placeholder">No syllabus outline provided yet.</p>
-              )}
-            </div>
+    return (
+      <div className="course-sessions-container">
+        {/* Session Filter Tabs */}
+        <div className="course-session-tabs">
+          <button
+            type="button"
+            className={`course-session-tab ${courseSessionFilter === "all" ? "active" : ""}`}
+            onClick={() => setCourseSessionFilter("all")}
+          >
+            All Courses ({filtered.length})
+          </button>
+          <button
+            type="button"
+            className={`course-session-tab ${courseSessionFilter === "it" ? "active" : ""}`}
+            onClick={() => setCourseSessionFilter("it")}
+          >
+            🖥️ IT Courses ({itCourses.length})
+          </button>
+          <button
+            type="button"
+            className={`course-session-tab ${courseSessionFilter === "sap" ? "active" : ""}`}
+            onClick={() => setCourseSessionFilter("sap")}
+          >
+            💼 SAP Modules ({sapCourses.length})
+          </button>
+        </div>
 
-            <div className="course-meta-chips">
-              {course.instructor && (
-                <span className="course-meta-chip" title="Instructor / Faculty">
-                  <GraduationCap size={13} /> {course.instructor}
-                </span>
-              )}
-              {course.schedule && (
-                <span className="course-meta-chip" title="Lecture Schedule">
-                  <Clock3 size={13} /> {course.schedule}
-                </span>
-              )}
-              {course.room && (
-                <span className="course-meta-chip" title="Classroom / Lab">
-                  <MapPin size={13} /> {course.room}
-                </span>
-              )}
-              {!course.instructor && !course.schedule && !course.room && (
-                <span className="course-meta-chip muted">
-                  <Clock3 size={13} /> Schedule announced soon
-                </span>
-              )}
+        {/* IT Courses Session */}
+        {(courseSessionFilter === "all" || courseSessionFilter === "it") && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>🖥️ IT &amp; Technical Programs</span>
+                <span className="course-session-pill">{itCourses.length} Courses</span>
+              </div>
             </div>
-          </article>
-        ))}
-        {!filtered.length && (
-          <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
-            <GraduationCap size={22} />
-            <strong>No courses assigned</strong>
-            <span>Your administrator will add your courses here.</span>
+            {itCourses.length > 0 ? (
+              <section className="courses-grid student-courses">
+                {itCourses.map(renderSingleCourseCard)}
+              </section>
+            ) : (
+              <p style={{ color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                No IT courses enrolled in this track.
+              </p>
+            )}
           </div>
         )}
-      </section>
+
+        {/* SAP Courses Session */}
+        {(courseSessionFilter === "all" || courseSessionFilter === "sap") && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>💼 SAP Enterprise Modules</span>
+                <span className="course-session-pill sap">{sapCourses.length} Courses</span>
+              </div>
+            </div>
+            {sapCourses.length > 0 ? (
+              <section className="courses-grid student-courses">
+                {sapCourses.map(renderSingleCourseCard)}
+              </section>
+            ) : (
+              <p style={{ color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                No SAP courses enrolled in this track.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Other Courses if any */}
+        {otherCourses.length > 0 && courseSessionFilter === "all" && (
+          <div className="course-session-block">
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span>Additional Courses</span>
+                <span className="course-session-pill">{otherCourses.length} Courses</span>
+              </div>
+            </div>
+            <section className="courses-grid student-courses">
+              {otherCourses.map(renderSingleCourseCard)}
+            </section>
+          </div>
+        )}
+
+        {!filtered.length && (
+          <div className="card portal-empty">
+            <GraduationCap size={22} />
+            <strong>No courses found</strong>
+            <span>Your enrolled courses will appear here.</span>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -719,20 +833,13 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderAttendance() {
-    const filtered = attendance.filter((record) => `${record.status} ${record.note} ${record.attendance_date} ${coursesById[record.course_id]?.name ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
-    return <section className="portal-list">{filtered.map((record) => {
-      const course = coursesById[record.course_id];
-      return <article className="card portal-item" key={record.id}>
-        <div className="portal-item-heading">
-          <span className="portal-item-icon test"><Clock3 size={17} /></span>
-          <span className="portal-item-title">
-            <strong>{new Date(`${record.attendance_date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}</strong>
-            <small>{course ? `${course.code} · ${course.name}` : "Campus attendance"}{record.note ? ` — ${record.note}` : ""}</small>
-          </span>
-          <span className={`portal-status ${record.status === "present" ? "submitted" : record.status === "absent" ? "overdue" : "pending"}`}>{record.status.toUpperCase()}</span>
-        </div>
-      </article>;
-    })}{!filtered.length && <div className="card portal-empty"><Clock3 size={22} /><strong>No attendance records</strong><span>Attendance updates will appear here.</span></div>}</section>;
+    return (
+      <AttendanceCalendar
+        records={attendance}
+        courses={courses}
+        isAdmin={false}
+      />
+    );
   }
 
   function renderUpdates() {
@@ -773,7 +880,19 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     const completedTests = attempts.length;
     const upcomingAssignments = assignments.filter((item) => !isPast(item.due_at)).length;
     return <>
-      <div className="page-heading"><div><div className="eyebrow">{new Intl.DateTimeFormat("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</div><h1>Welcome, {profile.full_name || user.email?.split("@")[0]} <Sparkles className="greeting-icon" size={19} /></h1><p>Your assignments, tests, and campus messages in one place.</p></div><button className="button" onClick={loadPortal}>Refresh data</button></div>
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow">{new Intl.DateTimeFormat("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</div>
+          <h1>Welcome, {profile.full_name || user.email?.split("@")[0]} <Sparkles className="greeting-icon" size={19} /></h1>
+          <p>Your assignments, tests, and campus messages in one place.</p>
+          {profile?.timing && (
+            <div className="student-timing-chip" style={{ marginTop: "6px", width: "fit-content" }}>
+              <Clock3 size={13} /> Class Timing: <strong>{profile.timing}</strong>
+            </div>
+          )}
+        </div>
+        <button className="button" onClick={loadPortal}>Refresh data</button>
+      </div>
       <section className="metrics student-metrics">
         <article className="card metric-card"><div className="metric-top"><span>Assignments due</span><span className="metric-icon blue"><BookOpen size={17} /></span></div><div className="metric-value">{upcomingAssignments}</div><div className="metric-foot">Published assignments</div></article>
         <article className="card metric-card"><div className="metric-top"><span>Work submitted</span><span className="metric-icon green"><CheckCircle2 size={17} /></span></div><div className="metric-value">{submittedCount}</div><div className="metric-foot">Across your assignments</div></article>
@@ -786,7 +905,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           {!assignments.length && <div className="portal-empty compact"><BookOpen size={18} /><span>No assignments are published yet.</span></div>}
         </article>
         <article className="card panel"><div className="panel-heading"><div><h2>Continue learning</h2><p>Pick up where you left off</p></div></div>
-          {tests.slice(0, 2).map((test) => <div className="overview-test" key={test.id}><span className="portal-item-icon test"><ClipboardList size={15} /></span><span><strong>{test.title}</strong><small>{attemptByTest.has(test.id) ? `Score ${attemptByTest.get(test.id).score}/${attemptByTest.get(test.id).max_score}` : `Due ${dateLabel(test.due_at)}`}</small></span><button className="quiet-icon" type="button" aria-label={`Open ${test.title}`} onClick={() => { setSelectedTest(test.id); navigate("Tests"); }}><ArrowRight size={15} /></button></div>)}
+          {tests.slice(0, 2).map((test) => <div className="overview-test" key={test.id}><span className="portal-item-icon test"><ClipboardList size={15} /></span><span><strong>{test.title}</strong><small>{attemptByTest.has(test.id) ? (test.show_marks ? `Score ${attemptByTest.get(test.id).score}/${attemptByTest.get(test.id).max_score}` : "Completed") : `Due ${dateLabel(test.due_at)}`}</small></span><button className="quiet-icon" type="button" aria-label={`Open ${test.title}`} onClick={() => { setSelectedTest(test.id); navigate("Tests"); }}><ArrowRight size={15} /></button></div>)}
           {!tests.length && <div className="portal-empty compact"><ClipboardList size={18} /><span>No tests are published yet.</span></div>}
         </article>
       </section>
@@ -816,7 +935,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       <nav className="side-nav">{STUDENT_NAV.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="student-support"><ShieldCheck size={16} /><span><strong>Your work is private</strong><small>Only you and your institution can view your submissions.</small></span></div>
-      <div className="profile"><span className="profile-avatar">{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span><span className="profile-copy"><strong>{profile.full_name || user.email}</strong><small>Student</small></span></div>
+      <div className="profile"><span className="profile-avatar">{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span><span className="profile-copy"><strong>{profile.full_name || user.email}</strong><small>{profile.timing ? `Timing: ${profile.timing}` : "Student"}</small></span></div>
       <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
     </aside>
     <main className="main-content">
