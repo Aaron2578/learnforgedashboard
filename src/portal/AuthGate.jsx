@@ -43,7 +43,7 @@ function AuthScreen() {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="auth-logo"><span className="brand-mark"><GraduationCap size={22} /></span><span><strong>TM Dashboard</strong><small>Learning together</small></span></div>
+        <div className="auth-logo"><span className="brand-mark"><GraduationCap size={22} /></span><span><strong>LearnForge</strong><small>Learning together</small></span></div>
         <div className="auth-intro">
           <div className="eyebrow">Campus portal</div>
           <h1>{mode === "sign-in" ? "Welcome back" : "Join your campus"}</h1>
@@ -80,7 +80,7 @@ function SetupScreen() {
         </ol>
         <a className="button primary" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Open Supabase dashboard <ArrowRight size={15} /></a>
         <p className="setup-warning"><ShieldCheck size={15} />Never put the Supabase service-role key in a <code>VITE_</code> variable or browser code.</p>
-        <div className="setup-brand"><BookOpen size={15} />TM Dashboard · Student portal</div>
+        <div className="setup-brand"><BookOpen size={15} />LearnForge · Student portal</div>
       </section>
     </main>
   );
@@ -179,7 +179,7 @@ export default function AuthGate() {
           <section className="auth-card">
             <div className="auth-logo">
               <span className="brand-mark"><GraduationCap size={22} /></span>
-              <span><strong>TM Dashboard</strong><small>Student portal</small></span>
+              <span><strong>LearnForge</strong><small>Student portal</small></span>
             </div>
             <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <Clock3 size={14} /> Account approval
@@ -192,7 +192,7 @@ export default function AuthGate() {
               </button>
               <button className="button" type="button" onClick={signOut}>Sign out</button>
             </div>
-            <div className="auth-security"><ShieldCheck size={15} />Protected by Northstar Institute Campus Authentication</div>
+            <div className="auth-security"><ShieldCheck size={15} />Protected by LearnForge Campus Authentication</div>
           </section>
         </main>
       );

@@ -756,7 +756,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                     onChange={(e) => setFormDriveUrl(e.target.value)}
                   />
                   <small className="muted" style={{ display: "block", marginTop: "6px" }}>
-                    Paste any Google Drive file link, Google Doc, or Google Forms test link. TM Dashboard will automatically convert it into a protected in-dashboard embed!
+                    Paste any Google Drive file link, Google Doc, or Google Forms test link. LearnForge will automatically convert it into a protected in-dashboard embed!
                   </small>
                   <div style={{ marginTop: "8px", padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "12px", color: "#166534", lineHeight: "1.5" }}>
                     💡 <strong>Important for Google Drive:</strong> In Google Drive, right-click your file → <strong>Share</strong> → set <em>General access</em> to <strong>"Anyone with the link" (Viewer)</strong>. This allows students to view it seamlessly without Google's "Can't access your Google Account" cookie barrier.

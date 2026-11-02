@@ -32,7 +32,7 @@ async function sendEmail(to: string, subject: string, text: string, html: string
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: from, name: "TM Dashboard" },
+      from: { email: from, name: "LearnForge" },
       subject,
       content: [
         { type: "text/plain", value: text },
@@ -210,7 +210,7 @@ Deno.serve(async (request) => {
         try {
           await sendEmail(
             invitee.email,
-            "Your TM Dashboard student invitation",
+            "Your LearnForge student invitation",
             `Hello ${fullName},\n\nUse this secure link to sign in: ${actionLink}\n\nAn administrator will activate your courses and resources once approved.`,
             `<p>Hello ${escapeHtml(fullName)},</p><p>Use this secure link to sign in to your student portal:</p><p><a href="${escapeHtml(actionLink)}">Open your student portal</a></p><p>An administrator will activate your courses and resources once approved.</p>`,
           );

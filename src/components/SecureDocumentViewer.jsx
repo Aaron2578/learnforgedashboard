@@ -239,9 +239,9 @@ export default function SecureDocumentViewer({
             <div className="secure-watermark-overlay" aria-hidden="true">
               {Array.from({ length: 12 }).map((_, idx) => (
                 <div key={idx} className="watermark-row">
-                  <span>TM DASHBOARD · {userEmail}</span>
+                  <span>LEARNFORGE · {userEmail}</span>
                   <span>CONFIDENTIAL &amp; VIEW-ONLY</span>
-                  <span>TM DASHBOARD · {userEmail}</span>
+                  <span>LEARNFORGE · {userEmail}</span>
                 </div>
               ))}
             </div>

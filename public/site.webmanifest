@@ -1,6 +1,6 @@
 {
-  "name": "TM Dashboard - Academic Portal",
-  "short_name": "TM Dashboard",
+  "name": "LearnForge - Academic Portal",
+  "short_name": "LearnForge",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8fafc",
