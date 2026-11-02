@@ -123,7 +123,7 @@ Deno.serve(async (request) => {
       return response({ error: "A valid student email is required." }, 400);
     }
     const clientAppUrl = typeof payload.appUrl === "string" && payload.appUrl.startsWith("http") ? payload.appUrl : null;
-    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://dist-two-rouge-88.vercel.app";
+    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://tmdashboard-two.vercel.app";
     const normalizedEmail = payload.email.trim().toLowerCase();
 
     const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
@@ -159,7 +159,7 @@ Deno.serve(async (request) => {
     }
 
     const clientAppUrl = typeof payload.appUrl === "string" && payload.appUrl.startsWith("http") ? payload.appUrl : null;
-    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://dist-two-rouge-88.vercel.app";
+    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://tmdashboard-two.vercel.app";
     const apiKey = Deno.env.get("SENDGRID_API_KEY");
     const from = Deno.env.get("SENDGRID_FROM_EMAIL");
     const hasSendGrid = Boolean(apiKey && from);
