@@ -75,6 +75,7 @@ export default function SecureDocumentViewer({
   downloadStatus = null, // 'pending' | 'approved' | 'rejected' | 'revoked' | null
   onRequestDownload,
   onDownload,
+  onMarkCompleted,
   onClose,
 }) {
   const [showRequestDialog, setShowRequestDialog] = useState(false);
@@ -82,7 +83,7 @@ export default function SecureDocumentViewer({
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
   const embedUrl = getEmbedUrl(url);
-  const isGoogleSource = /drive\.google\.com|docs\.google\.com/i.test(url || "");
+  const isGoogleSource = /drive\.google\.com|docs\.google\.com|forms\.gle/i.test(url || "");
   const canDownload = isSuperuser || downloadStatus === "approved";
 
   async function handleSendRequest(e) {
@@ -172,14 +173,28 @@ export default function SecureDocumentViewer({
               </div>
             )}
 
+            {/* Optional Mark as Submitted for Assessments */}
+            {onMarkCompleted && (
+              <button
+                className="button primary compact"
+                type="button"
+                onClick={onMarkCompleted}
+                title="Mark this external exam as submitted and send to admin"
+                style={{ minHeight: "34px", padding: "0 12px", fontSize: "12px", gap: "6px" }}
+              >
+                <CheckCircle2 size={14} />
+                <span>Mark as Submitted</span>
+              </button>
+            )}
+
             {/* Optional Open in Clean Tab for Google sources */}
             {isGoogleSource && (
               <a
                 className="button compact"
-                href={embedUrl}
+                href={url || embedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="If your browser blocks third-party Google cookies, open preview in a clean Google tab"
+                title="If Google asks you to sign in or shows a cookie error, open directly in a new Google tab"
                 style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
               >
                 <ExternalLink size={13} />
@@ -207,7 +222,7 @@ export default function SecureDocumentViewer({
           </span>
           {isGoogleSource && (
             <span style={{ marginLeft: "auto", fontSize: "11.5px", color: "var(--muted)" }}>
-              Drive source · Set sharing to <strong>Anyone with link</strong> to avoid Google account prompts
+              If Google displays an account prompt or cookie warning, click <strong>Open in Google Tab</strong> to take the form.
             </span>
           )}
           {downloadStatus === "approved" && (

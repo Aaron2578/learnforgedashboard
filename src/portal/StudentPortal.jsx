@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, BookOpen, CalendarClock, CheckCircle2, ClipboardList, Clock3,
-  Download, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
+  Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
 } from "lucide-react";
@@ -264,6 +264,26 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     }
   }
 
+  async function markExternalTestCompleted(testId) {
+    setBusy(true);
+    setError("");
+    try {
+      const { error: submitError } = await supabase.rpc("student_complete_external_assessment", {
+        p_assessment_id: testId,
+      });
+      if (submitError) throw submitError;
+      setNotice("Exam marked as submitted! Your instructor has received your completion status.");
+      if (viewingDocument && viewingDocument.testId === testId) {
+        setViewingDocument(null);
+      }
+      await loadPortal();
+    } catch (err) {
+      setError(`Could not mark test as completed: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function downloadApprovedItem(material) {
     try {
       if (material.file_path) {
@@ -450,8 +470,15 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       return <article className="card portal-item" key={test.id}>
         <div className="portal-item-heading"><span className="portal-item-icon test"><ClipboardList size={17} /></span><span className="portal-item-title"><strong>{test.title}</strong><small><CalendarClock size={12} />Due {dateLabel(test.due_at)} · {test.external_url ? "External test" : `${count} questions`}</small></span><span className={`portal-status ${attempt ? "submitted" : closed ? "overdue" : "pending"}`}>{attempt ? "Completed" : closed ? "Closed" : "Ready"}</span></div>
         {test.description && <p className="portal-description">{test.description}</p>}
-        {attempt ? <div className="test-score"><CheckCircle2 size={16} /><strong>Score: {attempt.score} / {attempt.max_score}</strong><span>Submitted {dateLabel(attempt.submitted_at)}</span></div> : test.external_url
-          ? <button
+        {attempt ? (
+          <div className="test-score">
+            <CheckCircle2 size={16} />
+            <strong>Score: {attempt.score} / {attempt.max_score} ({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</strong>
+            <span>Submitted {dateLabel(attempt.submitted_at)}</span>
+          </div>
+        ) : test.external_url ? (
+          <div className="portal-actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+            <button
               className={`button ${closed ? "disabled" : "primary"}`}
               type="button"
               disabled={closed}
@@ -465,7 +492,35 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
               <Eye size={14} />
               <span>{closed ? "Test closed" : "Open Test in Dashboard"}</span>
             </button>
-          : <button className="button" type="button" disabled={closed} onClick={() => { setSelectedTest(test.id); setAnswers({}); }}>{closed ? "Test closed" : "Start test"}<ArrowRight size={14} /></button>}
+            <a
+              className="button"
+              href={test.external_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open test link directly in new window"
+            >
+              <ExternalLink size={14} />
+              <span>Open in New Tab</span>
+            </a>
+            {!closed && (
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy}
+                onClick={() => markExternalTestCompleted(test.id)}
+                title="Mark this external exam as submitted"
+              >
+                <CheckCircle2 size={14} />
+                <span>✓ I Have Submitted This Exam</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <button className="button" type="button" disabled={closed} onClick={() => { setSelectedTest(test.id); setAnswers({}); }}>
+            {closed ? "Test closed" : "Start test"}
+            <ArrowRight size={14} />
+          </button>
+        )}
       </article>;
     })}
     {!filteredTests.length && <div className="card portal-empty"><ClipboardList size={22} /><strong>No tests found</strong><span>Published tests from your instructors will appear here.</span></div>}
@@ -793,6 +848,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             window.open(viewingDocument.url, "_blank");
           }
         }}
+        onMarkCompleted={viewingDocument.testId ? () => markExternalTestCompleted(viewingDocument.testId) : null}
         onClose={() => setViewingDocument(null)}
       />
     )}
