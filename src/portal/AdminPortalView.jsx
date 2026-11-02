@@ -188,7 +188,24 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setLoading(false);
   }, [supabase, view, selectedConversation]);
 
-  useEffect(() => { loadAdminData(); }, [loadAdminData]);
+  useEffect(() => { loadAdminData(true); }, [loadAdminData]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel(`admin-portal-realtime-${view}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => loadAdminData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => loadAdminData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, () => loadAdminData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, () => loadAdminData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, () => loadAdminData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, () => loadAdminData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, view, loadAdminData]);
 
   useEffect(() => {
     if (view !== "Messages" || !selectedConversation) return;

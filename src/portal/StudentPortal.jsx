@@ -79,8 +79,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [query, setQuery] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  const loadPortal = useCallback(async () => {
-    setLoading(true);
+  const loadPortal = useCallback(async (forceLoading = false) => {
+    if (forceLoading) setLoading(true);
     setError("");
     const [
       assignmentResult,
@@ -147,7 +147,31 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     setLoading(false);
   }, [supabase, user.id]);
 
-  useEffect(() => { loadPortal(); }, [loadPortal]);
+  useEffect(() => { loadPortal(true); }, [loadPortal]);
+
+  useEffect(() => {
+    if (!supabase || !user?.id) return;
+    const channel = supabase
+      .channel(`student-portal-realtime-${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, () => loadPortal())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, user.id, loadPortal]);
 
   useEffect(() => {
     if (activeView !== "Messages" || !user.id) return;

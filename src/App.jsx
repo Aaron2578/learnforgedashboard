@@ -350,16 +350,29 @@ function App({ user, profile, supabase, onSignOut }) {
 
   useEffect(() => {
     if (!supabase) return;
-    supabase.rpc("get_database_storage_stats").then(({ data, error }) => {
-      if (!error && data) setStorageStats(data);
-    });
-    supabase
-      .from("download_requests")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "pending")
-      .then(({ count, error }) => {
-        if (!error && typeof count === "number") setPendingDownloadsCount(count);
+    const fetchTelemetry = () => {
+      supabase.rpc("get_database_storage_stats").then(({ data, error }) => {
+        if (!error && data) setStorageStats(data);
       });
+      supabase
+        .from("download_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pending")
+        .then(({ count, error }) => {
+          if (!error && typeof count === "number") setPendingDownloadsCount(count);
+        });
+    };
+
+    fetchTelemetry();
+
+    const channel = supabase
+      .channel("app-telemetry-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => fetchTelemetry())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [supabase, activeView]);
   const unreadCount = data.notifications.filter((item) => !item.read).length;
   const today = new Date();

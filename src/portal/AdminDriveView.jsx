@@ -51,11 +51,26 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [selectedFile, setSelectedFile] = useState(null);
 
   useEffect(() => {
-    loadData();
+    loadData(true);
   }, []);
 
-  async function loadData() {
-    setLoading(true);
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel("admin-drive-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadData(false))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
+
+  async function loadData(forceLoading = false) {
+    if (forceLoading || (!materials.length && !downloadRequests.length)) {
+      setLoading(true);
+    }
     setError("");
 
     try {

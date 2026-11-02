@@ -85,7 +85,23 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     }
   }, [supabase, view]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(true); }, [loadData]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel(`admin-management-realtime-${view}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => loadData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, () => loadData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, () => loadData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, () => loadData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, view, loadData]);
 
   async function approveStudent(student, isApproved) {
     setBusy(true);
