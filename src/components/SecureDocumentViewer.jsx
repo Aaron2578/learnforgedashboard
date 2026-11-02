@@ -20,6 +20,17 @@ export function getEmbedUrl(rawUrl) {
   if (!rawUrl) return "";
   const url = rawUrl.trim();
 
+  // Direct Data URLs (Base64 PDF / document)
+  if (url.startsWith("data:")) {
+    return url;
+  }
+
+  // Google Drive Folder embed
+  const driveFolder = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/i);
+  if (driveFolder) {
+    return `https://drive.google.com/embeddedfolderview?id=${driveFolder[1]}#grid`;
+  }
+
   // Google Drive File preview
   const driveFile = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
   if (driveFile) {

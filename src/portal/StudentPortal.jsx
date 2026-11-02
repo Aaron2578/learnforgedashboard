@@ -216,15 +216,43 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     let directDownload = null;
 
     if (filePath) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("course-materials")
-        .createSignedUrl(filePath, 3600);
-      if (signedError) {
-        setError(`Could not open file: ${signedError.message}`);
-        return;
+      if (filePath.startsWith("data:") || filePath.startsWith("http")) {
+        finalUrl = filePath;
+        directDownload = filePath;
+      } else {
+        let bucket = "course-materials";
+        let cleanPath = filePath;
+        if (filePath.startsWith("course-materials:")) {
+          cleanPath = filePath.replace("course-materials:", "");
+        } else if (filePath.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = filePath.replace("assignment-files:", "");
+        }
+
+        let signedData = null;
+        let { data, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(cleanPath, 3600);
+
+        if (!signedError && data?.signedUrl) {
+          signedData = data;
+        } else {
+          // Try other bucket fallback
+          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+          const { data: fallbackData } = await supabase.storage
+            .from(otherBucket)
+            .createSignedUrl(cleanPath, 3600);
+          signedData = fallbackData;
+        }
+
+        if (signedData?.signedUrl) {
+          finalUrl = signedData.signedUrl;
+          directDownload = signedData.signedUrl;
+        } else {
+          setError("Could not generate a secure preview URL for this document.");
+          return;
+        }
       }
-      finalUrl = signedData.signedUrl;
-      directDownload = signedData.signedUrl;
     }
 
     const existingRequest = materialId
@@ -289,11 +317,42 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   async function downloadApprovedItem(material) {
     try {
       if (material.file_path) {
-        const { data, error: signedError } = await supabase.storage
-          .from("course-materials")
-          .createSignedUrl(material.file_path, 120);
-        if (signedError) throw signedError;
-        window.open(data.signedUrl, "_blank");
+        if (material.file_path.startsWith("data:") || material.file_path.startsWith("http")) {
+          const a = document.createElement("a");
+          a.href = material.file_path;
+          a.download = material.file_name || `${material.title || "document"}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return;
+        }
+
+        let bucket = "course-materials";
+        let cleanPath = material.file_path;
+        if (material.file_path.startsWith("course-materials:")) {
+          cleanPath = material.file_path.replace("course-materials:", "");
+        } else if (material.file_path.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = material.file_path.replace("assignment-files:", "");
+        }
+
+        let { data, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(cleanPath, 120);
+
+        if (!signedError && data?.signedUrl) {
+          window.open(data.signedUrl, "_blank");
+        } else {
+          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+          const { data: fallbackData } = await supabase.storage
+            .from(otherBucket)
+            .createSignedUrl(cleanPath, 120);
+          if (fallbackData?.signedUrl) {
+            window.open(fallbackData.signedUrl, "_blank");
+          } else {
+            throw new Error(signedError?.message || "File could not be found in storage.");
+          }
+        }
       } else if (material.drive_url) {
         window.open(material.drive_url, "_blank");
       }

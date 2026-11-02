@@ -111,6 +111,84 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     }
   }
 
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Failed to read file into memory."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadFileToSupabase(file) {
+    const cleanName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
+    const path = `materials/${Date.now()}_${cleanName}`;
+    const contentType = file.type || "application/pdf";
+
+    // 1. Try uploading to 'course-materials' bucket
+    try {
+      const { error: err1 } = await supabase.storage
+        .from("course-materials")
+        .upload(path, file, { contentType, upsert: false });
+      if (!err1) {
+        return { path: `course-materials:${path}`, size: file.size, type: contentType, name: file.name };
+      }
+      console.warn("Storage upload to 'course-materials' failed, trying fallback:", err1.message);
+    } catch (e) {
+      console.warn("course-materials bucket error:", e);
+    }
+
+    // 2. Try uploading to 'assignment-files' bucket
+    try {
+      const { error: err2 } = await supabase.storage
+        .from("assignment-files")
+        .upload(path, file, { contentType, upsert: false });
+      if (!err2) {
+        return { path: `assignment-files:${path}`, size: file.size, type: contentType, name: file.name };
+      }
+      console.warn("Storage upload to 'assignment-files' failed:", err2.message);
+    } catch (e) {
+      console.warn("assignment-files bucket error:", e);
+    }
+
+    // 3. Fallback: If file <= 12MB, store directly as Base64 Data URL so upload never fails
+    if (file.size <= 12 * 1024 * 1024) {
+      const dataUrl = await readFileAsDataURL(file);
+      return { path: dataUrl, size: file.size, type: contentType, name: file.name };
+    }
+
+    throw new Error("File could not be uploaded to cloud storage. Please ensure the 'course-materials' storage bucket is enabled or use a Google Drive link.");
+  }
+
+  async function resolveMaterialUrl(filePath) {
+    if (!filePath) return null;
+    if (filePath.startsWith("data:") || filePath.startsWith("http")) {
+      return filePath;
+    }
+
+    let bucket = "course-materials";
+    let cleanPath = filePath;
+    if (filePath.startsWith("course-materials:")) {
+      cleanPath = filePath.replace("course-materials:", "");
+    } else if (filePath.startsWith("assignment-files:")) {
+      bucket = "assignment-files";
+      cleanPath = filePath.replace("assignment-files:", "");
+    }
+
+    try {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 3600);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {}
+
+    const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+    try {
+      const { data, error } = await supabase.storage.from(otherBucket).createSignedUrl(cleanPath, 3600);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {}
+
+    return null;
+  }
+
   async function handleCreateMaterial(e) {
     e.preventDefault();
     if (!formTitle.trim()) {
@@ -126,6 +204,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       let originalFileName = null;
       let fileSize = 0;
       let fileType = "application/pdf";
+      let cleanDriveUrl = null;
 
       if (formSource === "upload") {
         if (!selectedFile) {
@@ -134,30 +213,33 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           return;
         }
 
-        originalFileName = selectedFile.name;
-        fileSize = selectedFile.size;
-        fileType = selectedFile.type || "application/pdf";
-        const cleanName = selectedFile.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-        const path = `materials/${Date.now()}_${cleanName}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("course-materials")
-          .upload(path, selectedFile, {
-            contentType: fileType,
-            upsert: false,
-          });
-
-        if (uploadError) {
-          throw new Error(`Storage upload failed: ${uploadError.message}`);
-        }
-
-        uploadedFilePath = path;
+        const uploaded = await uploadFileToSupabase(selectedFile);
+        uploadedFilePath = uploaded.path;
+        originalFileName = uploaded.name;
+        fileSize = uploaded.size;
+        fileType = uploaded.type;
       } else {
-        if (!formDriveUrl.trim() || !/^https?:\/\//i.test(formDriveUrl.trim())) {
-          setError("Please provide a valid Google Drive or document URL (starting with https://).");
+        let rawUrl = formDriveUrl.trim();
+        if (!rawUrl) {
+          setError("Please provide a Google Drive or document link.");
           setBusy(false);
           return;
         }
+
+        // Auto-fix URL if missing protocol
+        if (!/^https?:\/\//i.test(rawUrl)) {
+          rawUrl = `https://${rawUrl}`;
+        }
+
+        try {
+          new URL(rawUrl);
+        } catch {
+          setError("Please provide a valid web link or Google Drive URL.");
+          setBusy(false);
+          return;
+        }
+
+        cleanDriveUrl = rawUrl;
       }
 
       const { error: insertError } = await supabase.from("course_materials").insert({
@@ -169,8 +251,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         file_name: originalFileName,
         file_size: fileSize,
         file_type: fileType,
-        drive_url: formSource === "drive" ? formDriveUrl.trim() : null,
-        created_by: user.id,
+        drive_url: cleanDriveUrl,
+        created_by: user?.id || null,
       });
 
       if (insertError) throw insertError;
@@ -181,7 +263,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       await loadData();
     } catch (err) {
       console.error("Failed to add material:", err);
-      setError(err.message);
+      setError(err.message || "Failed to add material.");
     } finally {
       setBusy(false);
     }
@@ -206,8 +288,16 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setError("");
 
     try {
-      if (material.file_path) {
-        await supabase.storage.from("course-materials").remove([material.file_path]);
+      if (material.file_path && !material.file_path.startsWith("data:")) {
+        let bucket = "course-materials";
+        let cleanPath = material.file_path;
+        if (material.file_path.startsWith("course-materials:")) {
+          cleanPath = material.file_path.replace("course-materials:", "");
+        } else if (material.file_path.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = material.file_path.replace("assignment-files:", "");
+        }
+        await supabase.storage.from(bucket).remove([cleanPath]);
       }
 
       const { error: deleteError } = await supabase
@@ -231,15 +321,30 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setBusy(true);
     setError("");
     try {
+      let cleanDriveUrl = data.driveUrl?.trim() || null;
+      if (cleanDriveUrl && !/^https?:\/\//i.test(cleanDriveUrl)) {
+        cleanDriveUrl = `https://${cleanDriveUrl}`;
+      }
+
+      let updatePayload = {
+        title: data.title.trim(),
+        description: data.description.trim(),
+        category: data.category,
+        course_id: data.courseId || null,
+        drive_url: cleanDriveUrl,
+      };
+
+      if (data.replacementFile) {
+        const uploaded = await uploadFileToSupabase(data.replacementFile);
+        updatePayload.file_path = uploaded.path;
+        updatePayload.file_name = uploaded.name;
+        updatePayload.file_size = uploaded.size;
+        updatePayload.file_type = uploaded.type;
+      }
+
       const { error: updateError } = await supabase
         .from("course_materials")
-        .update({
-          title: data.title.trim(),
-          description: data.description.trim(),
-          file_category: data.category,
-          course_id: data.courseId || null,
-          drive_url: data.driveUrl?.trim() || null,
-        })
+        .update(updatePayload)
         .eq("id", materialId);
 
       if (updateError) throw updateError;
@@ -287,16 +392,18 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   async function handleOpenViewer(material) {
     try {
       let previewUrl = material.drive_url;
-      let downloadUrl = null;
+      let downloadUrl = material.drive_url;
 
       if (material.file_path) {
-        const { data, error: signedUrlError } = await supabase.storage
-          .from("course-materials")
-          .createSignedUrl(material.file_path, 3600); // 1 hour
+        const resolved = await resolveMaterialUrl(material.file_path);
+        if (resolved) {
+          previewUrl = resolved;
+          downloadUrl = resolved;
+        }
+      }
 
-        if (signedUrlError) throw signedUrlError;
-        previewUrl = data.signedUrl;
-        downloadUrl = data.signedUrl;
+      if (!previewUrl) {
+        throw new Error("No preview URL could be generated for this material.");
       }
 
       setViewingMaterial({
@@ -452,6 +559,19 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                         <Eye size={14} />
                         <span>Preview in Dashboard</span>
                       </button>
+
+                      {item.drive_url && (
+                        <a
+                          className="button compact"
+                          href={item.drive_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open Google Drive or cloud link directly in a new tab"
+                        >
+                          <ExternalLink size={13} />
+                          <span>Open Link</span>
+                        </a>
+                      )}
 
                       <button
                         className="button compact"
@@ -733,33 +853,98 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
               </div>
 
               {formSource === "upload" ? (
-                <label className="form-field">
+                <div className="form-field">
                   <span>Upload PDF or Document File *</span>
-                  <input
-                    type="file"
-                    required
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                  />
-                  <small className="muted">
-                    Supports PDFs and Office documents (up to 50 MB). Files are stored securely and protected from unauthorized direct download.
+                  <label
+                    className="file-drop"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "24px 16px",
+                      textAlign: "center",
+                      border: selectedFile ? "2px solid #6366f1" : "2px dashed #cbd5e1",
+                      background: selectedFile ? "#f5f3ff" : "#f8fafc",
+                      borderRadius: "12px",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                    }}
+                  >
+                    <Upload size={28} style={{ color: selectedFile ? "#6366f1" : "#94a3b8", marginBottom: "8px" }} />
+                    {selectedFile ? (
+                      <div>
+                        <strong style={{ display: "block", color: "#1e1b4b", fontSize: "14px" }}>
+                          ✓ {selectedFile.name}
+                        </strong>
+                        <span style={{ fontSize: "12px", color: "#6366f1", marginTop: "4px", display: "inline-block" }}>
+                          {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · Click to choose a different file
+                        </span>
+                      </div>
+                    ) : (
+                      <div>
+                        <strong style={{ display: "block", color: "#334155", fontSize: "14px" }}>
+                          Click to browse or drag &amp; drop a file here
+                        </strong>
+                        <span style={{ fontSize: "12px", color: "#64748b", marginTop: "4px", display: "inline-block" }}>
+                          Supports PDF, DOC, DOCX, XLS, PPT, TXT (up to 50 MB)
+                        </span>
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setSelectedFile(file);
+                        if (file && !formTitle.trim()) {
+                          const cleanTitle = file.name
+                            .replace(/\.[^/.]+$/, "")
+                            .replace(/[-_]/g, " ")
+                            .replace(/\b\w/g, (c) => c.toUpperCase());
+                          setFormTitle(cleanTitle);
+                        }
+                      }}
+                    />
+                  </label>
+                  {selectedFile && (
+                    <button
+                      type="button"
+                      style={{
+                        alignSelf: "flex-end",
+                        background: "none",
+                        border: "none",
+                        color: "#ef4444",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        padding: "4px 0",
+                        marginTop: "4px",
+                      }}
+                      onClick={() => setSelectedFile(null)}
+                    >
+                      Clear selected file
+                    </button>
+                  )}
+                  <small className="muted" style={{ display: "block", marginTop: "6px" }}>
+                    Files are stored securely with in-dashboard protected preview.
                   </small>
-                </label>
+                </div>
               ) : (
                 <label className="form-field">
-                  <span>Google Drive / Docs / Form Test Link *</span>
+                  <span>Google Drive / Cloud Document Link *</span>
                   <input
                     type="url"
                     required
-                    placeholder="https://drive.google.com/file/d/.../view or https://docs.google.com/..."
+                    placeholder="https://drive.google.com/file/d/... or https://docs.google.com/..."
                     value={formDriveUrl}
                     onChange={(e) => setFormDriveUrl(e.target.value)}
                   />
                   <small className="muted" style={{ display: "block", marginTop: "6px" }}>
-                    Paste any Google Drive file link, Google Doc, or Google Forms test link. LearnForge will automatically convert it into a protected in-dashboard embed!
+                    Paste any Google Drive file link, Google Doc, Sheet, Slide, or Google Forms test link. LearnForge automatically converts it into a protected in-dashboard embed!
                   </small>
-                  <div style={{ marginTop: "8px", padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "12px", color: "#166534", lineHeight: "1.5" }}>
-                    💡 <strong>Important for Google Drive:</strong> In Google Drive, right-click your file → <strong>Share</strong> → set <em>General access</em> to <strong>"Anyone with the link" (Viewer)</strong>. This allows students to view it seamlessly without Google's "Can't access your Google Account" cookie barrier.
+                  <div style={{ marginTop: "8px", padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "12px", color: "#166534", lineHeight: "1.5" }}>
+                    💡 <strong>Sharing tip:</strong> In Google Drive, right-click your file → <strong>Share</strong> → set <em>General access</em> to <strong>"Anyone with the link" (Viewer)</strong>. This allows students to view it seamlessly without Google's sign-in barrier.
                   </div>
                 </label>
               )}
