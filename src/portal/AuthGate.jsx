@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, BookOpen, CheckCircle, Clock3, Database, GraduationCap, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowRight, BookOpen, CheckCircle, Clock3, Database, GraduationCap, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import App from "../App.jsx";
 import { supabase } from "../lib/supabase.js";
 import StudentPortal from "./StudentPortal.jsx";
@@ -41,25 +41,69 @@ function AuthScreen() {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-card">
-        <div className="auth-logo"><span className="brand-mark"><GraduationCap size={22} /></span><span><strong>LearnForge</strong><small>Learning together</small></span></div>
-        <div className="auth-intro">
-          <div className="eyebrow">Campus portal</div>
-          <h1>{mode === "sign-in" ? "Welcome back" : "Join your campus"}</h1>
-          <p>{mode === "sign-in" ? "Sign in to your student or administrator account." : "Create your student account. No email confirmation needed — an administrator will approve your access."}</p>
-        </div>
-        <form className="auth-form" onSubmit={submit}>
-          {mode === "sign-up" && <label className="form-field"><span>Full name</span><input autoComplete="name" required maxLength={100} value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
-          <label className="form-field"><span>Email address</span><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@school.edu" /></label>
-          <label className="form-field"><span>Password</span><input type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
-          {error && <div className="form-error" role="alert">{error}</div>}
-          {notice && <div className="form-notice" role="status">{notice}</div>}
-          <button className="button primary auth-submit" disabled={busy}>{busy ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create student account"}<ArrowRight size={15} /></button>
-        </form>
-        <p className="auth-switch">{mode === "sign-in" ? "New student?" : "Already have an account?"} <button type="button" onClick={() => { setMode(mode === "sign-in" ? "sign-up" : "sign-in"); setError(""); setNotice(""); }}>{mode === "sign-in" ? "Create an account" : "Sign in"}</button></p>
-        <div className="auth-security"><ShieldCheck size={15} />Instant registration · Admin approval required</div>
-      </section>
+    <main className="auth-split-page">
+      <div className="auth-split-card">
+        {/* Left Column: Login Places */}
+        <section className="auth-split-form-col">
+          <div className="auth-logo">
+            <span className="brand-mark"><GraduationCap size={22} /></span>
+            <span><strong>LearnForge</strong><small>Learning together</small></span>
+          </div>
+          <div className="auth-intro">
+            <div className="eyebrow">Campus portal</div>
+            <h1>{mode === "sign-in" ? "Welcome back" : "Join your campus"}</h1>
+            <p>{mode === "sign-in" ? "Sign in to your student or administrator account." : "Create your student account. No email confirmation needed — an administrator will approve your access."}</p>
+          </div>
+          <form className="auth-form" onSubmit={submit}>
+            {mode === "sign-up" && (
+              <label className="form-field">
+                <span>Full name</span>
+                <input autoComplete="name" required maxLength={100} value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" />
+              </label>
+            )}
+            <label className="form-field">
+              <span>Email address</span>
+              <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@school.edu" />
+            </label>
+            <label className="form-field">
+              <span>Password</span>
+              <input type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" />
+            </label>
+            {error && <div className="form-error" role="alert">{error}</div>}
+            {notice && <div className="form-notice" role="status">{notice}</div>}
+            <button className="button primary auth-submit" disabled={busy}>
+              {busy ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create student account"}
+              <ArrowRight size={15} />
+            </button>
+          </form>
+          <p className="auth-switch">
+            {mode === "sign-in" ? "New student?" : "Already have an account?"}{" "}
+            <button type="button" onClick={() => { setMode(mode === "sign-in" ? "sign-up" : "sign-in"); setError(""); setNotice(""); }}>
+              {mode === "sign-in" ? "Create an account" : "Sign in"}
+            </button>
+          </p>
+          <div className="auth-security"><ShieldCheck size={15} />Instant registration · Admin approval required</div>
+        </section>
+
+        {/* Right Column: Visual Showcase related to LearnForge */}
+        <section className="auth-split-image-col">
+          <img src="/learnforge-showcase.jpg" alt="LearnForge Academic Collaboration" className="auth-split-image-bg" />
+          <div className="auth-split-image-overlay" />
+          <div className="auth-split-image-content">
+            <div className="auth-split-tag"><Sparkles size={14} /> Next-Gen Academic Cloud</div>
+            <div className="auth-split-showcase-box">
+              <h2>Empowering Education with Real-Time Learning</h2>
+              <p>Seamless course management, automated attendance, protected material embeds, and live evaluation analytics unified in one state-of-the-art campus dashboard.</p>
+              <div className="auth-split-features">
+                <span className="auth-split-feature-chip">✓ Live Supabase Sync</span>
+                <span className="auth-split-feature-chip">✓ Secure Drive Files</span>
+                <span className="auth-split-feature-chip">✓ Instant Mark Release</span>
+                <span className="auth-split-feature-chip">✓ Direct Messaging</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
