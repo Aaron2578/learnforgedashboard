@@ -3,7 +3,7 @@ import {
   ArrowRight, BookOpen, CalendarClock, CheckCircle2, ClipboardList, Clock3,
   Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
-  Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
+  Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X, Search,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
@@ -942,7 +942,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
     </aside>
     <main className="main-content">
-      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation"><Menu size={18} /></button><div className="breadcrumb">Student portal <span>/</span> <strong>{activeView}</strong></div></div><div className="top-actions"><label className="search-box"><span className="sr-only">Search this page</span><input type="search" aria-label={`Search ${activeView.toLowerCase()}`} placeholder={`Search ${activeView.toLowerCase()}…`} value={query} onChange={(event) => setQuery(event.target.value)} /></label><WeatherThemeSelector /><span className="top-avatar" title={user.email}>{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation"><Menu size={18} /></button><div className="breadcrumb"><span className="breadcrumb-prefix">Student portal <i>/</i></span><strong>{activeView}</strong></div></div><div className="top-actions"><label className={`search-box ${query ? "has-query" : ""}`}><Search size={15} /><span className="sr-only">Search this page</span><input type="search" aria-label={`Search ${activeView.toLowerCase()}`} placeholder={`Search ${activeView.toLowerCase()}…`} value={query} onChange={(event) => setQuery(event.target.value)} /></label><WeatherThemeSelector /><span className="top-avatar" title={user.email}>{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span></div></header>
       <div className="content">
         <div className="page-heading"><div><div className="eyebrow">{heading[0]}</div><h1>{heading[1]}</h1><p>{heading[2]}</p></div>{activeView === "Messages" && <button className="button primary" onClick={() => { setSelectedConversation(""); setNewSubject(""); }}><Plus size={14} />New message</button>}</div>
         {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}

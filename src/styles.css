@@ -3881,23 +3881,6 @@ td {
 }
 
 @media (max-width: 520px) {
-  .topbar {
-    padding: 0 12px;
-  }
-
-  .breadcrumb {
-    font-size: 12px;
-  }
-
-  .search-box {
-    width: 110px;
-    padding: 0 6px;
-  }
-
-  .search-box input {
-    font-size: 12px;
-  }
-
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -4841,6 +4824,229 @@ img, video, iframe {
    Small Tablets & Phablets (max-width: 768px)
    -------------------------------------------------------------------------- */
 @media (max-width: 768px) {
+  /* Complete Mobile Navbar System */
+  .topbar {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 40 !important;
+    height: 56px !important;
+    padding: 0 12px !important;
+    gap: 8px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    background: var(--paper) !important;
+    border-bottom: 1px solid var(--line) !important;
+  }
+
+  .topbar-left {
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    overflow: hidden !important;
+  }
+
+  .mobile-menu {
+    display: grid !important;
+    place-items: center !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--line) !important;
+    background: var(--line-subtle) !important;
+    color: var(--ink) !important;
+    flex-shrink: 0 !important;
+    padding: 0 !important;
+    cursor: pointer !important;
+  }
+
+  /* Breadcrumb: Clean page title on mobile */
+  .breadcrumb {
+    font-size: 15px !important;
+    font-weight: 750 !important;
+    color: var(--ink) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    max-width: none !important;
+    letter-spacing: -0.2px !important;
+  }
+
+  .breadcrumb .breadcrumb-prefix,
+  .breadcrumb > span:not(.breadcrumb-prefix) {
+    display: none !important;
+  }
+
+  .breadcrumb strong {
+    font-size: 15px !important;
+    font-weight: 750 !important;
+    color: var(--ink) !important;
+  }
+
+  /* Right Action Controls */
+  .top-actions {
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    flex-shrink: 0 !important;
+    margin-left: auto !important;
+  }
+
+  /* Expandable Touch-Friendly Search Box */
+  .search-box {
+    position: relative !important;
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    border: 1px solid var(--line) !important;
+    background: var(--line-subtle) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    flex-shrink: 0 !important;
+    transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border-color 0.2s ease !important;
+    overflow: hidden !important;
+  }
+
+  .search-box svg {
+    color: var(--muted) !important;
+    flex-shrink: 0 !important;
+    pointer-events: none !important;
+  }
+
+  .search-box input {
+    position: absolute !important;
+    width: 0 !important;
+    opacity: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    color: var(--ink) !important;
+    font-size: 16px !important;
+    pointer-events: none !important;
+    transition: opacity 0.2s ease !important;
+  }
+
+  .search-box kbd {
+    display: none !important;
+  }
+
+  /* When search box is tapped / focused / has query text: expands over the bar */
+  .search-box:focus-within,
+  .search-box.has-query {
+    position: absolute !important;
+    top: 9px !important;
+    left: 50px !important;
+    right: 12px !important;
+    z-index: 50 !important;
+    width: auto !important;
+    height: 38px !important;
+    border-radius: 20px !important;
+    padding: 0 14px 0 36px !important;
+    background: var(--paper) !important;
+    border: 1.5px solid var(--blue) !important;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.16) !important;
+    overflow: visible !important;
+  }
+
+  .search-box:focus-within svg,
+  .search-box.has-query svg {
+    position: absolute !important;
+    left: 12px !important;
+    color: var(--blue) !important;
+  }
+
+  .search-box:focus-within input,
+  .search-box.has-query input {
+    position: relative !important;
+    width: 100% !important;
+    opacity: 1 !important;
+    padding: 0 !important;
+    pointer-events: auto !important;
+    font-size: 14px !important;
+    height: 100% !important;
+  }
+
+  /* Compact Weather Pill */
+  .weather-topbar-pill {
+    height: 32px !important;
+    padding: 0 8px 0 5px !important;
+    gap: 4px !important;
+    border-radius: 999px !important;
+    flex-shrink: 0 !important;
+    font-size: 11.5px !important;
+  }
+
+  .weather-pill-icon-wrap {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  .weather-pill-name,
+  .weather-pill-arrow {
+    display: none !important;
+  }
+
+  .weather-pill-temp {
+    font-size: 11.5px !important;
+    font-weight: 750 !important;
+  }
+
+  /* Notifications Button */
+  .notification-wrap {
+    position: relative !important;
+    flex-shrink: 0 !important;
+  }
+
+  .notification-button {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    border: 1px solid var(--line) !important;
+    background: var(--line-subtle) !important;
+    display: grid !important;
+    place-items: center !important;
+    color: var(--ink) !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* User Avatar */
+  .top-avatar {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    border-radius: 50% !important;
+    font-size: 11px !important;
+    flex-shrink: 0 !important;
+    display: grid !important;
+    place-items: center !important;
+  }
+
+  /* Popovers on Mobile */
+  .notification-popover,
+  .weather-popover-panel {
+    position: fixed !important;
+    top: 60px !important;
+    left: 10px !important;
+    right: 10px !important;
+    width: auto !important;
+    max-height: 80vh !important;
+    z-index: 60 !important;
+    box-shadow: 0 15px 35px rgba(15, 23, 42, 0.22) !important;
+  }
+
   /* Day Inspector Sheet */
   .cal-inspector-row {
     display: flex !important;
@@ -5380,44 +5586,6 @@ img, video, iframe {
    Compact Smartphones (max-width: 480px)
    -------------------------------------------------------------------------- */
 @media (max-width: 480px) {
-  /* Topbar header */
-  .topbar {
-    height: 56px !important;
-    padding: 0 10px !important;
-  }
-
-  .topbar-left {
-    gap: 8px !important;
-    min-width: 0 !important;
-    flex: 1 1 auto !important;
-  }
-
-  .breadcrumb {
-    max-width: 30vw !important;
-    font-size: 11.5px !important;
-  }
-
-  .top-actions {
-    gap: 6px !important;
-    flex-shrink: 0 !important;
-  }
-
-  .search-box {
-    width: 88px !important;
-    height: 32px !important;
-    padding: 0 6px !important;
-  }
-
-  .search-box input {
-    font-size: 11.5px !important;
-  }
-
-  .top-avatar {
-    width: 30px !important;
-    height: 30px !important;
-    font-size: 11px !important;
-  }
-
   /* Content padding */
   .content {
     padding: 12px 8px 24px !important;
@@ -5445,12 +5613,8 @@ img, video, iframe {
    Extra-Small Screens (max-width: 360px - e.g. iPhone SE 1st gen)
    -------------------------------------------------------------------------- */
 @media (max-width: 360px) {
-  .breadcrumb {
-    display: none !important;
-  }
-
-  .search-box {
-    width: 110px !important;
+  .breadcrumb strong {
+    max-width: 80px !important;
   }
 
   .cal-month-title {

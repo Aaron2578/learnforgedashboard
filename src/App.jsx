@@ -664,9 +664,9 @@ function App({ user, profile, supabase, onSignOut }) {
 
       <main className="main-content">
         <header className="topbar">
-          <div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation"><Menu size={18} /></button><div className="breadcrumb">Workspace <span>/</span> <strong>{activeView}</strong></div></div>
+          <div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation"><Menu size={18} /></button><div className="breadcrumb"><span className="breadcrumb-prefix">Workspace <i>/</i></span><strong>{activeView}</strong></div></div>
           <div className="top-actions">
-            <label className="search-box"><Search size={15} /><input type="search" aria-label={searchLabel} placeholder={searchLabel} value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
+            <label className={`search-box ${query ? "has-query" : ""}`}><Search size={15} /><input type="search" aria-label={searchLabel} placeholder={searchLabel} value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
             <WeatherThemeSelector />
             <div className="notification-wrap" ref={notificationRef}>
               <button className="icon-button notification-button" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`} aria-expanded={notificationOpen} onClick={() => setNotificationOpen((open) => !open)}><Bell size={16} />{unreadCount > 0 && <span className="notification-dot" />}</button>
