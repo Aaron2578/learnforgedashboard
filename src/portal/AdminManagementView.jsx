@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight, BookOpen, Check, Clock3, Copy, Database, GraduationCap,
-  HardDrive, Link2, Mail, MapPin, Pencil, Plus, RefreshCw, Search, Trash2, Users, X
+  ArrowRight, BookOpen, Check, Clock3, Copy, Database, Download, ExternalLink, Eye, FileText, GraduationCap,
+  HardDrive, Link2, Mail, MapPin, Pencil, Plus, RefreshCw, Search, Trash2, Upload, Users, X
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
+import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import { parseNoteAttachment, formatNoteBodyWithAttachment, uploadNotePdfToStorage } from "../lib/noteAttachments.js";
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
@@ -47,6 +49,20 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [courseSessionFilter, setCourseSessionFilter] = useState("all");
   const [attendancePrefillDate, setAttendancePrefillDate] = useState("");
   const [recentInvites, setRecentInvites] = useState([]);
+  const [noteAttachmentType, setNoteAttachmentType] = useState("none");
+  const [notePdfFile, setNotePdfFile] = useState(null);
+  const [noteDriveLink, setNoteDriveLink] = useState("");
+  const [viewingAttachment, setViewingAttachment] = useState(null);
+  const [copiedNoteId, setCopiedNoteId] = useState(null);
+
+  function copyNoteLink(id, url) {
+    if (!url) return;
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopiedNoteId(id);
+      onToast?.("Note link copied to clipboard.");
+      setTimeout(() => setCopiedNoteId(null), 2500);
+    });
+  }
 
   const loadData = useCallback(async (forceLoading = false) => {
     if (forceLoading) setLoading(true);
@@ -330,6 +346,75 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     setError("");
     const isAttendance = view === "Attendance";
     const table = isAttendance ? "attendance_records" : "student_notes";
+    let finalBody = String(values.get("body") || "").trim();
+    if (!isAttendance) {
+      if (noteAttachmentType === "upload") {
+        if (!notePdfFile) {
+          setError("Please select a PDF file to upload.");
+          setBusy(false);
+          return;
+        }
+        try {
+          const uploadRes = await uploadNotePdfToStorage(supabase, notePdfFile);
+          finalBody = formatNoteBodyWithAttachment(finalBody, uploadRes.url, notePdfFile.name);
+
+          // Also register in course_materials under 'Lecture Notes'
+          try {
+            await supabase.from("course_materials").insert({
+              title: `${String(values.get("title")).trim()} (Notes PDF)`,
+              description: `Notes attached for ${studentsById[values.get("student_id")]?.full_name || "student"}`,
+              category: "Lecture Notes",
+              course_id: values.get("course_id") || null,
+              file_path: uploadRes.storagePath,
+              file_name: notePdfFile.name,
+              file_size: uploadRes.fileSize,
+              file_type: "application/pdf",
+              created_by: user.id,
+            });
+          } catch (cmErr) {
+            console.warn("Could not register in course_materials:", cmErr);
+          }
+        } catch (uploadErr) {
+          setError(uploadErr.message || "Failed to upload note PDF.");
+          setBusy(false);
+          return;
+        }
+      } else if (noteAttachmentType === "drive") {
+        let cleanUrl = (noteDriveLink || "").trim();
+        if (!cleanUrl) {
+          setError("Please provide a Google Drive or document link.");
+          setBusy(false);
+          return;
+        }
+        if (!/^https?:\/\//i.test(cleanUrl)) {
+          cleanUrl = `https://${cleanUrl}`;
+        }
+        try {
+          new URL(cleanUrl);
+        } catch {
+          setError("Please provide a valid web link or Google Drive URL.");
+          setBusy(false);
+          return;
+        }
+        finalBody = formatNoteBodyWithAttachment(finalBody, cleanUrl, "Google Drive Notes");
+
+        // Also register in course_materials under 'Lecture Notes'
+        try {
+          await supabase.from("course_materials").insert({
+            title: `${String(values.get("title")).trim()} (Drive Notes)`,
+            description: `Drive notes for ${studentsById[values.get("student_id")]?.full_name || "student"}`,
+            category: "Lecture Notes",
+            course_id: values.get("course_id") || null,
+            drive_url: cleanUrl,
+            file_type: "application/pdf",
+            created_by: user.id,
+          });
+        } catch (cmErr) {
+          console.warn("Could not register in course_materials:", cmErr);
+        }
+      }
+    }
+
     const payload = isAttendance ? {
       student_id: values.get("student_id"),
       course_id: values.get("course_id") || null,
@@ -341,7 +426,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       student_id: values.get("student_id"),
       course_id: values.get("course_id") || null,
       title: String(values.get("title")).trim(),
-      body: String(values.get("body")).trim(),
+      body: finalBody,
       created_by: user.id,
     };
     const { error: insertError } = await supabase.from(table).insert(payload);
@@ -349,7 +434,10 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     else {
       setShowForm(false);
       form.reset();
-      onToast(isAttendance ? "Attendance recorded." : "Private student note saved.");
+      setNoteAttachmentType("none");
+      setNotePdfFile(null);
+      setNoteDriveLink("");
+      onToast(isAttendance ? "Attendance recorded." : "Private student note saved with attachment.");
       await loadData();
     }
     setBusy(false);
@@ -642,8 +730,119 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         <label className="form-field"><span>Status</span><select name="status" defaultValue="present"><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select></label>
         <label className="form-field"><span>Note (optional)</span><input name="note" maxLength="1000" /></label>
       </> : <>
-        <label className="form-field"><span>Title</span><input name="title" required maxLength="150" /></label>
-        <label className="form-field"><span>Note</span><textarea name="body" required rows="5" maxLength="10000" /></label>
+        <label className="form-field"><span>Title</span><input name="title" required maxLength="150" placeholder="e.g. Lecture 4 Study Notes & Feedback" /></label>
+        <label className="form-field"><span>Note Body / Instructions</span><textarea name="body" required rows="4" maxLength="10000" placeholder="Write private feedback or study notes for this student..." /></label>
+
+        <div className="form-field" style={{ marginTop: "12px" }}>
+          <span style={{ display: "block", marginBottom: "8px", fontWeight: "650", fontSize: "13px" }}>
+            Attach PDF Notes or Google Drive Link (Optional)
+          </span>
+          <div className="source-toggle-tabs" style={{ marginBottom: "12px" }}>
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteAttachmentType === "none" ? "active" : ""}`}
+              onClick={() => setNoteAttachmentType("none")}
+            >
+              No Attachment
+            </button>
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteAttachmentType === "upload" ? "active" : ""}`}
+              onClick={() => setNoteAttachmentType("upload")}
+            >
+              <Upload size={14} /> Upload PDF to Drive
+            </button>
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteAttachmentType === "drive" ? "active" : ""}`}
+              onClick={() => setNoteAttachmentType("drive")}
+            >
+              <Link2 size={14} /> Google Drive / Web Link
+            </button>
+          </div>
+
+          {noteAttachmentType === "upload" && (
+            <div>
+              <label
+                className="file-drop"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "20px 16px",
+                  textAlign: "center",
+                  border: notePdfFile ? "2px solid #6366f1" : "2px dashed #cbd5e1",
+                  background: notePdfFile ? "#f5f3ff" : "#f8fafc",
+                  borderRadius: "12px",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                }}
+              >
+                <Upload size={26} style={{ color: notePdfFile ? "#6366f1" : "#94a3b8", marginBottom: "8px" }} />
+                {notePdfFile ? (
+                  <div>
+                    <strong style={{ display: "block", color: "#1e1b4b", fontSize: "13.5px" }}>
+                      ✓ {notePdfFile.name}
+                    </strong>
+                    <span style={{ fontSize: "12px", color: "#6366f1", marginTop: "4px", display: "inline-block" }}>
+                      {(notePdfFile.size / (1024 * 1024)).toFixed(2)} MB · Click to choose a different PDF
+                    </span>
+                  </div>
+                ) : (
+                  <div>
+                    <strong style={{ display: "block", color: "#334155", fontSize: "13.5px" }}>
+                      Click to choose or drag &amp; drop a PDF notes file here
+                    </strong>
+                    <span style={{ fontSize: "12px", color: "#64748b", marginTop: "4px", display: "inline-block" }}>
+                      Supports PDF documents (up to 50 MB). Automatically stored in Drive and linked to this note.
+                    </span>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setNotePdfFile(file);
+                  }}
+                />
+              </label>
+              {notePdfFile && (
+                <button
+                  type="button"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#ef4444",
+                    fontSize: "12px",
+                    cursor: "pointer",
+                    padding: "4px 0",
+                    marginTop: "4px",
+                  }}
+                  onClick={() => setNotePdfFile(null)}
+                >
+                  Clear selected file
+                </button>
+              )}
+            </div>
+          )}
+
+          {noteAttachmentType === "drive" && (
+            <div>
+              <input
+                type="url"
+                placeholder="https://drive.google.com/file/d/... or document URL"
+                value={noteDriveLink}
+                onChange={(e) => setNoteDriveLink(e.target.value)}
+              />
+              <small className="muted" style={{ display: "block", marginTop: "6px" }}>
+                Paste any Google Drive, Google Doc, or PDF link to share it with this student.
+              </small>
+            </div>
+          )}
+        </div>
       </>}
       <div className="form-actions"><button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={busy}>{busy ? "Saving…" : view === "Attendance" ? "Save attendance" : "Save note"}</button></div>
     </form>}
@@ -896,7 +1095,91 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         }}
       />
     ) : <section className="admin-work-list">
-      {records.map((record) => <article className="card admin-assignment-card" key={record.id}><div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><GraduationCap size={16} /></span><span><h2>{record.title}</h2><p>{studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}{record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}</p><small>{record.body}</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingRecord(record)}><Pencil size={13} /> Edit</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note"><Trash2 size={15} /></button></div></div></article>)}
+      {records.map((record) => {
+        const { text: cleanBody, attachmentUrl, attachmentName, isDrive, isPdf } = parseNoteAttachment(record.body);
+        return (
+          <article className="card admin-assignment-card" key={record.id}>
+            <div className="panel-heading">
+              <div className="admin-assignment-title" style={{ width: "100%" }}>
+                <span className="portal-item-icon assignment"><GraduationCap size={16} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                    <h2>{record.title}</h2>
+                    <div className="heading-actions" style={{ margin: 0 }}>
+                      <button className="button compact" type="button" onClick={() => setEditingRecord(record)}>
+                        <Pencil size={13} /> Edit
+                      </button>
+                      <button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+                  <p style={{ marginTop: "4px" }}>
+                    <strong>{studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}</strong>
+                    {record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}
+                  </p>
+                  <small style={{ marginTop: "8px", fontSize: "13.5px", lineHeight: "1.5", color: "var(--ink-soft)" }}>
+                    {cleanBody}
+                  </small>
+
+                  {attachmentUrl && (
+                    <div className="note-attachment-banner">
+                      <div className="note-attachment-info">
+                        <span className={`note-attachment-icon ${isDrive ? "drive" : "pdf"}`}>
+                          {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
+                        </span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <strong className="note-attachment-title">
+                            {attachmentName || (isDrive ? "Google Drive Document" : "Attached PDF Notes")}
+                          </strong>
+                          <span className="note-attachment-sub">
+                            {isDrive ? "Google Drive / Web Document" : "PDF Document · Stored in Drive"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="note-attachment-actions">
+                        <button
+                          type="button"
+                          className="button primary compact"
+                          onClick={() =>
+                            setViewingAttachment({
+                              title: record.title,
+                              subtitle: `${studentsById[record.student_id]?.full_name || "Student"} · Attached Notes`,
+                              url: attachmentUrl,
+                            })
+                          }
+                        >
+                          <Eye size={13} />
+                          <span>Preview PDF</span>
+                        </button>
+                        <a
+                          href={attachmentUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="button compact"
+                          title="Open in new tab"
+                        >
+                          <ExternalLink size={13} />
+                          <span>Open Link</span>
+                        </a>
+                        <button
+                          type="button"
+                          className="button compact"
+                          onClick={() => copyNoteLink(record.id, attachmentUrl)}
+                          title="Copy attachment link"
+                        >
+                          {copiedNoteId === record.id ? <Check size={13} color="var(--green)" /> : <Copy size={13} />}
+                          <span>{copiedNoteId === record.id ? "Copied" : "Copy"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </article>
+        );
+      })}
       {!records.length && <div className="card portal-empty"><GraduationCap size={22} /><strong>No notes records yet</strong><span>Use the button above to add one.</span></div>}
     </section>}
 
@@ -919,9 +1202,21 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         record={editingRecord}
         students={students}
         courses={courses}
+        supabase={supabase}
         onClose={() => setEditingRecord(null)}
         onSave={updateRecord}
         onDelete={deleteRecord}
+      />
+    )}
+
+    {viewingAttachment && (
+      <SecureDocumentViewer
+        title={viewingAttachment.title}
+        subtitle={viewingAttachment.subtitle}
+        url={viewingAttachment.url}
+        userEmail={user.email}
+        isSuperuser={true}
+        onClose={() => setViewingAttachment(null)}
       />
     )}
 

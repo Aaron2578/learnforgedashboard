@@ -476,7 +476,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       )}
 
       {/* Tabs navigation */}
-      <div className="portal-tabs" role="tablist">
+      <div className="portal-tabs" role="tablist" aria-label="Drive materials navigation">
         <button
           className={`portal-tab ${activeTab === "materials" ? "active" : ""}`}
           type="button"
@@ -484,8 +484,9 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           aria-selected={activeTab === "materials"}
           onClick={() => setActiveTab("materials")}
         >
-          <HardDrive size={15} />
-          <span>Files &amp; Drive Materials ({materials.length})</span>
+          <HardDrive size={16} />
+          <span>Files &amp; Drive Materials</span>
+          <span className="portal-tab-count">{materials.length}</span>
         </button>
 
         <button
@@ -495,10 +496,12 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           aria-selected={activeTab === "requests"}
           onClick={() => setActiveTab("requests")}
         >
-          <Lock size={15} />
+          <Lock size={16} />
           <span>Student Download Requests</span>
-          {pendingRequestsCount > 0 && (
-            <span className="nav-count">{pendingRequestsCount}</span>
+          {pendingRequestsCount > 0 ? (
+            <span className="portal-tab-badge alert">{pendingRequestsCount} pending</span>
+          ) : (
+            <span className="portal-tab-count">{downloadRequests.length}</span>
           )}
         </button>
       </div>
@@ -613,8 +616,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       ) : (
         /* Requests Management Tab */
         <section className="admin-requests-section">
-          <div className="student-admin-toolbar">
-            <div className="form-actions" role="group" aria-label="Filter download requests">
+          <div className="student-admin-toolbar" style={{ marginBottom: "20px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }} role="group" aria-label="Filter download requests">
               {[
                 ["all", "All Requests"],
                 ["pending", "Pending Approval"],
@@ -625,6 +628,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                   key={key}
                   type="button"
                   className={`button ${requestFilter === key ? "primary" : ""}`}
+                  style={{ minHeight: "36px", padding: "0 16px", borderRadius: "8px", fontWeight: "600" }}
                   onClick={() => setRequestFilter(key)}
                 >
                   {label}

@@ -1,23 +1,37 @@
-import { useState } from "react";
-import { Clock3, FileText, GraduationCap, X } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Clock3, FileText, GraduationCap, Link2, Upload, X } from "lucide-react";
+import { parseNoteAttachment, formatNoteBodyWithAttachment, uploadNotePdfToStorage } from "../lib/noteAttachments.js";
 
 export default function EditRecordModal({
   view, // "Attendance" | "Notes"
   record,
   students,
   courses,
+  supabase,
   onClose,
   onSave,
   onDelete,
 }) {
   const isAttendance = view === "Attendance";
+  const initialParsed = useMemo(() => (!isAttendance ? parseNoteAttachment(record.body) : null), [isAttendance, record.body]);
   const [studentId, setStudentId] = useState(record.student_id || "");
   const [courseId, setCourseId] = useState(record.course_id || "");
   const [attendanceDate, setAttendanceDate] = useState(record.attendance_date || "");
   const [status, setStatus] = useState(record.status || "present");
   const [note, setNote] = useState(record.note || "");
   const [title, setTitle] = useState(record.title || "");
-  const [body, setBody] = useState(record.body || "");
+  const [body, setBody] = useState(() => initialParsed?.text || record.body || "");
+
+  const [attachmentType, setAttachmentType] = useState(() => {
+    if (initialParsed?.attachmentUrl) {
+      return initialParsed.isDrive ? "drive" : "upload";
+    }
+    return "none";
+  });
+  const [currentAttachmentUrl, setCurrentAttachmentUrl] = useState(() => initialParsed?.attachmentUrl || "");
+  const [currentAttachmentName, setCurrentAttachmentName] = useState(() => initialParsed?.attachmentName || "");
+  const [newPdfFile, setNewPdfFile] = useState(null);
+  const [newDriveUrl, setNewDriveUrl] = useState(() => (initialParsed?.isDrive ? initialParsed.attachmentUrl : ""));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -34,6 +48,32 @@ export default function EditRecordModal({
     setSaving(true);
     setError("");
 
+    let finalBody = body.trim();
+    if (!isAttendance) {
+      if (attachmentType === "upload") {
+        if (newPdfFile && supabase) {
+          try {
+            const uploadRes = await uploadNotePdfToStorage(supabase, newPdfFile);
+            finalBody = formatNoteBodyWithAttachment(finalBody, uploadRes.url, newPdfFile.name);
+          } catch (uploadErr) {
+            setError(uploadErr.message || "Failed to upload note PDF.");
+            setSaving(false);
+            return;
+          }
+        } else if (currentAttachmentUrl) {
+          finalBody = formatNoteBodyWithAttachment(finalBody, currentAttachmentUrl, currentAttachmentName);
+        }
+      } else if (attachmentType === "drive") {
+        let cleanUrl = (newDriveUrl || "").trim();
+        if (cleanUrl) {
+          if (!/^https?:\/\//i.test(cleanUrl)) {
+            cleanUrl = `https://${cleanUrl}`;
+          }
+          finalBody = formatNoteBodyWithAttachment(finalBody, cleanUrl, "Google Drive Notes");
+        }
+      }
+    }
+
     const payload = isAttendance
       ? {
           student_id: studentId,
@@ -46,7 +86,7 @@ export default function EditRecordModal({
           student_id: studentId,
           course_id: courseId || null,
           title: title.trim(),
-          body: body.trim(),
+          body: finalBody,
         };
 
     try {
@@ -178,13 +218,113 @@ export default function EditRecordModal({
                 <span>Note Body *</span>
                 <textarea
                   required
-                  rows={5}
+                  rows={4}
                   maxLength={10000}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   placeholder="Enter private observations, feedback, or support action items..."
                 />
               </label>
+
+              <div className="form-field" style={{ marginTop: "12px" }}>
+                <span style={{ display: "block", marginBottom: "8px", fontWeight: "650", fontSize: "13px" }}>
+                  Attached PDF or Google Drive Link
+                </span>
+                <div className="source-toggle-tabs" style={{ marginBottom: "12px" }}>
+                  <button
+                    type="button"
+                    className={`source-toggle-btn ${attachmentType === "none" ? "active" : ""}`}
+                    onClick={() => {
+                      setAttachmentType("none");
+                      setCurrentAttachmentUrl("");
+                      setNewPdfFile(null);
+                      setNewDriveUrl("");
+                    }}
+                  >
+                    No Attachment
+                  </button>
+                  <button
+                    type="button"
+                    className={`source-toggle-btn ${attachmentType === "upload" ? "active" : ""}`}
+                    onClick={() => setAttachmentType("upload")}
+                  >
+                    <Upload size={14} /> PDF in Drive
+                  </button>
+                  <button
+                    type="button"
+                    className={`source-toggle-btn ${attachmentType === "drive" ? "active" : ""}`}
+                    onClick={() => setAttachmentType("drive")}
+                  >
+                    <Link2 size={14} /> Google Drive Link
+                  </button>
+                </div>
+
+                {attachmentType === "upload" && (
+                  <div>
+                    {currentAttachmentUrl && !newPdfFile && (
+                      <div style={{ marginBottom: "8px", padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "12.5px", color: "var(--ink)" }}>
+                          📄 Current attachment: <strong>{currentAttachmentName || "Attached PDF Notes"}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          style={{ background: "none", border: "none", color: "#ef4444", fontSize: "12px", cursor: "pointer" }}
+                          onClick={() => {
+                            setCurrentAttachmentUrl("");
+                            setCurrentAttachmentName("");
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+
+                    <label
+                      className="file-drop"
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "16px 14px",
+                        textAlign: "center",
+                        border: newPdfFile ? "2px solid #6366f1" : "2px dashed #cbd5e1",
+                        background: newPdfFile ? "#f5f3ff" : "#f8fafc",
+                        borderRadius: "10px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Upload size={22} style={{ color: newPdfFile ? "#6366f1" : "#94a3b8", marginBottom: "6px" }} />
+                      <strong style={{ fontSize: "13px", color: "#1e1b4b" }}>
+                        {newPdfFile ? `✓ ${newPdfFile.name}` : (currentAttachmentUrl ? "Click to upload a replacement PDF" : "Click to upload a PDF note file")}
+                      </strong>
+                      <input
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          setNewPdfFile(file);
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {attachmentType === "drive" && (
+                  <div>
+                    <input
+                      type="url"
+                      placeholder="https://drive.google.com/file/d/... or document URL"
+                      value={newDriveUrl}
+                      onChange={(e) => setNewDriveUrl(e.target.value)}
+                    />
+                    <small className="muted" style={{ display: "block", marginTop: "4px" }}>
+                      Paste a Google Drive or web link to attach to this note.
+                    </small>
+                  </div>
+                )}
+              </div>
             </>
           )}
 

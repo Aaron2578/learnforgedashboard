@@ -6,6 +6,7 @@ import {
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import { parseNoteAttachment } from "../lib/noteAttachments.js";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 
 const STUDENT_NAV = [
@@ -876,19 +877,79 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderNotes() {
     const filtered = notes.filter((note) => `${note.title} ${note.body} ${coursesById[note.course_id]?.name ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
-    return <section className="portal-list">{filtered.map((note) => {
-      const course = coursesById[note.course_id];
-      return <article className="card portal-item" key={note.id}>
-        <div className="portal-item-heading">
-          <span className="portal-item-icon assignment"><FileText size={17} /></span>
-          <span className="portal-item-title">
-            <strong>{note.title}</strong>
-            <small>{course ? `${course.code} · ` : ""}{dateLabel(note.created_at)}</small>
-          </span>
-        </div>
-        <p className="portal-description">{note.body}</p>
-      </article>;
-    })}{!filtered.length && <div className="card portal-empty"><FileText size={22} /><strong>No notes assigned</strong><span>Private notes from your administrator will appear here.</span></div>}</section>;
+    return (
+      <section className="portal-list">
+        {filtered.map((note) => {
+          const course = coursesById[note.course_id];
+          const { text: cleanBody, attachmentUrl, attachmentName, isDrive, isPdf } = parseNoteAttachment(note.body);
+          return (
+            <article className="card portal-item" key={note.id}>
+              <div className="portal-item-heading">
+                <span className="portal-item-icon assignment"><FileText size={17} /></span>
+                <span className="portal-item-title">
+                  <strong>{note.title}</strong>
+                  <small>{course ? `${course.code} · ` : ""}{dateLabel(note.created_at)}</small>
+                </span>
+              </div>
+              <p className="portal-description" style={{ whiteSpace: "pre-wrap" }}>{cleanBody}</p>
+
+              {attachmentUrl && (
+                <div className="note-attachment-banner">
+                  <div className="note-attachment-info">
+                    <span className={`note-attachment-icon ${isDrive ? "drive" : "pdf"}`}>
+                      {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
+                    </span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <strong className="note-attachment-title">
+                        {attachmentName || (isDrive ? "Google Drive Document" : "Attached PDF Notes")}
+                      </strong>
+                      <span className="note-attachment-sub">
+                        {isDrive ? "Google Drive / Web Document" : "PDF Study Document · Stored in Drive"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="note-attachment-actions">
+                    <button
+                      type="button"
+                      className="button primary compact"
+                      onClick={() =>
+                        openSecureViewer({
+                          title: note.title,
+                          subtitle: (course ? `${course.code} · ` : "") + "Attached Notes",
+                          url: attachmentUrl,
+                        })
+                      }
+                    >
+                      <Eye size={13} />
+                      <span>Open in Dashboard</span>
+                    </button>
+                    {isDrive && (
+                      <a
+                        href={attachmentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="button compact"
+                        title="Open in new tab"
+                      >
+                        <ExternalLink size={13} />
+                        <span>Open Link</span>
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
+        {!filtered.length && (
+          <div className="card portal-empty">
+            <FileText size={22} />
+            <strong>No notes assigned</strong>
+            <span>Private notes and PDF study materials from your administrator will appear here.</span>
+          </div>
+        )}
+      </section>
+    );
   }
 
   function renderAttendance() {
