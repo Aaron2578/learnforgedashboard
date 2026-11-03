@@ -1,7 +1,7 @@
 
 [auth]
-additional_redirect_urls = ["https://dist-two-rouge-88.vercel.app"]
-site_url = "https://dist-two-rouge-88.vercel.app"
+additional_redirect_urls = ["https://tmdashboard-two.vercel.app"]
+site_url = "https://tmdashboard-two.vercel.app"
 
 [auth.email]
 enable_confirmations = true

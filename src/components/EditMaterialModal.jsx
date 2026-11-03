@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { HardDrive, X } from "lucide-react";
+import { HardDrive, Link2, Upload, X } from "lucide-react";
 
 export default function EditMaterialModal({
   material,
@@ -10,9 +10,10 @@ export default function EditMaterialModal({
 }) {
   const [title, setTitle] = useState(material.title || "");
   const [description, setDescription] = useState(material.description || "");
-  const [category, setCategory] = useState(material.file_category || "PDF");
+  const [category, setCategory] = useState(material.category || material.file_category || "PDF");
   const [courseId, setCourseId] = useState(material.course_id || "");
   const [driveUrl, setDriveUrl] = useState(material.drive_url || "");
+  const [replacementFile, setReplacementFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -32,12 +33,15 @@ export default function EditMaterialModal({
         category,
         courseId,
         driveUrl: driveUrl.trim(),
+        replacementFile,
       });
     } catch (err) {
       setError(err.message || "Failed to update material.");
       setSaving(false);
     }
   }
+
+  const fileSize = material.file_size || material.file_size_bytes || 0;
 
   return (
     <div
@@ -54,7 +58,7 @@ export default function EditMaterialModal({
             </span>
             <div>
               <h2>Edit Drive &amp; File Material</h2>
-              <p>Update title, course association, category, or Google Drive link.</p>
+              <p>Update title, course association, category, file attachment, or Google Drive link.</p>
             </div>
           </div>
           <button type="button" className="quiet-icon" onClick={onClose} aria-label="Close modal">
@@ -75,7 +79,7 @@ export default function EditMaterialModal({
             <input
               type="text"
               required
-              maxLength={150}
+              maxLength={180}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Lecture 4: Machine Learning Notes"
@@ -102,10 +106,11 @@ export default function EditMaterialModal({
                 className="status-select"
               >
                 <option value="PDF">PDF Document</option>
-                <option value="DOC">Word Document (.docx)</option>
-                <option value="SLIDES">Presentation Slides</option>
-                <option value="DRIVE_LINK">Google Drive Document / Sheet</option>
-                <option value="OTHER">Other Learning Resource</option>
+                <option value="Document">General Document</option>
+                <option value="Test / Assessment">Test / Assessment</option>
+                <option value="Lecture Notes">Lecture Notes</option>
+                <option value="Study Guide">Study Guide</option>
+                <option value="Other">Other Learning Resource</option>
               </select>
             </label>
 
@@ -116,7 +121,7 @@ export default function EditMaterialModal({
                 onChange={(e) => setCourseId(e.target.value)}
                 className="status-select"
               >
-                <option value="">General campus material</option>
+                <option value="">Campus-wide (All Students)</option>
                 {courses.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.code} · {c.name}
@@ -126,23 +131,39 @@ export default function EditMaterialModal({
             </label>
           </div>
 
-          {(material.drive_url || category === "DRIVE_LINK") && (
-            <label className="form-field" style={{ marginTop: "12px" }}>
-              <span>Google Drive Link / External Access URL</span>
+          <label className="form-field" style={{ marginTop: "12px" }}>
+            <span>Google Drive / Cloud Document Link</span>
+            <input
+              type="url"
+              value={driveUrl}
+              onChange={(e) => setDriveUrl(e.target.value)}
+              placeholder="https://drive.google.com/file/d/... or https://docs.google.com/..."
+            />
+            <small className="muted" style={{ display: "block", marginTop: "4px" }}>
+              Link any Google Drive file, Google Doc, Sheet, Slide, or Form test.
+            </small>
+          </label>
+
+          <div style={{ marginTop: "14px" }}>
+            <label className="form-field">
+              <span>{material.file_name ? "Replace File Attachment (Optional)" : "Attach File (Optional)"}</span>
               <input
-                type="url"
-                value={driveUrl}
-                onChange={(e) => setDriveUrl(e.target.value)}
-                placeholder="https://drive.google.com/file/d/..."
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                onChange={(e) => setReplacementFile(e.target.files?.[0] || null)}
               />
             </label>
-          )}
-
-          {material.file_name && (
-            <div style={{ marginTop: "14px", padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "12px", color: "var(--muted)" }}>
-              Attached file: <strong>{material.file_name}</strong> {material.file_size_bytes ? `(${(material.file_size_bytes / (1024 * 1024)).toFixed(2)} MB)` : ""}
-            </div>
-          )}
+            {material.file_name && !replacementFile && (
+              <div style={{ marginTop: "6px", padding: "8px 12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "12px", color: "var(--muted)" }}>
+                Current file: <strong>{material.file_name}</strong> {fileSize > 0 ? `(${(fileSize / (1024 * 1024)).toFixed(2)} MB)` : ""}
+              </div>
+            )}
+            {replacementFile && (
+              <div style={{ marginTop: "6px", padding: "8px 12px", background: "#f0fdf4", borderRadius: "8px", border: "1px solid #bbf7d0", fontSize: "12px", color: "#166534" }}>
+                ✓ New file selected: <strong>{replacementFile.name}</strong> ({(replacementFile.size / (1024 * 1024)).toFixed(2)} MB)
+              </div>
+            )}
+          </div>
 
           <div
             className="modal-actions"
@@ -178,4 +199,3 @@ export default function EditMaterialModal({
     </div>
   );
 }
-

@@ -218,15 +218,43 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     let directDownload = null;
 
     if (filePath) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("course-materials")
-        .createSignedUrl(filePath, 3600);
-      if (signedError) {
-        setError(`Could not open file: ${signedError.message}`);
-        return;
+      if (filePath.startsWith("data:") || filePath.startsWith("http")) {
+        finalUrl = filePath;
+        directDownload = filePath;
+      } else {
+        let bucket = "course-materials";
+        let cleanPath = filePath;
+        if (filePath.startsWith("course-materials:")) {
+          cleanPath = filePath.replace("course-materials:", "");
+        } else if (filePath.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = filePath.replace("assignment-files:", "");
+        }
+
+        let signedData = null;
+        let { data, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(cleanPath, 3600);
+
+        if (!signedError && data?.signedUrl) {
+          signedData = data;
+        } else {
+          // Try other bucket fallback
+          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+          const { data: fallbackData } = await supabase.storage
+            .from(otherBucket)
+            .createSignedUrl(cleanPath, 3600);
+          signedData = fallbackData;
+        }
+
+        if (signedData?.signedUrl) {
+          finalUrl = signedData.signedUrl;
+          directDownload = signedData.signedUrl;
+        } else {
+          setError("Could not generate a secure preview URL for this document.");
+          return;
+        }
       }
-      finalUrl = signedData.signedUrl;
-      directDownload = signedData.signedUrl;
     }
 
     const existingRequest = materialId
@@ -291,11 +319,42 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   async function downloadApprovedItem(material) {
     try {
       if (material.file_path) {
-        const { data, error: signedError } = await supabase.storage
-          .from("course-materials")
-          .createSignedUrl(material.file_path, 120);
-        if (signedError) throw signedError;
-        window.open(data.signedUrl, "_blank");
+        if (material.file_path.startsWith("data:") || material.file_path.startsWith("http")) {
+          const a = document.createElement("a");
+          a.href = material.file_path;
+          a.download = material.file_name || `${material.title || "document"}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return;
+        }
+
+        let bucket = "course-materials";
+        let cleanPath = material.file_path;
+        if (material.file_path.startsWith("course-materials:")) {
+          cleanPath = material.file_path.replace("course-materials:", "");
+        } else if (material.file_path.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = material.file_path.replace("assignment-files:", "");
+        }
+
+        let { data, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(cleanPath, 120);
+
+        if (!signedError && data?.signedUrl) {
+          window.open(data.signedUrl, "_blank");
+        } else {
+          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+          const { data: fallbackData } = await supabase.storage
+            .from(otherBucket)
+            .createSignedUrl(cleanPath, 120);
+          if (fallbackData?.signedUrl) {
+            window.open(fallbackData.signedUrl, "_blank");
+          } else {
+            throw new Error(signedError?.message || "File could not be found in storage.");
+          }
+        }
       } else if (material.drive_url) {
         window.open(material.drive_url, "_blank");
       }
@@ -867,7 +926,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       </aside>
       <section className="thread-body">
         <div className="thread-heading"><div><strong>{activeConversation?.subject ?? "New message"}</strong><small>{activeConversation ? "Your message thread with the institution" : "Send a message to the institution team"}</small></div></div>
-        {activeConversation ? <div className="thread-messages">{currentThread.map((message) => <div className={`chat-message ${message.sender_id === user.id ? "mine" : ""}`} key={message.id}><span>{message.sender_id === user.id ? "You" : "Northstar team"}</span><p>{message.body}</p><small>{dateLabel(message.created_at)}</small></div>)}</div> : <div className="thread-empty-state"><MessageSquare size={22} /><strong>How can we help?</strong><span>Start a new conversation with your institution.</span></div>}
+        {activeConversation ? <div className="thread-messages">{currentThread.map((message) => <div className={`chat-message ${message.sender_id === user.id ? "mine" : ""}`} key={message.id}><span>{message.sender_id === user.id ? "You" : "LearnForge team"}</span><p>{message.body}</p><small>{dateLabel(message.created_at)}</small></div>)}</div> : <div className="thread-empty-state"><MessageSquare size={22} /><strong>How can we help?</strong><span>Start a new conversation with your institution.</span></div>}
         <form className="message-compose" onSubmit={sendMessage}>
           {!activeConversation && <label className="form-field"><span>Subject</span><input required maxLength={150} value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="What would you like to discuss?" /></label>}
           <label className="sr-only" htmlFor="student-message">Your message</label><textarea id="student-message" rows="3" maxLength="10000" required value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Write a message…" />
@@ -933,7 +992,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     {mobileNavOpen && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
     <aside className={`sidebar student-sidebar ${mobileNavOpen ? "mobile-open" : ""}`} aria-label="Student navigation">
       {mobileNavOpen && <button className="drawer-close icon-button" type="button" aria-label="Close navigation menu" onClick={() => setMobileNavOpen(false)}><X size={16} /></button>}
-      <div className="brand"><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>TM Dashboard</strong><small>Student portal</small></span></div>
+      <div className="brand"><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>LearnForge</strong><small>Student portal</small></span></div>
       <div className="nav-label">My campus</div>
       <nav className="side-nav">{STUDENT_NAV.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />

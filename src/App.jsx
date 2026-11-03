@@ -34,7 +34,8 @@ import AdminManagementView from "./portal/AdminManagementView.jsx";
 import AdminDriveView from "./portal/AdminDriveView.jsx";
 import WeatherThemeSelector from "./components/WeatherThemeSelector.jsx";
 
-const STORAGE_KEY = "northstar-institute-dashboard-v1";
+const STORAGE_KEY = "learnforge-dashboard-v1";
+const LEGACY_STORAGE_KEY = "northstar-institute-dashboard-v1";
 
 const NAV_ITEMS = [
   { label: "Overview", icon: LayoutDashboard },
@@ -71,7 +72,7 @@ function makeId(prefix) {
 
 function readSavedData() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!saved) return INITIAL_DATA;
     const parsed = JSON.parse(saved);
     return {
@@ -486,15 +487,15 @@ function App({ user, profile, supabase, onSignOut }) {
     setData((current) => ({ ...current, messages: current.messages.map((message) => message.id === messageId ? { ...message, read: true } : message) }));
   }
   function exportStudents() {
-    downloadCsv("northstar-students.csv", [["Name", "Email", "Program", "Course", "Check-in", "Attendance"], ...data.students.map((student) => [student.name, student.email, student.program, student.course, student.checkIn, student.status])]);
+    downloadCsv("learnforge-students.csv", [["Name", "Email", "Program", "Course", "Check-in", "Attendance"], ...data.students.map((student) => [student.name, student.email, student.program, student.course, student.checkIn, student.status])]);
     setToast("Student report downloaded.");
   }
   function exportCourses() {
-    downloadCsv("northstar-courses.csv", [["Course", "Code", "Department", "Instructor", "Students", "Schedule", "Room"], ...data.courses.map((course) => [course.name, course.code, course.department, course.instructor, course.students, course.schedule, course.room])]);
+    downloadCsv("learnforge-courses.csv", [["Course", "Code", "Department", "Instructor", "Students", "Schedule", "Room"], ...data.courses.map((course) => [course.name, course.code, course.department, course.instructor, course.students, course.schedule, course.room])]);
     setToast("Course report downloaded.");
   }
   function exportOverview() {
-    downloadCsv("tm-dashboard-report.csv", [["Record type", "Count"], ["Students", data.students.length], ["Courses", data.courses.length], ["Events", data.events.length]]);
+    downloadCsv("learnforge-dashboard-report.csv", [["Record type", "Count"], ["Students", data.students.length], ["Courses", data.courses.length], ["Events", data.events.length]]);
     setToast("Your overview report has been downloaded.");
   }
 
@@ -638,8 +639,8 @@ function App({ user, profile, supabase, onSignOut }) {
       {mobileNavOpen && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
       <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`} aria-label="Main navigation">
         {mobileNavOpen && <button className="drawer-close icon-button" type="button" aria-label="Close navigation menu" onClick={() => setMobileNavOpen(false)}><X size={16} /></button>}
-        <button className="brand" type="button" onClick={() => changeView("Overview")} aria-label="TM Dashboard home">
-          <span className="brand-mark"><Sparkles size={21} /></span><span className="brand-copy"><strong>TM Dashboard</strong><small>Learning together</small></span>
+        <button className="brand" type="button" onClick={() => changeView("Overview")} aria-label="LearnForge home">
+          <span className="brand-mark"><Sparkles size={21} /></span><span className="brand-copy"><strong>LearnForge</strong><small>Learning together</small></span>
         </button>
         <nav className="side-nav">
           {NAV_ITEMS.map((item) => item.group ? <div className="nav-label" key={item.group}>{item.group}</div> : <button className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" key={item.label} onClick={() => changeView(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}>
@@ -657,7 +658,7 @@ function App({ user, profile, supabase, onSignOut }) {
             <div className="storage-meter-fill" style={{ width: `${Math.max(2, storageStats.db_used_percent)}%` }} />
           </div>
         </div>}
-        <div className="help-card"><span className="help-icon"><CircleAlert size={16} /></span><strong>Need a hand?</strong><p>Our support team is here to help you make the most of Northstar.</p><a href="mailto:support@northstar.example">Contact support <ArrowRight size={12} /></a></div>
+        <div className="help-card"><span className="help-icon"><CircleAlert size={16} /></span><strong>Need a hand?</strong><p>Our support team is here to help you make the most of LearnForge.</p><a href="mailto:support@learnforge.example">Contact support <ArrowRight size={12} /></a></div>
         <div className="profile"><span className="profile-avatar">{(profile?.full_name || "AM").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span className="profile-copy"><strong>{profile?.full_name || "Administrator"}</strong><small>Admin</small></span></div>
         <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
       </aside>

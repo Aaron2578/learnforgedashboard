@@ -344,7 +344,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(true);
     setError("");
     const { data: reminderResult, error: reminderError } = await supabase.functions.invoke("admin-actions", {
-      body: { action: "notify_students", studentIds, subject: `Reminder: ${item.title}`, body: `Reminder: ${item.title}${item.due_at ? ` is due ${prettyDate(item.due_at)}` : " is available"}. Open TM Dashboard to review it.` },
+      body: { action: "notify_students", studentIds, subject: `Reminder: ${item.title}`, body: `Reminder: ${item.title}${item.due_at ? ` is due ${prettyDate(item.due_at)}` : " is available"}. Open LearnForge to review it.` },
     });
     if (reminderError) setError(`Could not send ${kind} reminder: ${await getFunctionErrorMessage(reminderError)}`);
     else if (reminderResult?.emailFailures?.length) {

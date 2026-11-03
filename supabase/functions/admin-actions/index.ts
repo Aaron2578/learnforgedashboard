@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -32,7 +33,7 @@ async function sendEmail(to: string, subject: string, text: string, html: string
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: from, name: "TM Dashboard" },
+      from: { email: from, name: "LearnForge" },
       subject,
       content: [
         { type: "text/plain", value: text },
@@ -123,7 +124,7 @@ Deno.serve(async (request) => {
       return response({ error: "A valid student email is required." }, 400);
     }
     const clientAppUrl = typeof payload.appUrl === "string" && payload.appUrl.startsWith("http") ? payload.appUrl : null;
-    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://dist-two-rouge-88.vercel.app";
+    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://tmdashboard-two.vercel.app";
     const normalizedEmail = payload.email.trim().toLowerCase();
 
     const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
@@ -159,7 +160,7 @@ Deno.serve(async (request) => {
     }
 
     const clientAppUrl = typeof payload.appUrl === "string" && payload.appUrl.startsWith("http") ? payload.appUrl : null;
-    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://dist-two-rouge-88.vercel.app";
+    const appUrl = clientAppUrl || Deno.env.get("APP_URL") || "https://tmdashboard-two.vercel.app";
     const apiKey = Deno.env.get("SENDGRID_API_KEY");
     const from = Deno.env.get("SENDGRID_FROM_EMAIL");
     const hasSendGrid = Boolean(apiKey && from);
@@ -210,7 +211,7 @@ Deno.serve(async (request) => {
         try {
           await sendEmail(
             invitee.email,
-            "Your TM Dashboard student invitation",
+            "Your LearnForge student invitation",
             `Hello ${fullName},\n\nUse this secure link to sign in: ${actionLink}\n\nAn administrator will activate your courses and resources once approved.`,
             `<p>Hello ${escapeHtml(fullName)},</p><p>Use this secure link to sign in to your student portal:</p><p><a href="${escapeHtml(actionLink)}">Open your student portal</a></p><p>An administrator will activate your courses and resources once approved.</p>`,
           );

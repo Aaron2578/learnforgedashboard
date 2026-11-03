@@ -1,4 +1,4 @@
-# TM Dashboard
+# LearnForge
 
 ## Supabase setup
 
