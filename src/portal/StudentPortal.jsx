@@ -63,6 +63,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [notifications, setNotifications] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [downloadRequests, setDownloadRequests] = useState([]);
+  const [permittedMaterialIds, setPermittedMaterialIds] = useState(() => new Set());
+  const [permittedAssessmentIds, setPermittedAssessmentIds] = useState(() => new Set());
   const [viewingDocument, setViewingDocument] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [attempts, setAttempts] = useState([]);
@@ -88,11 +90,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
     const noteQuery = supabase
       .from("student_notes")
-      .select("id, course_id, title, body, drive_url, created_at")
+      .select("id, course_id, title, body, drive_url, material_id, created_at")
       .eq("student_id", user.id)
       .order("created_at", { ascending: false })
       .then(async (res) => {
-        if (res.error && (res.error.message?.includes("drive_url") || res.error.code === "PGRST204" || res.error.code === "42703")) {
+        if (res.error && (res.error.message?.includes("drive_url") || res.error.message?.includes("material_id") || res.error.code === "PGRST204" || res.error.code === "42703")) {
           return supabase
             .from("student_notes")
             .select("id, course_id, title, body, created_at")
@@ -101,6 +103,18 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         }
         return res;
       });
+
+    const materialRecipientsQuery = supabase
+      .from("material_recipients")
+      .select("material_id")
+      .eq("student_id", user.id)
+      .then((res) => (res.error ? { data: [] } : res));
+
+    const assessmentRecipientsQuery = supabase
+      .from("assessment_recipients")
+      .select("assessment_id")
+      .eq("student_id", user.id)
+      .then((res) => (res.error ? { data: [] } : res));
 
     const [
       assignmentResult,
@@ -114,6 +128,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       notificationResult,
       materialResult,
       requestResult,
+      materialRecipientsResult,
+      assessmentRecipientsResult,
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
@@ -126,6 +142,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       supabase.from("student_notifications").select("id, title, body, read_at, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
       supabase.from("course_materials").select("*").order("created_at", { ascending: false }),
       supabase.from("download_requests").select("*").eq("student_id", user.id),
+      materialRecipientsQuery,
+      assessmentRecipientsQuery,
     ]);
     const failed = [assignmentResult, submissionResult, testResult, attemptResult, conversationResult, courseResult, noteResult, attendanceResult, notificationResult, materialResult, requestResult].find((result) => result.error);
     if (failed) {
@@ -160,6 +178,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     setNotifications(notificationResult.data ?? []);
     setMaterials(materialResult.data ?? []);
     setDownloadRequests(requestResult.data ?? []);
+    setPermittedMaterialIds(new Set((materialRecipientsResult?.data ?? []).map((r) => r.material_id)));
+    setPermittedAssessmentIds(new Set((assessmentRecipientsResult?.data ?? []).map((r) => r.assessment_id)));
     setQuestions(questionResult.data ?? []);
     setAttempts(attemptResult.data ?? []);
     setConversations(loadedConversations);
@@ -184,6 +204,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, () => loadPortal())
       .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadPortal())
       .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, () => loadPortal())
       .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadPortal())
       .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, () => loadPortal())
       .subscribe();
@@ -221,11 +243,20 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   );
   const unreadMessages = messages.filter((message) => message.sender_id !== user.id && !message.read_at).length;
   const filteredAssignments = assignments.filter((item) => `${item.title} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()));
-  const filteredTests = tests.filter((item) => `${item.title} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const allowedTests = useMemo(() => {
+    return tests.filter((item) => {
+      // If student has an attempt, show it (e.g. past submitted test)
+      if (attemptByTest.has(item.id)) return true;
+      // If explicitly permitted to this student
+      if (permittedAssessmentIds.has(item.id)) return true;
+      return false;
+    });
+  }, [tests, permittedAssessmentIds, attemptByTest]);
+  const filteredTests = allowedTests.filter((item) => `${item.title} ${item.description || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
   const filteredConversations = conversations.filter((item) => item.subject.toLowerCase().includes(query.trim().toLowerCase()));
   const activeConversation = conversations.find((item) => item.id === selectedConversation);
   const currentThread = messages.filter((item) => item.conversation_id === selectedConversation);
-  const currentTest = tests.find((item) => item.id === selectedTest);
+  const currentTest = allowedTests.find((item) => item.id === selectedTest);
   const currentQuestions = questions.filter((item) => item.assessment_id === selectedTest);
   const currentAttempt = attemptByTest.get(selectedTest);
 
@@ -623,8 +654,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderMaterials() {
     const filtered = materials.filter((item) => {
+      // Strictly per-student: only display materials explicitly permitted to this student individually
+      const isPermitted = permittedMaterialIds.has(item.id);
+      if (!isPermitted) return false;
       const course = coursesById[item.course_id];
-      return `${item.title} ${item.description} ${item.category} ${course?.name ?? ""} ${course?.code ?? ""}`
+      return `${item.title} ${item.description || ""} ${item.category} ${course?.name ?? ""} ${course?.code ?? ""}`
         .toLowerCase()
         .includes(query.trim().toLowerCase());
     });
@@ -895,10 +929,14 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   function renderNotes() {
     const filtered = notes.filter((note) => `${note.title} ${note.body} ${coursesById[note.course_id]?.name ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
 
-    const lectureMaterials = materials.filter((m) => {
-      const isLecture = m.category === "Lecture Notes" || m.category === "Study Guide";
+    const permittedLectureMaterials = materials.filter((m) => {
+      // Only show course materials explicitly permitted to this student
+      if (!permittedMaterialIds.has(m.id)) return false;
+      // Avoid duplicate display if already present in student_notes
+      const alreadyInNotes = notes.some((n) => n.material_id === m.id || n.title.toLowerCase() === m.title.toLowerCase());
+      if (alreadyInNotes) return false;
       const matchesSearch = `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase());
-      return isLecture && matchesSearch;
+      return matchesSearch;
     });
 
     return (
@@ -1043,28 +1081,28 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             );
           })}
 
-          {!filtered.length && !lectureMaterials.length && (
+          {!filtered.length && !permittedLectureMaterials.length && (
             <div className="card portal-empty">
               <FileText size={24} />
-              <strong>No notes assigned</strong>
-              <span>Course notes and private study materials from your instructor will appear here.</span>
+              <strong>No notes permitted</strong>
+              <span>Course notes permitted by your instructor or notes assigned specifically to your account will appear here.</span>
             </div>
           )}
         </section>
 
-        {lectureMaterials.length > 0 && (
+        {permittedLectureMaterials.length > 0 && (
           <div style={{ marginTop: "32px" }}>
             <div className="course-session-heading" style={{ marginBottom: "14px" }}>
               <div className="course-session-title">
                 <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   <BookOpen size={16} /> Course Lecture Notes &amp; Study Guides
                 </span>
-                <span className="course-session-pill">{lectureMaterials.length} Resources</span>
+                <span className="course-session-pill">{permittedLectureMaterials.length} Permitted</span>
               </div>
             </div>
 
             <section className="portal-list">
-              {lectureMaterials.map((mat) => {
+              {permittedLectureMaterials.map((mat) => {
                 const course = coursesById[mat.course_id];
                 const docType = mat.drive_url ? getDriveDocTypeLabel(mat.drive_url) : "PDF Document";
 
@@ -1199,8 +1237,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           {!assignments.length && <div className="portal-empty compact"><BookOpen size={18} /><span>No assignments are published yet.</span></div>}
         </article>
         <article className="card panel"><div className="panel-heading"><div><h2>Continue learning</h2><p>Pick up where you left off</p></div></div>
-          {tests.slice(0, 2).map((test) => <div className="overview-test" key={test.id}><span className="portal-item-icon test"><ClipboardList size={15} /></span><span><strong>{test.title}</strong><small>{attemptByTest.has(test.id) ? (test.show_marks ? `Score ${attemptByTest.get(test.id).score}/${attemptByTest.get(test.id).max_score}` : "Completed") : `Due ${dateLabel(test.due_at)}`}</small></span><button className="quiet-icon" type="button" aria-label={`Open ${test.title}`} onClick={() => { setSelectedTest(test.id); navigate("Tests"); }}><ArrowRight size={15} /></button></div>)}
-          {!tests.length && <div className="portal-empty compact"><ClipboardList size={18} /><span>No tests are published yet.</span></div>}
+          {allowedTests.slice(0, 2).map((test) => <div className="overview-test" key={test.id}><span className="portal-item-icon test"><ClipboardList size={15} /></span><span><strong>{test.title}</strong><small>{attemptByTest.has(test.id) ? (test.show_marks ? `Score ${attemptByTest.get(test.id).score}/${attemptByTest.get(test.id).max_score}` : "Completed") : `Due ${dateLabel(test.due_at)}`}</small></span><button className="quiet-icon" type="button" aria-label={`Open ${test.title}`} onClick={() => { setSelectedTest(test.id); navigate("Tests"); }}><ArrowRight size={15} /></button></div>)}
+          {!allowedTests.length && <div className="portal-empty compact"><ClipboardList size={18} /><span>No tests available yet.</span></div>}
         </article>
       </section>
     </>;

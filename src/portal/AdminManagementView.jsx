@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, BookOpen, Check, Clock3, Copy, Database, ExternalLink, Eye,
-  FileSpreadsheet, FileText, GraduationCap, HardDrive, Link2, Mail, MapPin,
-  Pencil, Plus, RefreshCw, Search, Trash2, Upload, Users, X
+  FileSpreadsheet, FileText, GraduationCap, HardDrive, KeyRound, Link2, Mail, MapPin,
+  Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Users, X
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
@@ -10,6 +10,7 @@ import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import StudentAccessModal from "../components/StudentAccessModal";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 const headings = {
@@ -51,14 +52,23 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [attendancePrefillDate, setAttendancePrefillDate] = useState("");
   const [recentInvites, setRecentInvites] = useState([]);
 
-  // Notes state
+  // Notes & Access state
   const [viewingNoteDoc, setViewingNoteDoc] = useState(null);
-  const [noteRecipientType, setNoteRecipientType] = useState("single"); // "single" | "course" | "all"
+  const [noteRecipientType, setNoteRecipientType] = useState("single"); // individual student
   const [noteDriveUrl, setNoteDriveUrl] = useState("");
   const [noteFilter, setNoteFilter] = useState("all"); // "all" | "drive"
   const [notePrefillStudentId, setNotePrefillStudentId] = useState("");
   const [selectedStudentFilter, setSelectedStudentFilter] = useState("all");
   const [notesSummary, setNotesSummary] = useState([]);
+  const [managingStudentAccess, setManagingStudentAccess] = useState(null);
+  const [materials, setMaterials] = useState([]);
+  const [assessments, setAssessments] = useState([]);
+  const [assessmentRecipients, setAssessmentRecipients] = useState([]);
+  const [materialRecipients, setMaterialRecipients] = useState([]);
+  const [allStudentNotes, setAllStudentNotes] = useState([]);
+  const [sharingNoteRecord, setSharingNoteRecord] = useState(null);
+  const [shareTargetStudentId, setShareTargetStudentId] = useState("");
+  const [sharingBusy, setSharingBusy] = useState(false);
 
   const notesCountByStudent = useMemo(() => {
     const map = {};
@@ -74,12 +84,33 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     if (forceLoading) setLoading(true);
     setError("");
     try {
-      const [studentResult, courseResult, enrollmentResult, storageResult, notesSummaryResult] = await Promise.all([
+      const [
+        studentResult,
+        courseResult,
+        enrollmentResult,
+        storageResult,
+        notesSummaryResult,
+        materialsResult,
+        assessmentsResult,
+        assessmentRecipientsResult,
+        materialRecipientsResult,
+        allNotesResult,
+      ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
         supabase.from("student_notes").select("id, student_id"),
+        supabase.from("course_materials").select("*").order("created_at", { ascending: false }),
+        supabase.from("assessments").select("id, title, description, course_id, due_at, published, created_at").order("created_at", { ascending: false }),
+        supabase.from("assessment_recipients").select("assessment_id, student_id"),
+        supabase.from("material_recipients").select("material_id, student_id").then((r) => r.error ? { data: [] } : r),
+        supabase.from("student_notes").select("id, student_id, course_id, title, body, drive_url, material_id, created_at").order("created_at", { ascending: false }).then(async (r) => {
+          if (r.error && (r.error.message?.includes("drive_url") || r.error.message?.includes("material_id") || r.error.code === "PGRST204" || r.error.code === "42703")) {
+            return supabase.from("student_notes").select("id, student_id, course_id, title, body, created_at").order("created_at", { ascending: false });
+          }
+          return r;
+        }),
       ]);
       const failure = [studentResult, courseResult, enrollmentResult].find((result) => result.error);
       if (failure) {
@@ -90,6 +121,13 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       setStudents(studentResult.data ?? []);
       setCourses(courseResult.data ?? []);
       setEnrollments(enrollmentResult.data ?? []);
+      setMaterials(materialsResult.data ?? []);
+      setAssessments(assessmentsResult.data ?? []);
+      setAssessmentRecipients(assessmentRecipientsResult.data ?? []);
+      setMaterialRecipients(materialRecipientsResult.data ?? []);
+      const loadedAllNotes = allNotesResult.data ?? [];
+      setAllStudentNotes(loadedAllNotes);
+
       if (notesSummaryResult?.data) {
         setNotesSummary(notesSummaryResult.data);
       }
@@ -97,28 +135,14 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         setStorageStats(storageResult.data);
       }
 
-      if (view === "Attendance" || view === "Notes") {
-        const table = view === "Attendance" ? "attendance_records" : "student_notes";
-        if (view === "Attendance") {
-          const { data, error: resultError } = await supabase.from(table)
-            .select("id, student_id, course_id, attendance_date, status, note, created_at")
-            .order("attendance_date", { ascending: false });
-          if (resultError) setError(resultError.message);
-          else setRecords(data ?? []);
-        } else {
-          let { data, error: resultError } = await supabase.from(table)
-            .select("id, student_id, course_id, title, body, drive_url, created_at")
-            .order("created_at", { ascending: false });
-          if (resultError && (resultError.message?.includes("drive_url") || resultError.code === "PGRST204" || resultError.code === "42703")) {
-            const fallback = await supabase.from(table)
-              .select("id, student_id, course_id, title, body, created_at")
-              .order("created_at", { ascending: false });
-            data = fallback.data;
-            resultError = fallback.error;
-          }
-          if (resultError) setError(resultError.message);
-          else setRecords(data ?? []);
-        }
+      if (view === "Attendance") {
+        const { data, error: resultError } = await supabase.from("attendance_records")
+          .select("id, student_id, course_id, attendance_date, status, note, created_at")
+          .order("attendance_date", { ascending: false });
+        if (resultError) setError(resultError.message);
+        else setRecords(data ?? []);
+      } else if (view === "Notes") {
+        setRecords(loadedAllNotes);
       }
     } catch (err) {
       setError(err.message || "Failed to load management records.");
@@ -152,15 +176,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     if (updateError) setError(updateError.message);
     else {
       if (isApproved) {
-        const [assignResult, testResult] = await Promise.all([
-          supabase.from("assignments").select("id").eq("published", true),
-          supabase.from("assessments").select("id").eq("published", true),
-        ]);
-        if (assignResult.data?.length) {
-          await supabase.from("assignment_recipients").upsert(assignResult.data.map((a) => ({ assignment_id: a.id, student_id: student.id })), { onConflict: "assignment_id,student_id" });
-        }
-        if (testResult.data?.length) {
-          await supabase.from("assessment_recipients").upsert(testResult.data.map((t) => ({ assessment_id: t.id, student_id: student.id })), { onConflict: "assessment_id,student_id" });
+        const { data: assignResult } = await supabase.from("assignments").select("id").eq("published", true);
+        if (assignResult?.length) {
+          await supabase.from("assignment_recipients").upsert(assignResult.map((a) => ({ assignment_id: a.id, student_id: student.id })), { onConflict: "assignment_id,student_id" });
         }
       }
       onToast(isApproved ? `${student.full_name || student.email} approved.` : "Student access suspended.");
@@ -390,9 +408,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       return;
     }
 
-    // view === "Notes"
-    const recipientType = noteRecipientType;
-    const selectedStudentId = values.get("student_id");
+    // view === "Notes" - strictly per-student individual note access
+    const selectedStudentId = values.get("student_id") || notePrefillStudentId;
     const courseId = values.get("course_id") || null;
     const title = String(values.get("title") || "").trim();
     const driveUrl = String(values.get("drive_url") || noteDriveUrl || "").trim();
@@ -404,64 +421,40 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       return;
     }
 
+    if (!selectedStudentId) {
+      setError("Please select the student who will receive this note. Each note must be assigned to an individual student.");
+      setBusy(false);
+      return;
+    }
+
     if (!body) {
       body = driveUrl
         ? `Study notes and learning materials via Google Drive.\n\nDrive Link: ${driveUrl}`
         : "Class note";
     }
 
-    let targetStudentIds = [];
-    if (recipientType === "all") {
-      targetStudentIds = students.filter((s) => s.is_approved).map((s) => s.id);
-      if (!targetStudentIds.length) {
-        setError("No approved students found to receive this note.");
-        setBusy(false);
-        return;
-      }
-    } else if (recipientType === "course") {
-      if (!courseId) {
-        setError("Please select a course to share notes with enrolled students.");
-        setBusy(false);
-        return;
-      }
-      const enrolled = enrollments.filter((e) => e.course_id === courseId).map((e) => e.student_id);
-      targetStudentIds = students.filter((s) => enrolled.includes(s.id) && s.is_approved).map((s) => s.id);
-      if (!targetStudentIds.length) {
-        setError("No approved students currently enrolled in the selected course.");
-        setBusy(false);
-        return;
-      }
-    } else {
-      if (!selectedStudentId) {
-        setError("Please select a student.");
-        setBusy(false);
-        return;
-      }
-      targetStudentIds = [selectedStudentId];
-    }
-
-    const payloadsWithDrive = targetStudentIds.map((sid) => ({
-      student_id: sid,
+    const payloadWithDrive = {
+      student_id: selectedStudentId,
       course_id: courseId,
       title,
       body,
       drive_url: driveUrl || null,
       created_by: user.id,
-    }));
+    };
 
-    let { error: insertError } = await supabase.from("student_notes").insert(payloadsWithDrive);
+    let { error: insertError } = await supabase.from("student_notes").insert(payloadWithDrive);
 
     // Fallback if drive_url column not in DB yet
     if (insertError && (insertError.message?.includes("drive_url") || insertError.code === "PGRST204" || insertError.code === "42703")) {
       const bodyWithDrive = driveUrl && !body.includes(driveUrl) ? `${body}\n\nDrive Link: ${driveUrl}` : body;
-      const payloadsFallback = targetStudentIds.map((sid) => ({
-        student_id: sid,
+      const payloadFallback = {
+        student_id: selectedStudentId,
         course_id: courseId,
         title,
         body: bodyWithDrive,
         created_by: user.id,
-      }));
-      const retryResult = await supabase.from("student_notes").insert(payloadsFallback);
+      };
+      const retryResult = await supabase.from("student_notes").insert(payloadFallback);
       insertError = retryResult.error;
     }
 
@@ -472,10 +465,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       form.reset();
       setNoteDriveUrl("");
       setNotePrefillStudentId("");
-      setNoteRecipientType("single");
-      onToast(targetStudentIds.length > 1
-        ? `Note published to ${targetStudentIds.length} students.`
-        : "Note saved successfully.");
+      const studentName = studentsById[selectedStudentId]?.full_name || studentsById[selectedStudentId]?.email || "Student";
+      onToast(`Note and Drive link saved and permitted for ${studentName}.`);
       await loadData();
     }
     setBusy(false);
@@ -527,6 +518,153 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       await loadData();
     }
     setBusy(false);
+  }
+
+  async function handlePermitNoteForStudent(material, studentId) {
+    try {
+      await supabase.from("material_recipients").upsert({ material_id: material.id, student_id: studentId }, { onConflict: "material_id,student_id" });
+      const existing = allStudentNotes.find((n) => n.student_id === studentId && (n.material_id === material.id || n.title === material.title));
+      if (!existing) {
+        let { error: insertErr } = await supabase.from("student_notes").insert({
+          student_id: studentId,
+          course_id: material.course_id,
+          title: material.title,
+          body: material.description || `Course study material: ${material.title}`,
+          drive_url: material.drive_url || null,
+          material_id: material.id,
+          created_by: user.id,
+        });
+        if (insertErr && (insertErr.message?.includes("drive_url") || insertErr.message?.includes("material_id") || insertErr.code === "PGRST204" || insertErr.code === "42703")) {
+          const bodyWithDrive = material.drive_url ? `${material.description || ""}\n\nDrive Link: ${material.drive_url}`.trim() : (material.description || "Course note");
+          await supabase.from("student_notes").insert({
+            student_id: studentId,
+            course_id: material.course_id,
+            title: material.title,
+            body: bodyWithDrive,
+            created_by: user.id,
+          });
+        }
+      }
+      onToast(`Note "${material.title}" permitted for student.`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not permit note: ${err.message}`);
+    }
+  }
+
+  async function handleRevokeNoteForStudent(material, studentId) {
+    try {
+      await supabase.from("material_recipients").delete().eq("material_id", material.id).eq("student_id", studentId);
+      await supabase.from("student_notes").delete().eq("student_id", studentId).eq("title", material.title);
+      onToast(`Access to "${material.title}" revoked.`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not revoke note: ${err.message}`);
+    }
+  }
+
+  async function handlePermitTestForStudent(test, studentId) {
+    try {
+      const { error: insErr } = await supabase.from("assessment_recipients").upsert({ assessment_id: test.id, student_id: studentId }, { onConflict: "assessment_id,student_id" });
+      if (insErr) throw insErr;
+      onToast(`Test "${test.title}" permitted for student.`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not permit test: ${err.message}`);
+    }
+  }
+
+  async function handleRevokeTestForStudent(test, studentId) {
+    try {
+      const { error: delErr } = await supabase.from("assessment_recipients").delete().eq("assessment_id", test.id).eq("student_id", studentId);
+      if (delErr) throw delErr;
+      onToast(`Test access for "${test.title}" revoked.`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not revoke test: ${err.message}`);
+    }
+  }
+
+  async function handleAddManualNoteForStudent(payload) {
+    let { error: insertErr } = await supabase.from("student_notes").insert({
+      student_id: payload.student_id,
+      course_id: payload.course_id || null,
+      title: payload.title,
+      body: payload.body,
+      drive_url: payload.drive_url || null,
+      created_by: user.id,
+    });
+    if (insertErr && (insertErr.message?.includes("drive_url") || insertErr.code === "PGRST204" || insertErr.code === "42703")) {
+      const bodyWithDrive = payload.drive_url && !payload.body?.includes(payload.drive_url)
+        ? `${payload.body}\n\nDrive Link: ${payload.drive_url}`
+        : payload.body;
+      const retry = await supabase.from("student_notes").insert({
+        student_id: payload.student_id,
+        course_id: payload.course_id || null,
+        title: payload.title,
+        body: bodyWithDrive,
+        created_by: user.id,
+      });
+      insertErr = retry.error;
+    }
+    if (insertErr) throw insertErr;
+    onToast("Note added and permitted for student.");
+    await loadData();
+  }
+
+  async function handleDeleteManualNoteForStudent(noteId) {
+    const { error: delErr } = await supabase.from("student_notes").delete().eq("id", noteId);
+    if (delErr) {
+      setError(delErr.message);
+    } else {
+      onToast("Note deleted.");
+      await loadData();
+    }
+  }
+
+  async function handleShareNoteWithAnotherStudent(noteRecord, targetStudentId) {
+    if (!targetStudentId) return;
+    setSharingBusy(true);
+    try {
+      const existing = allStudentNotes.find((n) => n.student_id === targetStudentId && n.title === noteRecord.title);
+      if (existing) {
+        setError(`${studentsById[targetStudentId]?.full_name || "This student"} already has this note permitted.`);
+        setSharingBusy(false);
+        return;
+      }
+      let { error: insErr } = await supabase.from("student_notes").insert({
+        student_id: targetStudentId,
+        course_id: noteRecord.course_id || null,
+        title: noteRecord.title,
+        body: noteRecord.body,
+        drive_url: noteRecord.drive_url || null,
+        material_id: noteRecord.material_id || null,
+        created_by: user.id,
+      });
+      if (insErr && (insErr.message?.includes("drive_url") || insErr.message?.includes("material_id") || insErr.code === "PGRST204" || insErr.code === "42703")) {
+        await supabase.from("student_notes").insert({
+          student_id: targetStudentId,
+          course_id: noteRecord.course_id || null,
+          title: noteRecord.title,
+          body: noteRecord.body,
+          created_by: user.id,
+        });
+      }
+      if (noteRecord.material_id) {
+        await supabase.from("material_recipients").upsert({
+          material_id: noteRecord.material_id,
+          student_id: targetStudentId,
+        }, { onConflict: "material_id,student_id" });
+      }
+      onToast(`Note and Drive link granted to ${studentsById[targetStudentId]?.full_name || studentsById[targetStudentId]?.email}.`);
+      setSharingNoteRecord(null);
+      setShareTargetStudentId("");
+      await loadData();
+    } catch (err) {
+      setError(`Could not grant note: ${err.message}`);
+    } finally {
+      setSharingBusy(false);
+    }
   }
 
   const filteredStudents = students.filter((student) => {
@@ -832,91 +970,63 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
         </div>
 
-        {/* Recipient Scope Switcher */}
-        <div style={{ marginTop: "10px" }}>
-          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)", display: "block", marginBottom: "6px" }}>
-            Add Note To:
-          </span>
-          <div className="source-toggle-tabs" role="group" aria-label="Note Recipient Audience">
-            <button
-              type="button"
-              className={`source-toggle-btn ${noteRecipientType === "single" ? "active" : ""}`}
-              onClick={() => setNoteRecipientType("single")}
-            >
-              <Users size={14} />
-              <span>Individual Student (Separate Note)</span>
-            </button>
-            <button
-              type="button"
-              className={`source-toggle-btn ${noteRecipientType === "course" ? "active" : ""}`}
-              onClick={() => setNoteRecipientType("course")}
-            >
-              <BookOpen size={14} />
-              <span>Course Enrolled Students</span>
-            </button>
-            <button
-              type="button"
-              className={`source-toggle-btn ${noteRecipientType === "all" ? "active" : ""}`}
-              onClick={() => setNoteRecipientType("all")}
-            >
-              <GraduationCap size={14} />
-              <span>All Students (Broadcast)</span>
-            </button>
+        {/* Individual Student Access Notice */}
+        <div style={{ marginTop: "12px", padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", display: "flex", alignItems: "center", gap: "10px" }}>
+          <ShieldCheck size={18} style={{ color: "#166534", flexShrink: 0 }} />
+          <div style={{ fontSize: "12.5px", color: "#166534", lineHeight: 1.4 }}>
+            <strong>Individual Student Permission:</strong> Each note or Drive link is granted to each student separately. Even if other students are enrolled in the same course, they will <strong>not</strong> receive access unless you explicitly permit it for them.
           </div>
         </div>
 
-        {noteRecipientType === "single" && (
-          <div style={{ marginTop: "10px" }}>
-            {notePrefillStudentId && (
-              <div style={{ marginBottom: "10px", padding: "8px 12px", background: "#eef2ff", borderRadius: "8px", border: "1px solid #c7d2fe", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: "12.5px", color: "#3730a3" }}>
-                  Selected Student: <strong>{studentsById[notePrefillStudentId]?.full_name || studentsById[notePrefillStudentId]?.email}</strong>
-                </span>
-                <button
-                  type="button"
-                  className="text-link"
-                  style={{ fontSize: "12px", color: "#4f46e5" }}
-                  onClick={() => setNotePrefillStudentId("")}
-                >
-                  Change Student
-                </button>
-              </div>
-            )}
-            <label className="form-field">
-              <span>Select Student *</span>
-              <select
-                name="student_id"
-                required
-                key={notePrefillStudentId || "empty"}
-                defaultValue={notePrefillStudentId || ""}
-              >
-                <option value="" disabled>Choose an individual student...</option>
-                {students.filter((student) => student.is_approved).map((student) => (
-                  <option key={student.id} value={student.id}>
-                    {student.full_name || student.email} · {student.email}
-                  </option>
-                ))}
-              </select>
-            </label>
+        {notePrefillStudentId && (
+          <div style={{ marginTop: "12px", padding: "8px 12px", background: "#eef2ff", borderRadius: "8px", border: "1px solid #c7d2fe", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: "12.5px", color: "#3730a3" }}>
+              Target Student: <strong>{studentsById[notePrefillStudentId]?.full_name || studentsById[notePrefillStudentId]?.email}</strong>
+            </span>
+            <button
+              type="button"
+              className="text-link"
+              style={{ fontSize: "12px", color: "#4f46e5" }}
+              onClick={() => setNotePrefillStudentId("")}
+            >
+              Change Student
+            </button>
           </div>
         )}
 
         <div className="form-grid-2" style={{ marginTop: "12px" }}>
           <label className="form-field">
-            <span>Linked Course {noteRecipientType === "course" ? "*" : "(optional)"}</span>
-            <select name="course_id" required={noteRecipientType === "course"} defaultValue="">
-              <option value="">{noteRecipientType === "course" ? "Select a course..." : "No specific course (General / Campus-wide)"}</option>
-              {courses.map((course) => (
-                <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
+            <span>Assign Note To Student *</span>
+            <select
+              name="student_id"
+              required
+              key={notePrefillStudentId || "empty"}
+              defaultValue={notePrefillStudentId || ""}
+            >
+              <option value="" disabled>Choose individual student...</option>
+              {students.filter((student) => student.is_approved).map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.full_name || student.email} · {student.email}
+                </option>
               ))}
             </select>
           </label>
 
           <label className="form-field">
-            <span>Note Title *</span>
-            <input name="title" required maxLength={150} placeholder="e.g. Chapter 4 Lecture Notes: Data Structures" />
+            <span>Linked Course (optional)</span>
+            <select name="course_id" defaultValue="">
+              <option value="">No specific course (General / Campus-wide)</option>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
+              ))}
+            </select>
           </label>
         </div>
+
+        <label className="form-field" style={{ marginTop: "12px" }}>
+          <span>Note Title *</span>
+          <input name="title" required maxLength={150} placeholder="e.g. Chapter 4 Lecture Notes: Data Structures" />
+        </label>
 
         {/* Dedicated Google Drive Link Input Box */}
         <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
@@ -1138,6 +1248,24 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                         <FileText size={12} /> Notes: <strong>{notesCountByStudent[student.id] || 0}</strong>
                       </span>
                     </div>
+
+                    {/* Enrolled Courses Badges */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginTop: "6px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--muted)" }}>Enrolled Courses:</span>
+                      {enrollments.filter((e) => e.student_id === student.id).map((e) => {
+                        const c = coursesById[e.course_id];
+                        return c ? (
+                          <span key={c.id} className="course-code-badge" style={{ fontSize: "10.5px" }} title={c.name}>
+                            {c.code}
+                          </span>
+                        ) : null;
+                      })}
+                      {!enrollments.some((e) => e.student_id === student.id) && (
+                        <span style={{ fontSize: "11px", color: "var(--muted)", fontStyle: "italic" }}>
+                          None enrolled
+                        </span>
+                      )}
+                    </div>
                   </span>
                 </div>
                 <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>
@@ -1149,6 +1277,15 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                   className="button primary"
                   type="button"
                   disabled={busy}
+                  onClick={() => setManagingStudentAccess(student)}
+                  title={`Manage course notes, tests, and permissions specifically for ${student.full_name || student.email}`}
+                >
+                  <ShieldCheck size={13} /> Notes &amp; Tests Permissions
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={busy}
                   onClick={() => {
                     setNotePrefillStudentId(student.id);
                     setNoteRecipientType("single");
@@ -1157,7 +1294,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                   }}
                   title={`Add a note or Google Drive link specifically for ${student.full_name || student.email}`}
                 >
-                  <FileText size={13} /> Add Note / Drive Link
+                  <FileText size={13} /> Add Note
                 </button>
                 <button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}>
                   <Pencil size={13} /> Edit Profile &amp; Timing
@@ -1438,6 +1575,17 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                         className="button compact"
                         type="button"
                         onClick={() => {
+                          setSharingNoteRecord(sharingNoteRecord?.id === record.id ? null : record);
+                          setShareTargetStudentId("");
+                        }}
+                        title="Give this note and Drive link to another student separately"
+                      >
+                        <Users size={12} /> Give to another student
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => {
                           setNotePrefillStudentId(record.student_id);
                           setNoteRecipientType("single");
                           setShowForm(true);
@@ -1454,6 +1602,75 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                       </button>
                     </div>
                   </div>
+
+                  {sharingNoteRecord?.id === record.id && (
+                    <div
+                      style={{
+                        margin: "12px 0 6px",
+                        padding: "12px 14px",
+                        background: "#f0fdf4",
+                        border: "1px solid #bbf7d0",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                        <Users size={14} style={{ color: "#166534" }} />
+                        <strong style={{ fontSize: "13px", color: "#166534" }}>
+                          Give this note link to another student (individual access):
+                        </strong>
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                        <select
+                          value={shareTargetStudentId}
+                          onChange={(e) => setShareTargetStudentId(e.target.value)}
+                          style={{
+                            flex: 1,
+                            minWidth: "220px",
+                            padding: "6px 10px",
+                            borderRadius: "6px",
+                            border: "1px solid #86efac",
+                            background: "#fff",
+                            fontSize: "12.5px",
+                          }}
+                        >
+                          <option value="">Select a student to grant this note link...</option>
+                          {students
+                            .filter((s) => s.is_approved && s.id !== record.student_id)
+                            .map((s) => {
+                              const isEnrolledInCourse = record.course_id
+                                ? enrollments.some((e) => e.course_id === record.course_id && e.student_id === s.id)
+                                : false;
+                              return (
+                                <option key={s.id} value={s.id}>
+                                  {s.full_name || s.email} {isEnrolledInCourse ? `(Enrolled in ${course?.code || "Course"})` : ""}
+                                </option>
+                              );
+                            })}
+                        </select>
+                        <button
+                          type="button"
+                          className="button primary compact"
+                          disabled={!shareTargetStudentId || sharingBusy}
+                          onClick={() => handleShareNoteWithAnotherStudent(record, shareTargetStudentId)}
+                        >
+                          <Check size={12} /> {sharingBusy ? "Granting…" : "Grant Access"}
+                        </button>
+                        <button
+                          type="button"
+                          className="button compact"
+                          onClick={() => {
+                            setSharingNoteRecord(null);
+                            setShareTargetStudentId("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <small style={{ color: "#15803d", display: "block", marginTop: "6px", fontSize: "11.5px" }}>
+                        Access is strictly given to the chosen student. Other students in the same course will remain without access.
+                      </small>
+                    </div>
+                  )}
 
                   {cleanBody && (
                     <p style={{ margin: "12px 0 0", fontSize: "13.5px", color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
@@ -1563,6 +1780,29 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         onClose={() => setEditingStudent(null)}
         onSave={updateStudentProfile}
         onDelete={deleteStudent}
+      />
+    )}
+
+    {managingStudentAccess && (
+      <StudentAccessModal
+        student={managingStudentAccess}
+        courses={courses}
+        enrollments={enrollments}
+        materials={materials}
+        assessments={assessments}
+        studentNotes={allStudentNotes}
+        assessmentRecipients={assessmentRecipients}
+        materialRecipients={materialRecipients}
+        onClose={() => setManagingStudentAccess(null)}
+        onPermitNote={handlePermitNoteForStudent}
+        onRevokeNote={handleRevokeNoteForStudent}
+        onPermitTest={handlePermitTestForStudent}
+        onRevokeTest={handleRevokeTestForStudent}
+        onAddManualNote={handleAddManualNoteForStudent}
+        onDeleteManualNote={handleDeleteManualNoteForStudent}
+        onEnrollStudent={enrollStudentInCourse}
+        onUnenrollStudent={unenrollStudentFromCourse}
+        onPreviewDoc={(title, subtitle, url) => setViewingNoteDoc({ title, subtitle, url })}
       />
     )}
   </div>;
