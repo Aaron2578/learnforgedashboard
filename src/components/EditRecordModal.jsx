@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Clock3, FileText, GraduationCap, X } from "lucide-react";
+import { Clock3, ExternalLink, FileText, GraduationCap, HardDrive, Link2, X } from "lucide-react";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 export default function EditRecordModal({
   view, // "Attendance" | "Notes"
@@ -17,7 +18,12 @@ export default function EditRecordModal({
   const [status, setStatus] = useState(record.status || "present");
   const [note, setNote] = useState(record.note || "");
   const [title, setTitle] = useState(record.title || "");
-  const [body, setBody] = useState(record.body || "");
+
+  const existingDriveUrl = record.drive_url || extractDriveUrl(record.body || "");
+  const [driveUrl, setDriveUrl] = useState(existingDriveUrl);
+  const initialCleanBody = cleanNoteBody(record.body || "", existingDriveUrl);
+  const [body, setBody] = useState(initialCleanBody);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,7 +52,8 @@ export default function EditRecordModal({
           student_id: studentId,
           course_id: courseId || null,
           title: title.trim(),
-          body: body.trim(),
+          body: body.trim() || (driveUrl.trim() ? `Study notes and learning material via Google Drive.\n\nDrive Link: ${driveUrl.trim()}` : "Class note"),
+          drive_url: driveUrl.trim() || null,
         };
 
     try {
@@ -72,7 +79,7 @@ export default function EditRecordModal({
             </span>
             <div>
               <h2>{isAttendance ? "Edit Attendance" : "Edit Student Note"}</h2>
-              <p>{isAttendance ? "Update date, status, or notes for this student." : "Update confidential student feedback or notes."}</p>
+              <p>{isAttendance ? "Update date, status, or notes for this student." : "Update note details, course association, or Google Drive link."}</p>
             </div>
           </div>
           <button type="button" className="quiet-icon" onClick={onClose} aria-label="Close modal">
@@ -170,19 +177,53 @@ export default function EditRecordModal({
                   maxLength={150}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Midterm Progress Review"
+                  placeholder="e.g. Midterm Progress Review, Lecture 4 Notes"
                 />
               </label>
 
               <label className="form-field" style={{ marginTop: "12px" }}>
-                <span>Note Body *</span>
+                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <HardDrive size={14} style={{ color: "#4f46e5" }} />
+                  <span>Google Drive Link (optional)</span>
+                  {driveUrl.trim() && (
+                    <span className="badge-view-only" style={{ marginLeft: "auto", fontSize: "11px" }}>
+                      {getDriveDocTypeLabel(driveUrl)}
+                    </span>
+                  )}
+                </span>
+                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                  <input
+                    type="url"
+                    value={driveUrl}
+                    onChange={(e) => setDriveUrl(e.target.value)}
+                    placeholder="https://drive.google.com/file/d/... or https://docs.google.com/..."
+                    style={{ flex: 1 }}
+                  />
+                  {driveUrl.trim() && (
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => window.open(driveUrl.trim(), "_blank")}
+                      title="Open link in a new tab"
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      <ExternalLink size={13} /> Test
+                    </button>
+                  )}
+                </div>
+                <small className="muted" style={{ display: "block", marginTop: "4px" }}>
+                  Paste any Google Drive, Docs, Sheets, Slides, or PDF document link.
+                </small>
+              </label>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Note Details / Description (optional if Drive link provided)</span>
                 <textarea
-                  required
-                  rows={5}
+                  rows={4}
                   maxLength={10000}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="Enter private observations, feedback, or support action items..."
+                  placeholder="Enter study observations, instructions, or reading guide..."
                 />
               </label>
             </>
@@ -222,4 +263,3 @@ export default function EditRecordModal({
     </div>
   );
 }
-

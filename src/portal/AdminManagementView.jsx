@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight, BookOpen, Check, Clock3, Copy, Database, GraduationCap,
-  HardDrive, Link2, Mail, MapPin, Pencil, Plus, RefreshCw, Search, Trash2, Users, X
+  ArrowRight, BookOpen, Check, Clock3, Copy, Database, ExternalLink, Eye,
+  FileSpreadsheet, FileText, GraduationCap, HardDrive, Link2, Mail, MapPin,
+  Pencil, Plus, RefreshCw, Search, Trash2, Upload, Users, X
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
+import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
   Students: ["People", "Students", "Approve access, invite students, and manage student accounts."],
   Courses: ["Academic programs", "Courses", "Create courses, manage schedules and instructors, and enroll students."],
   Attendance: ["Academic operations", "Attendance", "Record and review daily student attendance."],
-  Notes: ["Student support", "Notes", "Write private notes for an individual student, optionally linked to a course."],
+  Notes: ["Academic & Student support", "Notes", "Upload and share lecture notes, study materials, and student notes via Google Drive links or direct text."],
 };
 
 function formatCourseDate(value) {
@@ -48,15 +51,35 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [attendancePrefillDate, setAttendancePrefillDate] = useState("");
   const [recentInvites, setRecentInvites] = useState([]);
 
+  // Notes state
+  const [viewingNoteDoc, setViewingNoteDoc] = useState(null);
+  const [noteRecipientType, setNoteRecipientType] = useState("single"); // "single" | "course" | "all"
+  const [noteDriveUrl, setNoteDriveUrl] = useState("");
+  const [noteFilter, setNoteFilter] = useState("all"); // "all" | "drive"
+  const [notePrefillStudentId, setNotePrefillStudentId] = useState("");
+  const [selectedStudentFilter, setSelectedStudentFilter] = useState("all");
+  const [notesSummary, setNotesSummary] = useState([]);
+
+  const notesCountByStudent = useMemo(() => {
+    const map = {};
+    for (const item of notesSummary) {
+      if (item.student_id) {
+        map[item.student_id] = (map[item.student_id] || 0) + 1;
+      }
+    }
+    return map;
+  }, [notesSummary]);
+
   const loadData = useCallback(async (forceLoading = false) => {
     if (forceLoading) setLoading(true);
     setError("");
     try {
-      const [studentResult, courseResult, enrollmentResult, storageResult] = await Promise.all([
+      const [studentResult, courseResult, enrollmentResult, storageResult, notesSummaryResult] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
+        supabase.from("student_notes").select("id, student_id"),
       ]);
       const failure = [studentResult, courseResult, enrollmentResult].find((result) => result.error);
       if (failure) {
@@ -67,19 +90,35 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       setStudents(studentResult.data ?? []);
       setCourses(courseResult.data ?? []);
       setEnrollments(enrollmentResult.data ?? []);
+      if (notesSummaryResult?.data) {
+        setNotesSummary(notesSummaryResult.data);
+      }
       if (storageResult && !storageResult.error && storageResult.data) {
         setStorageStats(storageResult.data);
       }
 
       if (view === "Attendance" || view === "Notes") {
         const table = view === "Attendance" ? "attendance_records" : "student_notes";
-        const { data, error: resultError } = await supabase.from(table)
-          .select(view === "Attendance"
-            ? "id, student_id, course_id, attendance_date, status, note, created_at"
-            : "id, student_id, course_id, title, body, created_at")
-          .order(view === "Attendance" ? "attendance_date" : "created_at", { ascending: false });
-        if (resultError) setError(resultError.message);
-        else setRecords(data ?? []);
+        if (view === "Attendance") {
+          const { data, error: resultError } = await supabase.from(table)
+            .select("id, student_id, course_id, attendance_date, status, note, created_at")
+            .order("attendance_date", { ascending: false });
+          if (resultError) setError(resultError.message);
+          else setRecords(data ?? []);
+        } else {
+          let { data, error: resultError } = await supabase.from(table)
+            .select("id, student_id, course_id, title, body, drive_url, created_at")
+            .order("created_at", { ascending: false });
+          if (resultError && (resultError.message?.includes("drive_url") || resultError.code === "PGRST204" || resultError.code === "42703")) {
+            const fallback = await supabase.from(table)
+              .select("id, student_id, course_id, title, body, created_at")
+              .order("created_at", { ascending: false });
+            data = fallback.data;
+            resultError = fallback.error;
+          }
+          if (resultError) setError(resultError.message);
+          else setRecords(data ?? []);
+        }
       }
     } catch (err) {
       setError(err.message || "Failed to load management records.");
@@ -328,28 +367,115 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     const values = new FormData(event.currentTarget);
     setBusy(true);
     setError("");
-    const isAttendance = view === "Attendance";
-    const table = isAttendance ? "attendance_records" : "student_notes";
-    const payload = isAttendance ? {
-      student_id: values.get("student_id"),
-      course_id: values.get("course_id") || null,
-      attendance_date: values.get("attendance_date"),
-      status: values.get("status"),
-      note: String(values.get("note")).trim(),
+
+    if (view === "Attendance") {
+      const payload = {
+        student_id: values.get("student_id"),
+        course_id: values.get("course_id") || null,
+        attendance_date: values.get("attendance_date"),
+        status: values.get("status"),
+        note: String(values.get("note") || "").trim(),
+        created_by: user.id,
+      };
+      const { error: insertError } = await supabase.from("attendance_records").insert(payload);
+      if (insertError) {
+        setError(insertError.message);
+      } else {
+        setShowForm(false);
+        form.reset();
+        onToast("Attendance recorded.");
+        await loadData();
+      }
+      setBusy(false);
+      return;
+    }
+
+    // view === "Notes"
+    const recipientType = noteRecipientType;
+    const selectedStudentId = values.get("student_id");
+    const courseId = values.get("course_id") || null;
+    const title = String(values.get("title") || "").trim();
+    const driveUrl = String(values.get("drive_url") || noteDriveUrl || "").trim();
+    let body = String(values.get("body") || "").trim();
+
+    if (!title) {
+      setError("Note title is required.");
+      setBusy(false);
+      return;
+    }
+
+    if (!body) {
+      body = driveUrl
+        ? `Study notes and learning materials via Google Drive.\n\nDrive Link: ${driveUrl}`
+        : "Class note";
+    }
+
+    let targetStudentIds = [];
+    if (recipientType === "all") {
+      targetStudentIds = students.filter((s) => s.is_approved).map((s) => s.id);
+      if (!targetStudentIds.length) {
+        setError("No approved students found to receive this note.");
+        setBusy(false);
+        return;
+      }
+    } else if (recipientType === "course") {
+      if (!courseId) {
+        setError("Please select a course to share notes with enrolled students.");
+        setBusy(false);
+        return;
+      }
+      const enrolled = enrollments.filter((e) => e.course_id === courseId).map((e) => e.student_id);
+      targetStudentIds = students.filter((s) => enrolled.includes(s.id) && s.is_approved).map((s) => s.id);
+      if (!targetStudentIds.length) {
+        setError("No approved students currently enrolled in the selected course.");
+        setBusy(false);
+        return;
+      }
+    } else {
+      if (!selectedStudentId) {
+        setError("Please select a student.");
+        setBusy(false);
+        return;
+      }
+      targetStudentIds = [selectedStudentId];
+    }
+
+    const payloadsWithDrive = targetStudentIds.map((sid) => ({
+      student_id: sid,
+      course_id: courseId,
+      title,
+      body,
+      drive_url: driveUrl || null,
       created_by: user.id,
-    } : {
-      student_id: values.get("student_id"),
-      course_id: values.get("course_id") || null,
-      title: String(values.get("title")).trim(),
-      body: String(values.get("body")).trim(),
-      created_by: user.id,
-    };
-    const { error: insertError } = await supabase.from(table).insert(payload);
-    if (insertError) setError(insertError.message);
-    else {
+    }));
+
+    let { error: insertError } = await supabase.from("student_notes").insert(payloadsWithDrive);
+
+    // Fallback if drive_url column not in DB yet
+    if (insertError && (insertError.message?.includes("drive_url") || insertError.code === "PGRST204" || insertError.code === "42703")) {
+      const bodyWithDrive = driveUrl && !body.includes(driveUrl) ? `${body}\n\nDrive Link: ${driveUrl}` : body;
+      const payloadsFallback = targetStudentIds.map((sid) => ({
+        student_id: sid,
+        course_id: courseId,
+        title,
+        body: bodyWithDrive,
+        created_by: user.id,
+      }));
+      const retryResult = await supabase.from("student_notes").insert(payloadsFallback);
+      insertError = retryResult.error;
+    }
+
+    if (insertError) {
+      setError(insertError.message);
+    } else {
       setShowForm(false);
       form.reset();
-      onToast(isAttendance ? "Attendance recorded." : "Private student note saved.");
+      setNoteDriveUrl("");
+      setNotePrefillStudentId("");
+      setNoteRecipientType("single");
+      onToast(targetStudentIds.length > 1
+        ? `Note published to ${targetStudentIds.length} students.`
+        : "Note saved successfully.");
       await loadData();
     }
     setBusy(false);
@@ -370,12 +496,20 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     setError("");
     const isAttendance = view === "Attendance";
     const table = isAttendance ? "attendance_records" : "student_notes";
-    const { error: updateError } = await supabase.from(table).update(payload).eq("id", recordId);
+    let { error: updateError } = await supabase.from(table).update(payload).eq("id", recordId);
+    if (updateError && !isAttendance && (updateError.message?.includes("drive_url") || updateError.code === "PGRST204" || updateError.code === "42703")) {
+      const { drive_url, ...fallbackPayload } = payload;
+      if (drive_url && !fallbackPayload.body?.includes(drive_url)) {
+        fallbackPayload.body = `${fallbackPayload.body || ""}\n\nDrive Link: ${drive_url}`.trim();
+      }
+      const retryResult = await supabase.from(table).update(fallbackPayload).eq("id", recordId);
+      updateError = retryResult.error;
+    }
     if (updateError) {
       setError(updateError.message);
     } else {
       setEditingRecord(null);
-      onToast(isAttendance ? "Attendance updated." : "Note updated.");
+      onToast(isAttendance ? "Attendance updated." : "Note updated successfully.");
       await loadData();
     }
     setBusy(false);
@@ -633,20 +767,231 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       <fieldset className="admin-options" style={{ marginTop: "12px" }}><legend>Enroll approved students</legend>{students.filter((student) => student.is_approved).map((student) => <label className="admin-option" key={student.id}><input type="checkbox" name="student_ids" value={student.id} /><span>{student.full_name || student.email}</span><small>{student.email}</small></label>)}{!students.some((student) => student.is_approved) && <p>Approve a student before creating an enrollment.</p>}</fieldset>
       <div className="form-actions"><button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={busy}>{busy ? "Creating…" : "Create course"}</button></div>
     </form>}
-    {showForm && (view === "Attendance" || view === "Notes") && <form className="card admin-create-form" onSubmit={createRecord}>
-      <div className="panel-heading"><div><h2>{view === "Attendance" ? "Record attendance" : "Write a student note"}</h2><p>{view === "Attendance" ? "Attendance is private to the student and administrators." : "Only this student and administrators can view the note."}</p></div></div>
-      <label className="form-field"><span>Student</span><select name="student_id" required defaultValue=""><option value="" disabled>Select a student</option>{students.filter((student) => student.is_approved).map((student) => <option key={student.id} value={student.id}>{student.full_name || student.email} · {student.email}</option>)}</select></label>
-      <label className="form-field"><span>Course (optional)</span><select name="course_id" defaultValue=""><option value="">No course</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.name}</option>)}</select></label>
-      {view === "Attendance" ? <>
-        <label className="form-field"><span>Date</span><input name="attendance_date" type="date" required defaultValue={attendancePrefillDate || new Date().toISOString().slice(0, 10)} /></label>
-        <label className="form-field"><span>Status</span><select name="status" defaultValue="present"><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select></label>
-        <label className="form-field"><span>Note (optional)</span><input name="note" maxLength="1000" /></label>
-      </> : <>
-        <label className="form-field"><span>Title</span><input name="title" required maxLength="150" /></label>
-        <label className="form-field"><span>Note</span><textarea name="body" required rows="5" maxLength="10000" /></label>
-      </>}
-      <div className="form-actions"><button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={busy}>{busy ? "Saving…" : view === "Attendance" ? "Save attendance" : "Save note"}</button></div>
-    </form>}
+    {showForm && view === "Attendance" && (
+      <form className="card admin-create-form" onSubmit={createRecord}>
+        <div className="panel-heading">
+          <div>
+            <h2>Record attendance</h2>
+            <p>Attendance is private to the student and administrators.</p>
+          </div>
+        </div>
+        <label className="form-field">
+          <span>Student</span>
+          <select name="student_id" required defaultValue="">
+            <option value="" disabled>Select a student</option>
+            {students.filter((student) => student.is_approved).map((student) => (
+              <option key={student.id} value={student.id}>{student.full_name || student.email} · {student.email}</option>
+            ))}
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Course (optional)</span>
+          <select name="course_id" defaultValue="">
+            <option value="">No course</option>
+            {courses.map((course) => (
+              <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Date</span>
+          <input name="attendance_date" type="date" required defaultValue={attendancePrefillDate || new Date().toISOString().slice(0, 10)} />
+        </label>
+        <label className="form-field">
+          <span>Status</span>
+          <select name="status" defaultValue="present">
+            <option value="present">Present</option>
+            <option value="late">Late</option>
+            <option value="absent">Absent</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Note (optional)</span>
+          <input name="note" maxLength="1000" />
+        </label>
+        <div className="form-actions">
+          <button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button>
+          <button className="button primary" disabled={busy}>{busy ? "Saving…" : "Save attendance"}</button>
+        </div>
+      </form>
+    )}
+
+    {showForm && view === "Notes" && (
+      <form className="card admin-create-form" onSubmit={createRecord}>
+        <div className="panel-heading">
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className="portal-item-icon assignment" style={{ width: "34px", height: "34px", background: "#eef2ff", color: "#4f46e5" }}>
+                <HardDrive size={18} />
+              </span>
+              <div>
+                <h2>Upload &amp; Share Notes</h2>
+                <p>Upload lecture notes, study materials, or feedback via Google Drive link or direct text.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Recipient Scope Switcher */}
+        <div style={{ marginTop: "10px" }}>
+          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)", display: "block", marginBottom: "6px" }}>
+            Add Note To:
+          </span>
+          <div className="source-toggle-tabs" role="group" aria-label="Note Recipient Audience">
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteRecipientType === "single" ? "active" : ""}`}
+              onClick={() => setNoteRecipientType("single")}
+            >
+              <Users size={14} />
+              <span>Individual Student (Separate Note)</span>
+            </button>
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteRecipientType === "course" ? "active" : ""}`}
+              onClick={() => setNoteRecipientType("course")}
+            >
+              <BookOpen size={14} />
+              <span>Course Enrolled Students</span>
+            </button>
+            <button
+              type="button"
+              className={`source-toggle-btn ${noteRecipientType === "all" ? "active" : ""}`}
+              onClick={() => setNoteRecipientType("all")}
+            >
+              <GraduationCap size={14} />
+              <span>All Students (Broadcast)</span>
+            </button>
+          </div>
+        </div>
+
+        {noteRecipientType === "single" && (
+          <div style={{ marginTop: "10px" }}>
+            {notePrefillStudentId && (
+              <div style={{ marginBottom: "10px", padding: "8px 12px", background: "#eef2ff", borderRadius: "8px", border: "1px solid #c7d2fe", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: "12.5px", color: "#3730a3" }}>
+                  Selected Student: <strong>{studentsById[notePrefillStudentId]?.full_name || studentsById[notePrefillStudentId]?.email}</strong>
+                </span>
+                <button
+                  type="button"
+                  className="text-link"
+                  style={{ fontSize: "12px", color: "#4f46e5" }}
+                  onClick={() => setNotePrefillStudentId("")}
+                >
+                  Change Student
+                </button>
+              </div>
+            )}
+            <label className="form-field">
+              <span>Select Student *</span>
+              <select
+                name="student_id"
+                required
+                key={notePrefillStudentId || "empty"}
+                defaultValue={notePrefillStudentId || ""}
+              >
+                <option value="" disabled>Choose an individual student...</option>
+                {students.filter((student) => student.is_approved).map((student) => (
+                  <option key={student.id} value={student.id}>
+                    {student.full_name || student.email} · {student.email}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+
+        <div className="form-grid-2" style={{ marginTop: "12px" }}>
+          <label className="form-field">
+            <span>Linked Course {noteRecipientType === "course" ? "*" : "(optional)"}</span>
+            <select name="course_id" required={noteRecipientType === "course"} defaultValue="">
+              <option value="">{noteRecipientType === "course" ? "Select a course..." : "No specific course (General / Campus-wide)"}</option>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="form-field">
+            <span>Note Title *</span>
+            <input name="title" required maxLength={150} placeholder="e.g. Chapter 4 Lecture Notes: Data Structures" />
+          </label>
+        </div>
+
+        {/* Dedicated Google Drive Link Input Box */}
+        <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
+          <label className="form-field" style={{ margin: 0 }}>
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", marginBottom: "6px" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, color: "var(--ink)" }}>
+                <HardDrive size={16} style={{ color: "#4f46e5" }} />
+                <span>Google Drive Link (Upload Notes via Drive Link)</span>
+              </span>
+              {noteDriveUrl.trim() && (
+                <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
+                  {getDriveDocTypeLabel(noteDriveUrl)}
+                </span>
+              )}
+            </span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                name="drive_url"
+                type="url"
+                value={noteDriveUrl}
+                onChange={(e) => setNoteDriveUrl(e.target.value)}
+                placeholder="https://drive.google.com/file/d/... or https://docs.google.com/..."
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="button compact"
+                onClick={async () => {
+                  try {
+                    const clip = await navigator.clipboard.readText();
+                    if (clip) setNoteDriveUrl(clip.trim());
+                  } catch {
+                    // clipboard fallback
+                  }
+                }}
+                title="Paste from clipboard"
+              >
+                <Copy size={13} /> Paste
+              </button>
+              {noteDriveUrl.trim() && (
+                <button
+                  type="button"
+                  className="button compact"
+                  onClick={() => setViewingNoteDoc({ title: "Google Drive Preview", subtitle: "Note Attachment", url: noteDriveUrl.trim() })}
+                  title="Preview document in secure viewer"
+                >
+                  <Eye size={13} /> Preview
+                </button>
+              )}
+            </div>
+            <small className="muted" style={{ display: "block", marginTop: "6px" }}>
+              Paste any Google Drive, Docs, Sheets, Slides, or PDF file link. Students will be able to securely preview or open it directly in their portal.
+            </small>
+          </label>
+        </div>
+
+        <label className="form-field" style={{ marginTop: "14px" }}>
+          <span>Note Details / Instructions / Summary (optional if Drive link is provided)</span>
+          <textarea
+            name="body"
+            rows={4}
+            maxLength={10000}
+            placeholder="Add lecture summary, reading assignments, key takeaways, or leave empty if sharing the document directly..."
+          />
+        </label>
+
+        <div className="form-actions" style={{ marginTop: "18px" }}>
+          <button className="button" type="button" onClick={() => { setShowForm(false); setNoteDriveUrl(""); setNotePrefillStudentId(""); }}>Cancel</button>
+          <button className="button primary" disabled={busy}>
+            <Upload size={14} />
+            {busy ? "Publishing note…" : noteDriveUrl.trim() ? "Upload Note with Drive Link" : "Save Note"}
+          </button>
+        </div>
+      </form>
+    )}
     {loading ? <div className="card portal-loading">Loading secure student records…</div> : view === "Overview" ? <>
       <section className="metrics student-metrics">
         <article className="card metric-card">
@@ -763,7 +1108,72 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
         </div>
         <section className="admin-work-list">
-          {filteredStudents.map((student) => <article className="card admin-assignment-card" key={student.id}><div className="panel-heading"><div className="admin-student"><span className="student-avatar">{(student.full_name || student.email).slice(0, 1).toUpperCase()}</span><span><strong>{student.full_name || "Student"}</strong><small>{student.email}</small><small>Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}</small><span className="student-timing-chip"><Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong></span></span></div><span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>{student.is_approved ? "Approved" : "Pending approval"}</span></div><div className="form-actions"><button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}><Pencil size={13} /> Edit Profile &amp; Timing</button><button className="button" disabled={busy} onClick={() => approveStudent(student, !student.is_approved)}>{student.is_approved ? "Suspend access" : <><Check size={14} />Approve access</>}</button><button className="button" disabled={busy} type="button" onClick={() => copyInviteLink(student)} title="Copy sign-in / invite link for student"><Link2 size={14} />Copy invite link</button><button className="button danger-icon" disabled={busy} onClick={() => deleteStudent(student)}><Trash2 size={14} />Delete account</button></div></article>)}
+          {filteredStudents.map((student) => (
+            <article className="card admin-assignment-card" key={student.id}>
+              <div className="panel-heading">
+                <div className="admin-student">
+                  <span className="student-avatar">{(student.full_name || student.email).slice(0, 1).toUpperCase()}</span>
+                  <span>
+                    <strong>{student.full_name || "Student"}</strong>
+                    <small>{student.email}</small>
+                    <small>Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}</small>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+                      <span className="student-timing-chip">
+                        <Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
+                      </span>
+                      <span
+                        className="student-timing-chip"
+                        style={{
+                          background: (notesCountByStudent[student.id] || 0) > 0 ? "#eef2ff" : undefined,
+                          color: (notesCountByStudent[student.id] || 0) > 0 ? "#4f46e5" : undefined,
+                          borderColor: (notesCountByStudent[student.id] || 0) > 0 ? "#c7d2fe" : undefined,
+                          cursor: "pointer",
+                        }}
+                        onClick={() => {
+                          setSelectedStudentFilter(student.id);
+                          onNavigate("Notes");
+                        }}
+                        title={`Click to view notes specifically for ${student.full_name || student.email}`}
+                      >
+                        <FileText size={12} /> Notes: <strong>{notesCountByStudent[student.id] || 0}</strong>
+                      </span>
+                    </div>
+                  </span>
+                </div>
+                <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>
+                  {student.is_approved ? "Approved" : "Pending approval"}
+                </span>
+              </div>
+              <div className="form-actions">
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setNotePrefillStudentId(student.id);
+                    setNoteRecipientType("single");
+                    onNavigate("Notes");
+                    setShowForm(true);
+                  }}
+                  title={`Add a note or Google Drive link specifically for ${student.full_name || student.email}`}
+                >
+                  <FileText size={13} /> Add Note / Drive Link
+                </button>
+                <button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}>
+                  <Pencil size={13} /> Edit Profile &amp; Timing
+                </button>
+                <button className="button" disabled={busy} onClick={() => approveStudent(student, !student.is_approved)}>
+                  {student.is_approved ? "Suspend access" : <><Check size={14} />Approve access</>}
+                </button>
+                <button className="button" disabled={busy} type="button" onClick={() => copyInviteLink(student)} title="Copy sign-in / invite link for student">
+                  <Link2 size={14} />Copy invite link
+                </button>
+                <button className="button danger-icon" disabled={busy} onClick={() => deleteStudent(student)}>
+                  <Trash2 size={14} />Delete account
+                </button>
+              </div>
+            </article>
+          ))}
           {!filteredStudents.length && <div className="card portal-empty"><Users size={22} /><strong>{students.length ? "No students match this filter" : "No student accounts yet"}</strong><span>{students.length ? "Change the search or approval filter." : "Add a student to send a secure sign-in invitation."}</span></div>}
         </section>
       </section>
@@ -895,10 +1305,232 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           setShowForm(true);
         }}
       />
-    ) : <section className="admin-work-list">
-      {records.map((record) => <article className="card admin-assignment-card" key={record.id}><div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><GraduationCap size={16} /></span><span><h2>{record.title}</h2><p>{studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}{record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}</p><small>{record.body}</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingRecord(record)}><Pencil size={13} /> Edit</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note"><Trash2 size={15} /></button></div></div></article>)}
-      {!records.length && <div className="card portal-empty"><GraduationCap size={22} /><strong>No notes records yet</strong><span>Use the button above to add one.</span></div>}
-    </section>}
+    ) : (
+      <div className="admin-notes-section">
+        <div className="student-admin-toolbar" style={{ marginBottom: "16px", display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", justifyContent: "space-between" }}>
+          <div className="form-actions" role="group" aria-label="Filter notes">
+            <button
+              type="button"
+              className={`button ${noteFilter === "all" ? "primary" : ""}`}
+              onClick={() => setNoteFilter("all")}
+            >
+              All Notes ({records.length})
+            </button>
+            <button
+              type="button"
+              className={`button ${noteFilter === "drive" ? "primary" : ""}`}
+              onClick={() => setNoteFilter("drive")}
+            >
+              <HardDrive size={13} /> Drive Links ({records.filter((r) => r.drive_url || extractDriveUrl(r.body)).length})
+            </button>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Filter by Student:</span>
+            <select
+              className="status-select"
+              value={selectedStudentFilter}
+              onChange={(e) => setSelectedStudentFilter(e.target.value)}
+              style={{ height: "34px", padding: "0 10px", borderRadius: "8px", border: "1px solid var(--line)", background: "#ffffff", fontSize: "12.5px" }}
+            >
+              <option value="all">👥 All Students ({records.length} notes)</option>
+              {students
+                .filter((s) => s.is_approved)
+                .map((s) => {
+                  const count = records.filter((r) => r.student_id === s.id).length;
+                  return (
+                    <option key={s.id} value={s.id}>
+                      {s.full_name || s.email} ({count} note{count === 1 ? "" : "s"})
+                    </option>
+                  );
+                })}
+            </select>
+          </div>
+        </div>
+
+        {selectedStudentFilter !== "all" && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", marginBottom: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className="student-avatar" style={{ width: "28px", height: "28px", fontSize: "12px" }}>
+                {(studentsById[selectedStudentFilter]?.full_name || "S").slice(0, 1).toUpperCase()}
+              </span>
+              <span style={{ fontSize: "13px", color: "#166534" }}>
+                Viewing notes specifically for <strong>{studentsById[selectedStudentFilter]?.full_name || studentsById[selectedStudentFilter]?.email}</strong>
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                type="button"
+                className="button primary compact"
+                onClick={() => {
+                  setNotePrefillStudentId(selectedStudentFilter);
+                  setNoteRecipientType("single");
+                  setShowForm(true);
+                }}
+              >
+                <Plus size={12} /> Add Note for this Student
+              </button>
+              <button
+                type="button"
+                className="button compact"
+                onClick={() => setSelectedStudentFilter("all")}
+              >
+                Show All Students
+              </button>
+            </div>
+          </div>
+        )}
+
+        <section className="admin-work-list">
+          {records
+            .filter((record) => {
+              if (selectedStudentFilter !== "all" && record.student_id !== selectedStudentFilter) {
+                return false;
+              }
+              const driveUrl = record.drive_url || extractDriveUrl(record.body);
+              if (noteFilter === "drive" && !driveUrl) return false;
+              const student = studentsById[record.student_id];
+              const course = coursesById[record.course_id];
+              const haystack = `${record.title} ${record.body} ${student?.full_name || ""} ${student?.email || ""} ${course?.name || ""} ${course?.code || ""}`.toLowerCase();
+              return haystack.includes(query.trim().toLowerCase());
+            })
+            .map((record) => {
+              const student = studentsById[record.student_id];
+              const course = coursesById[record.course_id];
+              const driveUrl = record.drive_url || extractDriveUrl(record.body);
+              const cleanBody = cleanNoteBody(record.body, driveUrl);
+              const docType = getDriveDocTypeLabel(driveUrl);
+
+              return (
+                <article className="card admin-assignment-card note-card" key={record.id}>
+                  <div className="panel-heading" style={{ alignItems: "flex-start" }}>
+                    <div className="admin-assignment-title" style={{ flex: 1 }}>
+                      <span className="portal-item-icon assignment" style={{ width: "42px", height: "42px", flexShrink: 0, background: driveUrl ? "#eef2ff" : "#f1f5f9", color: driveUrl ? "#4f46e5" : "#475569" }}>
+                        {driveUrl ? <HardDrive size={18} /> : <FileText size={18} />}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+                          <h2 style={{ fontSize: "16px", fontWeight: 700, margin: 0, color: "var(--ink)" }}>{record.title}</h2>
+                          {course && (
+                            <span className="course-code-badge" style={{ fontSize: "11px" }}>
+                              {course.code}
+                            </span>
+                          )}
+                          {driveUrl && (
+                            <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
+                              <HardDrive size={11} /> {docType}
+                            </span>
+                          )}
+                        </div>
+
+                        <p style={{ margin: "4px 0 0", fontSize: "13px", color: "var(--muted)" }}>
+                          Student: <strong>{student?.full_name || student?.email || "Student"}</strong>
+                          {course ? ` · ${course.name}` : ""}
+                          <span style={{ marginLeft: "10px", fontSize: "12px", opacity: 0.8 }}>
+                            {formatCourseDate(record.created_at)}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="heading-actions" style={{ flexShrink: 0 }}>
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => {
+                          setNotePrefillStudentId(record.student_id);
+                          setNoteRecipientType("single");
+                          setShowForm(true);
+                        }}
+                        title={`Add another note specifically for ${student?.full_name || "this student"}`}
+                      >
+                        <Plus size={12} /> Add for this student
+                      </button>
+                      <button className="button compact" type="button" onClick={() => setEditingRecord(record)} title="Edit note or Drive link">
+                        <Pencil size={13} /> Edit
+                      </button>
+                      <button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {cleanBody && (
+                    <p style={{ margin: "12px 0 0", fontSize: "13.5px", color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                      {cleanBody}
+                    </p>
+                  )}
+
+                  {driveUrl && (
+                    <div className="note-drive-box" style={{ marginTop: "14px", padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
+                        <div style={{ width: "34px", height: "34px", borderRadius: "8px", background: "#eef2ff", color: "#4f46e5", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                          <HardDrive size={16} />
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block" }}>{docType} Attached</strong>
+                          <span style={{ fontSize: "12px", color: "var(--muted)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", display: "block" }}>
+                            {driveUrl}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          className="button primary compact"
+                          onClick={() => setViewingNoteDoc({ title: record.title, subtitle: course ? `${course.code} · ${course.name}` : student?.full_name || "Note Document", url: driveUrl })}
+                          title="Open document in secure viewer"
+                        >
+                          <Eye size={13} /> View Document
+                        </button>
+                        <button
+                          type="button"
+                          className="button compact"
+                          onClick={() => window.open(driveUrl, "_blank")}
+                          title="Open directly in Google Drive"
+                        >
+                          <ExternalLink size={13} /> Open Drive
+                        </button>
+                        <button
+                          type="button"
+                          className="button compact"
+                          onClick={() => {
+                            navigator.clipboard.writeText(driveUrl);
+                            onToast("Drive link copied to clipboard.");
+                          }}
+                          title="Copy Drive link"
+                        >
+                          <Copy size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+
+          {!records.length && (
+            <div className="card portal-empty">
+              <HardDrive size={24} />
+              <strong>No notes records yet</strong>
+              <span>Use the "Add note" button above to upload notes with a Google Drive link.</span>
+            </div>
+          )}
+        </section>
+
+        {viewingNoteDoc && (
+          <SecureDocumentViewer
+            title={viewingNoteDoc.title}
+            subtitle={viewingNoteDoc.subtitle}
+            url={viewingNoteDoc.url}
+            userEmail={user.email}
+            isSuperuser={true}
+            onClose={() => setViewingNoteDoc(null)}
+          />
+        )}
+      </div>
+    )}
 
     {editingCourse && (
       <EditCourseModal

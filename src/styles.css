@@ -5746,3 +5746,64 @@ img, video, iframe {
     font-size: 10px !important;
   }
 }
+
+/* =========================================================
+   NOTES PAGE & GOOGLE DRIVE INTEGRATION
+   ========================================================= */
+.admin-notes-section,
+.student-notes-section {
+  width: 100%;
+}
+
+.note-card,
+.note-portal-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.note-card:hover,
+.note-portal-card:hover {
+  box-shadow: 0 4px 14px -2px rgba(15, 23, 42, 0.08);
+}
+
+.note-drive-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.note-drive-box:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.note-drive-upload-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+@media (max-width: 640px) {
+  .note-drive-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .note-drive-box > div:last-child {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .note-drive-box > div:last-child .button {
+    width: 100%;
+    justify-content: center;
+  }
+}

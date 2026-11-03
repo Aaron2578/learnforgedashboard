@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, BookOpen, CalendarClock, CheckCircle2, ClipboardList, Clock3,
-  Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
+  Copy, Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -84,6 +85,23 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const loadPortal = useCallback(async (forceLoading = false) => {
     if (forceLoading) setLoading(true);
     setError("");
+
+    const noteQuery = supabase
+      .from("student_notes")
+      .select("id, course_id, title, body, drive_url, created_at")
+      .eq("student_id", user.id)
+      .order("created_at", { ascending: false })
+      .then(async (res) => {
+        if (res.error && (res.error.message?.includes("drive_url") || res.error.code === "PGRST204" || res.error.code === "42703")) {
+          return supabase
+            .from("student_notes")
+            .select("id, course_id, title, body, created_at")
+            .eq("student_id", user.id)
+            .order("created_at", { ascending: false });
+        }
+        return res;
+      });
+
     const [
       assignmentResult,
       submissionResult,
@@ -103,7 +121,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", user.id),
       supabase.from("conversations").select("id, subject, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
       supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room").order("name"),
-      supabase.from("student_notes").select("id, course_id, title, body, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
+      noteQuery,
       supabase.from("attendance_records").select("id, course_id, attendance_date, status, note").eq("student_id", user.id).order("attendance_date", { ascending: false }),
       supabase.from("student_notifications").select("id, title, body, read_at, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
       supabase.from("course_materials").select("*").order("created_at", { ascending: false }),
@@ -876,19 +894,236 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderNotes() {
     const filtered = notes.filter((note) => `${note.title} ${note.body} ${coursesById[note.course_id]?.name ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
-    return <section className="portal-list">{filtered.map((note) => {
-      const course = coursesById[note.course_id];
-      return <article className="card portal-item" key={note.id}>
-        <div className="portal-item-heading">
-          <span className="portal-item-icon assignment"><FileText size={17} /></span>
-          <span className="portal-item-title">
-            <strong>{note.title}</strong>
-            <small>{course ? `${course.code} · ` : ""}{dateLabel(note.created_at)}</small>
-          </span>
-        </div>
-        <p className="portal-description">{note.body}</p>
-      </article>;
-    })}{!filtered.length && <div className="card portal-empty"><FileText size={22} /><strong>No notes assigned</strong><span>Private notes from your administrator will appear here.</span></div>}</section>;
+
+    const lectureMaterials = materials.filter((m) => {
+      const isLecture = m.category === "Lecture Notes" || m.category === "Study Guide";
+      const matchesSearch = `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+      return isLecture && matchesSearch;
+    });
+
+    return (
+      <div className="student-notes-section">
+        <section className="portal-list">
+          {filtered.map((note) => {
+            const course = coursesById[note.course_id];
+            const driveUrl = note.drive_url || extractDriveUrl(note.body);
+            const cleanBody = cleanNoteBody(note.body, driveUrl);
+            const docType = getDriveDocTypeLabel(driveUrl);
+
+            return (
+              <article className="card portal-item note-portal-card" key={note.id}>
+                <div className="portal-item-heading" style={{ alignItems: "flex-start" }}>
+                  <span
+                    className="portal-item-icon"
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      flexShrink: 0,
+                      background: driveUrl ? "#eef2ff" : "#f1f5f9",
+                      color: driveUrl ? "#4f46e5" : "#475569",
+                    }}
+                  >
+                    {driveUrl ? <HardDrive size={18} /> : <FileText size={18} />}
+                  </span>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+                      <strong style={{ fontSize: "16px", color: "var(--ink)" }}>{note.title}</strong>
+                      {course && (
+                        <span className="course-code-badge" style={{ fontSize: "11px" }}>
+                          {course.code}
+                        </span>
+                      )}
+                      {driveUrl && (
+                        <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
+                          <HardDrive size={11} /> {docType}
+                        </span>
+                      )}
+                    </div>
+
+                    <small style={{ display: "block", marginTop: "3px", color: "var(--muted)" }}>
+                      {course ? `${course.name} · ` : ""}Added {dateLabel(note.created_at)}
+                    </small>
+                  </div>
+                </div>
+
+                {cleanBody && (
+                  <p className="portal-description" style={{ marginTop: "12px", whiteSpace: "pre-wrap", color: "var(--ink)", lineHeight: 1.5 }}>
+                    {cleanBody}
+                  </p>
+                )}
+
+                {driveUrl && (
+                  <div
+                    className="note-drive-box"
+                    style={{
+                      marginTop: "14px",
+                      padding: "14px",
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "10px",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
+                      <div
+                        style={{
+                          width: "36px",
+                          height: "36px",
+                          borderRadius: "8px",
+                          background: "#eef2ff",
+                          color: "#4f46e5",
+                          display: "grid",
+                          placeItems: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <HardDrive size={18} />
+                      </div>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
+                          {docType} Attached
+                        </strong>
+                        <span
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--muted)",
+                            textOverflow: "ellipsis",
+                            overflow: "hidden",
+                            whiteSpace: "nowrap",
+                            display: "block",
+                          }}
+                        >
+                          {driveUrl}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="button primary compact"
+                        onClick={() =>
+                          openSecureViewer({
+                            title: note.title,
+                            subtitle: course ? `${course.code} · ${course.name}` : "Lecture Notes",
+                            url: driveUrl,
+                          })
+                        }
+                      >
+                        <Eye size={13} /> View Note Document
+                      </button>
+                      <button
+                        type="button"
+                        className="button compact"
+                        onClick={() => window.open(driveUrl, "_blank")}
+                        title="Open in Google Drive"
+                      >
+                        <ExternalLink size={13} /> Open Drive
+                      </button>
+                      <button
+                        type="button"
+                        className="button compact"
+                        onClick={() => {
+                          navigator.clipboard.writeText(driveUrl);
+                          setNotice("Drive link copied to clipboard.");
+                        }}
+                        title="Copy Drive link"
+                      >
+                        <Copy size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+
+          {!filtered.length && !lectureMaterials.length && (
+            <div className="card portal-empty">
+              <FileText size={24} />
+              <strong>No notes assigned</strong>
+              <span>Course notes and private study materials from your instructor will appear here.</span>
+            </div>
+          )}
+        </section>
+
+        {lectureMaterials.length > 0 && (
+          <div style={{ marginTop: "32px" }}>
+            <div className="course-session-heading" style={{ marginBottom: "14px" }}>
+              <div className="course-session-title">
+                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <BookOpen size={16} /> Course Lecture Notes &amp; Study Guides
+                </span>
+                <span className="course-session-pill">{lectureMaterials.length} Resources</span>
+              </div>
+            </div>
+
+            <section className="portal-list">
+              {lectureMaterials.map((mat) => {
+                const course = coursesById[mat.course_id];
+                const docType = mat.drive_url ? getDriveDocTypeLabel(mat.drive_url) : "PDF Document";
+
+                return (
+                  <article className="card portal-item" key={mat.id}>
+                    <div className="portal-item-heading" style={{ alignItems: "flex-start" }}>
+                      <span className="portal-item-icon" style={{ width: "40px", height: "40px", flexShrink: 0, background: "#eef2ff", color: "#4f46e5" }}>
+                        <HardDrive size={18} />
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+                          <strong style={{ fontSize: "16px", color: "var(--ink)" }}>{mat.title}</strong>
+                          {course && <span className="course-code-badge" style={{ fontSize: "11px" }}>{course.code}</span>}
+                          <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
+                            <HardDrive size={11} /> {mat.category || docType}
+                          </span>
+                        </div>
+                        <small style={{ display: "block", marginTop: "3px", color: "var(--muted)" }}>
+                          {course ? `${course.name} · ` : ""}Added {dateLabel(mat.created_at)}
+                        </small>
+                      </div>
+                    </div>
+
+                    {mat.description && <p className="portal-description" style={{ marginTop: "10px" }}>{mat.description}</p>}
+
+                    <div style={{ marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="button primary compact"
+                        onClick={() =>
+                          openSecureViewer({
+                            title: mat.title,
+                            subtitle: course ? `${course.code} · ${course.name}` : "Lecture Notes",
+                            url: mat.drive_url,
+                            filePath: mat.file_path,
+                            materialId: mat.id,
+                          })
+                        }
+                      >
+                        <Eye size={13} /> View Note Document
+                      </button>
+                      {mat.drive_url && (
+                        <button
+                          type="button"
+                          className="button compact"
+                          onClick={() => window.open(mat.drive_url, "_blank")}
+                        >
+                          <ExternalLink size={13} /> Open Drive
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+          </div>
+        )}
+      </div>
+    );
   }
 
   function renderAttendance() {
@@ -977,7 +1212,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     Assignments: ["Coursework", "Assignments", "Read the instructions, then submit written work or an attachment."],
     Tests: ["Coursework", "Tests", "Complete your online tests and see your score immediately."],
     Courses: ["My campus", "Courses", "Courses your administrator has enrolled you in."],
-    Notes: ["My campus", "Notes", "Private notes from your administrator."],
+    Notes: ["My campus", "Notes", "Lecture notes, study guides, and notes from your instructor."],
     Attendance: ["My campus", "Attendance", "Your recorded attendance."],
     Updates: ["My campus", "Updates", "Assignment and test notifications from your administrator."],
     Messages: ["Campus community", "Messages", "Send a private message to your institution’s support team."],
