@@ -229,18 +229,22 @@ export default function StudentAccessModal({
               className={`modal-tab-pill ${activeTab === "courses" ? "active" : ""}`}
               onClick={() => setActiveTab("courses")}
             >
-              <BookOpen size={15} style={{ flexShrink: 0 }} />
-              <span className="modal-tab-text">Course Notes &amp; Tests</span>
-              <span className="modal-tab-badge">{studentCourses.length}</span>
+              <div className="modal-tab-pill-content">
+                <BookOpen size={16} style={{ flexShrink: 0, marginRight: "8px" }} />
+                <span className="modal-tab-text">Course Notes &amp; Tests</span>
+              </div>
+              <span className="modal-tab-badge" style={{ marginRight: "4px" }}>{studentCourses.length}</span>
             </button>
             <button
               type="button"
               className={`modal-tab-pill ${activeTab === "notes" ? "active" : ""}`}
               onClick={() => setActiveTab("notes")}
             >
-              <FileText size={15} style={{ flexShrink: 0 }} />
-              <span className="modal-tab-text">Student Private Notes</span>
-              <span className="modal-tab-badge">{currentStudentNotes.length}</span>
+              <div className="modal-tab-pill-content">
+                <FileText size={16} style={{ flexShrink: 0, marginRight: "8px" }} />
+                <span className="modal-tab-text">Student Private Notes</span>
+              </div>
+              <span className="modal-tab-badge" style={{ marginRight: "4px" }}>{currentStudentNotes.length}</span>
             </button>
           </div>
 
