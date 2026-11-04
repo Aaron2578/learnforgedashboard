@@ -6156,28 +6156,33 @@ img, video, iframe {
 }
 
 .modal-segmented-tabs {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   background: #f1f5f9;
   padding: 4px;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid #e2e8f0;
-  gap: 4px;
+  gap: 6px;
+  box-sizing: border-box;
 }
 
 .modal-tab-pill {
   border: 0;
-  border-radius: 7px;
-  padding: 7px 14px;
-  font-size: 12.5px;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 8px;
   background: transparent;
   color: #64748b;
   transition: all 0.15s ease;
-  white-space: nowrap;
+  min-height: 42px;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .modal-tab-pill:hover {
@@ -6189,6 +6194,28 @@ img, video, iframe {
   color: #1e1b4b;
   font-weight: 700;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.modal-tab-text {
+  font-weight: 600;
+}
+
+.modal-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.07);
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.modal-tab-pill.active .modal-tab-badge {
+  background: #e0e7ff;
+  color: #4338ca;
 }
 
 .modal-btn-add-note {
@@ -6229,21 +6256,49 @@ img, video, iframe {
 
 @media (max-width: 640px) {
   .modal-tab-action-bar {
-    flex-direction: column;
-    align-items: stretch;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
   }
   .modal-segmented-tabs {
-    display: flex;
-    width: 100%;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    width: 100% !important;
+    gap: 6px !important;
+    padding: 4px !important;
+    background: #f1f5f9 !important;
+    border-radius: 10px !important;
+    box-sizing: border-box !important;
   }
   .modal-tab-pill {
-    flex: 1;
-    justify-content: center;
-    font-size: 11.5px;
-    padding: 6px 8px;
+    width: 100% !important;
+    min-width: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    padding: 8px 6px !important;
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    min-height: 46px !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    box-sizing: border-box !important;
+    gap: 5px !important;
+  }
+  .modal-tab-text {
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+  }
+  .modal-tab-badge {
+    font-size: 10.5px !important;
+    padding: 1px 5px !important;
   }
   .modal-btn-add-note {
-    width: 100%;
+    width: 100% !important;
+    min-height: 40px !important;
+    justify-content: center !important;
   }
 }
 
