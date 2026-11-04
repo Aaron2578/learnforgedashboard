@@ -816,6 +816,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                 >
                   {/* Subject Code Header */}
                   <div
+                    className="subject-group-header"
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -855,7 +856,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
 
                     <button
                       type="button"
-                      className="button compact primary"
+                      className="button compact primary subject-group-upload-btn"
                       style={{ fontSize: "12px" }}
                       onClick={() => {
                         setFormCourseId(course?.id || "");
@@ -1133,7 +1134,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                                 </span>
                               </button>
 
-                              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                              <div className="material-sub-actions" style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
                                 <button
                                   className="button compact"
                                   type="button"

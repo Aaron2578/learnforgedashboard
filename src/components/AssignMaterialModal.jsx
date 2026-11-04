@@ -171,20 +171,12 @@ export default function AssignMaterialModal({
       }}
     >
       <div
-        className="modal"
-        style={{
-          maxWidth: "860px",
-          width: "95vw",
-          maxHeight: "92vh",
-          overflowY: "auto",
-          padding: "24px",
-          borderRadius: "14px",
-        }}
+        className="modal assign-material-modal"
         role="dialog"
         aria-modal="true"
       >
         {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+        <div className="assign-modal-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
           <div style={{ display: "flex", gap: "12px", alignItems: "center", minWidth: 0, flex: 1 }}>
             <span
               style={{
@@ -275,7 +267,7 @@ export default function AssignMaterialModal({
         </div>
 
         {/* Stats Summary */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", marginBottom: "16px" }}>
+        <div className="assign-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", marginBottom: "16px" }}>
           <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
             <span style={{ fontSize: "11.5px", color: "var(--muted)", display: "block" }}>
               {material.course_id ? `Enrolled in ${course?.code || "Subject"}` : "Approved Students"}
@@ -297,6 +289,7 @@ export default function AssignMaterialModal({
         {/* Currently Assigned Students Quick Tray */}
         {assignedStudents.length > 0 && (
           <div
+            className="assign-quick-tray"
             style={{
               padding: "12px 14px",
               background: "#f0fdf4",
@@ -338,6 +331,7 @@ export default function AssignMaterialModal({
             </div>
 
             <div
+              className="assign-quick-tray-grid"
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
@@ -421,7 +415,7 @@ export default function AssignMaterialModal({
         )}
 
         {/* Controls: Search and Filter Tabs */}
-        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
+        <div className="assign-filter-toolbar" style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
           {/* Filter Tabs */}
           <div className="source-toggle-tabs" style={{ margin: 0 }} role="group" aria-label="Student Audience Filter">
             {material.course_id && (
@@ -461,7 +455,7 @@ export default function AssignMaterialModal({
           </div>
 
           {/* Search box */}
-          <div style={{ position: "relative", minWidth: "220px", flex: 1, maxWidth: "340px" }}>
+          <div className="assign-search-box" style={{ position: "relative", minWidth: "220px", flex: 1, maxWidth: "340px" }}>
             <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
             <input
               type="text"
@@ -491,6 +485,7 @@ export default function AssignMaterialModal({
                 return (
                   <div
                     key={student.id}
+                    className="assign-student-row"
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -503,7 +498,7 @@ export default function AssignMaterialModal({
                     }}
                   >
                     {/* Student Info */}
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
+                    <div className="assign-student-info" style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
                       <span
                         className="student-avatar"
                         style={{
@@ -544,8 +539,9 @@ export default function AssignMaterialModal({
                     </div>
 
                     {/* Access Status & Action Button */}
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                    <div className="assign-student-actions" style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
                       <span
+                        className="assign-status-badge"
                         style={{
                           fontSize: "11.5px",
                           fontWeight: 700,

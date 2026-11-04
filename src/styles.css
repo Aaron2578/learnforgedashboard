@@ -6930,3 +6930,590 @@ img, video, iframe {
     height: 38px !important;
   }
 }
+
+
+/* =========================================================================
+   COMPREHENSIVE MOBILE RESPONSIVE OPTIMIZATIONS (ADMIN & STUDENT PORTALS)
+   ========================================================================= */
+
+/* Prevent horizontal viewport shifting and overflow */
+html,
+body,
+#root,
+.app-shell,
+.student-app,
+.main-content {
+  max-width: 100vw !important;
+  overflow-x: hidden !important;
+  box-sizing: border-box !important;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 2-Column form rows desktop fallback */
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Tablet & Mobile Screens (<= 768px) */
+@media (max-width: 768px) {
+  /* Drive View Subject Groups & Grid */
+  .admin-drive-view .course-session-tabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 6px !important;
+    margin-bottom: 16px !important;
+    width: 100% !important;
+  }
+
+  .admin-drive-view .course-session-tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  .admin-drive-view .course-session-tab {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    min-height: 38px !important;
+  }
+
+  .subject-code-group {
+    padding: 16px 14px !important;
+    border-radius: 12px !important;
+  }
+
+  .subject-group-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .subject-group-upload-btn {
+    width: 100% !important;
+    justify-content: center !important;
+    min-height: 38px !important;
+  }
+
+  .materials-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  .material-card {
+    padding: 16px 14px !important;
+    border-radius: 12px !important;
+    width: 100% !important;
+  }
+
+  .material-actions {
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .material-actions > .button.primary {
+    width: 100% !important;
+    min-height: 42px !important;
+    justify-content: center !important;
+    font-size: 13px !important;
+  }
+
+  .material-sub-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr auto auto !important;
+    gap: 6px !important;
+    width: 100% !important;
+  }
+
+  .material-sub-actions .button {
+    min-height: 36px !important;
+    font-size: 12px !important;
+    justify-content: center !important;
+  }
+
+  .material-sub-actions .quiet-icon {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  /* Form Grids Collapse */
+  .form-grid-2,
+  .form-row-2 {
+    grid-template-columns: 1fr !important;
+    display: grid !important;
+    gap: 10px !important;
+  }
+}
+
+/* Smartphone Screens (<= 640px) */
+@media (max-width: 640px) {
+  /* Topbar & Search Navigation */
+  .topbar {
+    padding: 0 12px !important;
+    gap: 8px !important;
+    height: 56px !important;
+  }
+
+  .topbar-left {
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    gap: 8px !important;
+  }
+
+  .topbar .breadcrumb {
+    max-width: 38vw !important;
+    font-size: 12px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .topbar .search-box {
+    width: min(34vw, 140px) !important;
+    height: 34px !important;
+    padding: 0 8px !important;
+  }
+
+  .topbar .search-box input {
+    font-size: 12px !important;
+  }
+
+  .top-avatar {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 11.5px !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Page Headings */
+  .page-heading {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    margin-bottom: 16px !important;
+  }
+
+  .page-heading > div {
+    width: 100% !important;
+  }
+
+  .page-heading .heading-actions {
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .page-heading .heading-actions .button {
+    width: 100% !important;
+    justify-content: center !important;
+    min-height: 40px !important;
+  }
+
+  /* Assign Material Modal */
+  .assign-material-modal {
+    width: 96vw !important;
+    max-height: 94vh !important;
+    max-height: 94dvh !important;
+    padding: 14px 12px !important;
+    border-radius: 14px !important;
+  }
+
+  .assign-modal-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+  }
+
+  .assign-modal-header-actions {
+    display: flex !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    border-top: 1px dashed var(--line) !important;
+    padding-top: 8px !important;
+  }
+
+  .assign-modal-header-actions .button {
+    flex: 1 !important;
+    min-height: 38px !important;
+    justify-content: center !important;
+  }
+
+  .assign-stats-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  .assign-stats-grid > div:last-child {
+    grid-column: span 2 !important;
+  }
+
+  .assign-filter-toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .assign-search-box {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .assign-search-box input {
+    height: 38px !important;
+    font-size: 13px !important;
+    width: 100% !important;
+  }
+
+  .source-toggle-tabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    width: 100% !important;
+    padding-bottom: 4px !important;
+  }
+
+  .source-toggle-tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  .source-toggle-btn {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    min-height: 38px !important;
+    font-size: 12px !important;
+    padding: 0 12px !important;
+  }
+
+  .assign-quick-tray {
+    padding: 10px 10px !important;
+  }
+
+  .assign-quick-tray-grid {
+    grid-template-columns: 1fr !important;
+    max-height: 160px !important;
+  }
+
+  .assign-student-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    padding: 12px 10px !important;
+  }
+
+  .assign-student-actions {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    border-top: 1px dashed var(--line) !important;
+    padding-top: 8px !important;
+    gap: 8px !important;
+  }
+
+  .assign-student-actions .button {
+    flex: 1 !important;
+    min-height: 38px !important;
+    justify-content: center !important;
+    font-size: 12.5px !important;
+  }
+
+  .assign-status-badge {
+    flex-shrink: 0 !important;
+    font-size: 11px !important;
+  }
+
+  /* Student Portal Overview */
+  .student-metrics {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .student-overview-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .overview-work-item,
+  .overview-test {
+    padding: 10px 8px !important;
+    gap: 8px !important;
+  }
+
+  /* Student Portal Drive & Files */
+  .portal-materials-section .materials-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  /* Student Portal Notes */
+  .student-notes-section .portal-item {
+    padding: 14px 12px !important;
+  }
+
+  .note-drive-box {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    padding: 12px 10px !important;
+  }
+
+  .note-drive-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr auto !important;
+    gap: 6px !important;
+    width: 100% !important;
+  }
+
+  .note-drive-actions .button {
+    min-height: 38px !important;
+    font-size: 12px !important;
+    justify-content: center !important;
+  }
+
+  .note-lecture-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+    width: 100% !important;
+  }
+
+  .note-lecture-actions .button {
+    width: 100% !important;
+    min-height: 38px !important;
+    justify-content: center !important;
+  }
+
+  /* Student Portal Assignments */
+  .portal-item {
+    padding: 14px 12px !important;
+    border-radius: 12px !important;
+  }
+
+  .portal-item-heading {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .submission-receipt {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+    padding: 10px 12px !important;
+  }
+
+  /* Student Portal Tests / Online Quiz */
+  .quiz-options {
+    margin: 12px 0 0 0 !important;
+    gap: 8px !important;
+  }
+
+  .quiz-option {
+    padding: 10px 12px !important;
+    min-height: 44px !important;
+    font-size: 13.5px !important;
+  }
+
+  .portal-actions {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .portal-actions .button,
+  .portal-actions a.button {
+    width: 100% !important;
+    min-height: 40px !important;
+    justify-content: center !important;
+    font-size: 13px !important;
+  }
+
+  /* Messages / Inbox */
+  .student-inbox,
+  .admin-inbox {
+    grid-template-columns: 1fr !important;
+    min-height: auto !important;
+  }
+
+  .thread-list {
+    max-height: 200px !important;
+    overflow-y: auto !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--line) !important;
+  }
+
+  .thread-preview {
+    padding: 10px 12px !important;
+    min-height: 52px !important;
+  }
+
+  .message-compose {
+    padding: 12px 10px !important;
+  }
+
+  .compose-footer {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .compose-footer .button {
+    width: 100% !important;
+    min-height: 40px !important;
+    justify-content: center !important;
+  }
+
+  /* Admin Creation Forms */
+  .admin-create-form {
+    padding: 16px 12px !important;
+    border-radius: 12px !important;
+  }
+
+  .invite-mode-switch {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+    width: 100% !important;
+  }
+
+  .invite-mode-switch .button {
+    min-height: 38px !important;
+    justify-content: center !important;
+  }
+
+  .invite-link-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .invite-link-row .button {
+    width: 100% !important;
+    min-height: 38px !important;
+    justify-content: center !important;
+  }
+
+  /* Grading Controls in Assignment Submissions */
+  .grading-controls {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  .grading-controls .button {
+    width: 100% !important;
+    min-height: 38px !important;
+    justify-content: center !important;
+  }
+
+  /* Admin Assignment & Note Cards */
+  .admin-assignment-card .panel-heading {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+  }
+
+  .admin-assignment-card .heading-actions {
+    width: 100% !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+
+  .admin-assignment-card .heading-actions .button {
+    flex: 1 1 auto !important;
+    min-height: 36px !important;
+    justify-content: center !important;
+  }
+
+  /* Download Requests Table Container */
+  .requests-table-container {
+    -webkit-overflow-scrolling: touch !important;
+    border-radius: 10px !important;
+    margin-top: 12px !important;
+  }
+
+  .requests-table th,
+  .requests-table td {
+    padding: 10px 12px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* Extra-Compact Smartphones (<= 480px) */
+@media (max-width: 480px) {
+  .topbar .breadcrumb {
+    max-width: 30vw !important;
+    font-size: 11.5px !important;
+  }
+
+  .topbar .search-box {
+    width: min(28vw, 105px) !important;
+  }
+
+  .assign-stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .assign-stats-grid > div:last-child {
+    grid-column: span 1 !important;
+  }
+
+  .assign-student-actions {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+
+  .assign-student-actions .button {
+    width: 100% !important;
+  }
+
+  .note-drive-actions {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+
+  .note-drive-actions .button {
+    width: 100% !important;
+  }
+
+  .note-lecture-actions {
+    grid-template-columns: 1fr !important;
+  }
+
+  .student-actions-row-secondary {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+
+  .student-actions-row-secondary .button {
+    width: 100% !important;
+    height: 36px !important;
+  }
+
+  .material-sub-actions {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .material-sub-actions .quiet-icon {
+    width: 100% !important;
+    height: 36px !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--line) !important;
+  }
+}

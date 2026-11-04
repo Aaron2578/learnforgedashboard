@@ -1115,7 +1115,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                    <div className="note-drive-actions" style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
                       <button
                         type="button"
                         className="button primary compact"
@@ -1202,7 +1202,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
                     {mat.description && <p className="portal-description" style={{ marginTop: "10px" }}>{mat.description}</p>}
 
-                    <div style={{ marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <div className="note-lecture-actions" style={{ marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
                       <button
                         type="button"
                         className="button primary compact"
