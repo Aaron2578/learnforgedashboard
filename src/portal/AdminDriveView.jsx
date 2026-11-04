@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useId } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useId } from "react";
 import {
   HardDrive,
   Plus,
@@ -21,9 +21,15 @@ import {
   Filter,
   CheckCircle2,
   Pencil,
+  Users,
+  GraduationCap,
+  Copy,
+  ShieldCheck,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
+import AssignMaterialModal from "../components/AssignMaterialModal";
+import { getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 export default function AdminDriveView({ supabase, user, query = "", onToast }) {
   const [activeTab, setActiveTab] = useState("materials"); // 'materials' | 'requests'
@@ -33,6 +39,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [students, setStudents] = useState({});
   const [enrollments, setEnrollments] = useState([]);
   const [materialRecipients, setMaterialRecipients] = useState([]);
+  const [studentNotes, setStudentNotes] = useState([]);
   const [studentsList, setStudentsList] = useState([]);
   const [formSelectedStudentIds, setFormSelectedStudentIds] = useState([]);
   const [formStudentSearch, setFormStudentSearch] = useState("");
@@ -42,6 +49,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [error, setError] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
+  const [assigningMaterial, setAssigningMaterial] = useState(null);
+  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState("all");
   const [requestFilter, setRequestFilter] = useState("all"); // 'all' | 'pending' | 'approved' | 'revoked'
 
   // Secure viewer state
@@ -66,6 +75,9 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       .channel("admin-drive-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadData(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, () => loadData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, () => loadData(false))
       .subscribe();
 
     return () => {
@@ -80,30 +92,40 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setError("");
 
     try {
-      const [materialsRes, coursesRes, requestsRes, profilesRes, enrollmentsRes, materialRecipientsRes] = await Promise.all([
+      const [materialsRes, coursesRes, requestsRes, profilesRes, enrollmentsRes, materialRecipientsRes, studentNotesRes] = await Promise.all([
         supabase
           .from("course_materials")
           .select("*")
           .order("created_at", { ascending: false }),
         supabase
           .from("courses")
-          .select("id, name, code")
-          .order("name"),
+          .select("id, name, code, department")
+          .order("code"),
         supabase
           .from("download_requests")
           .select("*")
           .order("requested_at", { ascending: false }),
         supabase
           .from("profiles")
-          .select("id, full_name, email, role, is_approved")
+          .select("id, full_name, email, role, is_approved, timing")
           .order("full_name"),
         supabase
           .from("course_enrollments")
           .select("id, course_id, student_id"),
         supabase
           .from("material_recipients")
-          .select("id, material_id, student_id")
+          .select("material_id, student_id")
           .then((r) => r.error ? { data: [] } : r),
+        supabase
+          .from("student_notes")
+          .select("id, student_id, course_id, title, body, material_id, drive_url")
+          .then(async (r) => {
+            if (r.error && (r.error.message?.includes("drive_url") || r.error.message?.includes("material_id") || r.error.code === "PGRST204" || r.error.code === "42703")) {
+              const fb = await supabase.from("student_notes").select("id, student_id, course_id, title, body");
+              return fb.error ? { data: [] } : fb;
+            }
+            return r.error ? { data: [] } : r;
+          }),
       ]);
 
       if (materialsRes.error) throw materialsRes.error;
@@ -121,6 +143,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       setStudentsList(approvedStudents);
       setEnrollments(enrollmentsRes?.data || []);
       setMaterialRecipients(materialRecipientsRes?.data || []);
+      setStudentNotes(studentNotesRes?.data || []);
     } catch (err) {
       console.error("Error loading drive materials:", err);
       setError(err.message || "Could not load drive files.");
@@ -275,51 +298,182 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
 
       if (insertError) throw insertError;
 
-      // Determine target student IDs
-      let targetStudentIds = [];
-      if (recipientOption === "custom" && formSelectedStudentIds.length > 0) {
-        targetStudentIds = formSelectedStudentIds;
-      } else if (formCourseId) {
-        const enrolled = enrollments.filter((e) => e.course_id === formCourseId).map((e) => e.student_id);
-        targetStudentIds = enrolled.length > 0 ? enrolled : studentsList.map((s) => s.id);
-      } else {
-        targetStudentIds = studentsList.map((s) => s.id);
-      }
+      const courseObj = courses.find((c) => c.id === formCourseId);
+      const subjectLabel = courseObj ? `${courseObj.code}` : "Campus-wide";
 
-      if (insertedMat?.id && targetStudentIds.length > 0) {
-        const recipientPayloads = targetStudentIds.map((sid) => ({
-          material_id: insertedMat.id,
-          student_id: sid,
-          granted_by: user?.id || null,
-        }));
-        await supabase.from("material_recipients").upsert(recipientPayloads, { onConflict: "material_id,student_id" });
-
-        // Mirror in student_notes so it appears in student's Notes as well
-        const notePayloads = targetStudentIds.map((sid) => ({
-          student_id: sid,
-          course_id: formCourseId || null,
-          title: formTitle.trim(),
-          body: formDescription.trim() || `Course material: ${formTitle.trim()}`,
-          drive_url: cleanDriveUrl || null,
-          material_id: insertedMat.id,
-          created_by: user?.id || null,
-        }));
-        try {
-          await supabase.from("student_notes").insert(notePayloads);
-        } catch (e) {
-          console.warn("Could not insert mirror student_notes:", e);
-        }
-      }
-
-      onToast(`Material added and access granted to ${targetStudentIds.length} student${targetStudentIds.length === 1 ? "" : "s"}.`);
+      onToast(`"${formTitle.trim()}" uploaded once for ${subjectLabel}! You can now assign it to students separately.`);
       setShowAddModal(false);
       resetForm();
       await loadData();
+
+      // Immediately open student assignment modal so admin can pick students one by one
+      if (insertedMat) {
+        setAssigningMaterial(insertedMat);
+      }
     } catch (err) {
       console.error("Failed to add material:", err);
       setError(err.message || "Failed to add material.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  const getAssignedStudentsForMaterial = useCallback((mat) => {
+    if (!mat?.id) return [];
+    const studentIdSet = new Set();
+    const cleanTitle = (mat.title || "").trim().toLowerCase();
+    const cleanDrive = (mat.drive_url || "").trim().toLowerCase();
+
+    // 1. From materialRecipients table
+    for (const mr of (materialRecipients || [])) {
+      if (mr?.material_id === mat.id && mr?.student_id) {
+        studentIdSet.add(mr.student_id);
+      }
+    }
+
+    // 2. From studentNotes table
+    for (const sn of (studentNotes || [])) {
+      if (!sn?.student_id) continue;
+      const snTitle = (sn.title || "").trim().toLowerCase();
+      const snDrive = (sn.drive_url || "").trim().toLowerCase();
+      const snBody = (sn.body || "").toLowerCase();
+
+      const matchesMaterialId = sn.material_id && sn.material_id === mat.id;
+      const matchesTitle = cleanTitle && snTitle === cleanTitle;
+      const matchesDriveUrl = cleanDrive && (snDrive === cleanDrive || snBody.includes(cleanDrive));
+
+      if (matchesMaterialId || matchesTitle || matchesDriveUrl) {
+        studentIdSet.add(sn.student_id);
+      }
+    }
+
+    return Array.from(studentIdSet)
+      .map((sid) => students[sid])
+      .filter(Boolean);
+  }, [materialRecipients, studentNotes, students]);
+
+  async function handleAssignStudent(material, studentId) {
+    try {
+      // 1. Optimistically update local state immediately so UI updates with 0 lag
+      setMaterialRecipients((prev) => [
+        ...prev.filter((mr) => !(mr.material_id === material.id && mr.student_id === studentId)),
+        { material_id: material.id, student_id: studentId },
+      ]);
+      setStudentNotes((prev) => [
+        ...prev.filter((sn) => !(sn.material_id === material.id && sn.student_id === studentId)),
+        {
+          id: `temp-${Date.now()}`,
+          student_id: studentId,
+          course_id: material.course_id || null,
+          title: material.title,
+          material_id: material.id,
+          drive_url: material.drive_url || null,
+        },
+      ]);
+
+      // 2. Insert into material_recipients (safely, won't break if table doesn't exist)
+      try {
+        await supabase.from("material_recipients").upsert(
+          { material_id: material.id, student_id: studentId },
+          { onConflict: "material_id,student_id" }
+        );
+      } catch (mrErr) {
+        console.warn("material_recipients upsert note:", mrErr);
+      }
+
+      // 3. Always mirror to student_notes so student sees it in their portal
+      try {
+        const bodyWithDrive = material.drive_url
+          ? `${material.description || ""}\n\nDrive Link: ${material.drive_url}`.trim()
+          : (material.description || `Course study material: ${material.title}`);
+
+        let { error: insertErr } = await supabase.from("student_notes").insert({
+          student_id: studentId,
+          course_id: material.course_id || null,
+          title: material.title,
+          body: bodyWithDrive,
+          drive_url: material.drive_url || null,
+          material_id: material.id,
+          created_by: user?.id || null,
+        });
+
+        if (insertErr) {
+          await supabase.from("student_notes").insert({
+            student_id: studentId,
+            course_id: material.course_id || null,
+            title: material.title,
+            body: bodyWithDrive,
+            created_by: user?.id || null,
+          });
+        }
+      } catch (snErr) {
+        console.warn("student_notes insert note:", snErr);
+      }
+
+      const studentName = students[studentId]?.full_name || students[studentId]?.email || "Student";
+      onToast(`✓ Assigned: Access to "${material.title}" granted to ${studentName}!`);
+      await loadData(false);
+    } catch (err) {
+      console.error("Assign error:", err);
+      setError(`Could not assign material: ${err.message}`);
+    }
+  }
+
+  async function handleRevokeStudent(material, studentId) {
+    try {
+      // 1. Optimistically update local state immediately
+      setMaterialRecipients((prev) =>
+        prev.filter((mr) => !(mr.material_id === material.id && mr.student_id === studentId))
+      );
+      setStudentNotes((prev) =>
+        prev.filter(
+          (sn) =>
+            !(
+              sn.student_id === studentId &&
+              (sn.material_id === material.id ||
+                sn.title?.trim().toLowerCase() === material.title?.trim().toLowerCase())
+            )
+        )
+      );
+
+      // 2. Delete from material_recipients
+      try {
+        await supabase
+          .from("material_recipients")
+          .delete()
+          .eq("material_id", material.id)
+          .eq("student_id", studentId);
+      } catch (mrErr) {
+        console.warn("material_recipients delete note:", mrErr);
+      }
+
+      // 3. Delete from student_notes by material_id and by title
+      try {
+        await supabase
+          .from("student_notes")
+          .delete()
+          .eq("student_id", studentId)
+          .eq("material_id", material.id);
+      } catch (snErr) {
+        console.warn("student_notes delete note:", snErr);
+      }
+
+      try {
+        await supabase
+          .from("student_notes")
+          .delete()
+          .eq("student_id", studentId)
+          .eq("title", material.title);
+      } catch (snErr2) {
+        console.warn("student_notes delete by title note:", snErr2);
+      }
+
+      const studentName = students[studentId]?.full_name || students[studentId]?.email || "Student";
+      onToast(`Access revoked from ${studentName}.`);
+      await loadData(false);
+    } catch (err) {
+      console.error("Revoke error:", err);
+      setError(`Could not revoke material: ${err.message}`);
     }
   }
 
@@ -503,14 +657,40 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     );
   });
 
+  // Distinct courses with materials or matching subject filter
+  const displayedCourseGroups = useMemo(() => {
+    const groups = [];
+
+    courses.forEach((course) => {
+      if (selectedSubjectFilter !== "all" && selectedSubjectFilter !== course.id) {
+        return;
+      }
+      const items = filteredMaterials.filter((m) => m.course_id === course.id);
+      if (items.length > 0 || selectedSubjectFilter === course.id) {
+        const enrolledCount = enrollments.filter((e) => e.course_id === course.id).length;
+        groups.push({ course, items, enrolledCount });
+      }
+    });
+
+    // Campus-wide / General materials
+    if (selectedSubjectFilter === "all" || selectedSubjectFilter === "campus") {
+      const campusItems = filteredMaterials.filter((m) => !m.course_id);
+      if (campusItems.length > 0 || selectedSubjectFilter === "campus") {
+        groups.push({ course: null, items: campusItems, enrolledCount: studentsList.length });
+      }
+    }
+
+    return groups;
+  }, [courses, filteredMaterials, selectedSubjectFilter, enrollments, studentsList]);
+
   return (
     <div className="admin-drive-view">
       <div className="page-heading">
         <div>
           <div className="eyebrow">Cloud Drive &amp; Files</div>
-          <h1>Drive Materials &amp; Download Control</h1>
+          <h1>Drive Materials &amp; Subject Notes</h1>
           <p>
-            Upload PDFs, tests, and Google Drive links. By default, students can only view documents inside the dashboard. Approve or revoke per-student download requests at any time.
+            Upload study materials and Drive links once per Subject Code. Assign and permit access to each student separately.
           </p>
         </div>
         <div className="heading-actions">
@@ -520,7 +700,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
             onClick={() => setShowAddModal(true)}
           >
             <Plus size={15} />
-            <span>Add PDF / Drive Material</span>
+            <span>Upload Note / Drive Material</span>
           </button>
         </div>
       </div>
@@ -542,7 +722,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           onClick={() => setActiveTab("materials")}
         >
           <HardDrive size={15} />
-          <span>Files &amp; Drive Materials ({materials.length})</span>
+          <span>Materials by Subject Code ({materials.length})</span>
         </button>
 
         <button
@@ -564,99 +744,465 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         <div className="card portal-loading">Loading secure drive materials…</div>
       ) : activeTab === "materials" ? (
         <section className="admin-materials-section">
-          {filteredMaterials.length ? (
-            <div className="materials-grid">
-              {filteredMaterials.map((item) => {
-                const course = courses.find((c) => c.id === item.course_id);
-                const isDrive = !!item.drive_url;
-                const requestCount = downloadRequests.filter((r) => r.material_id === item.id).length;
+          {/* Workflow Callout Banner */}
+          <div
+            style={{
+              padding: "12px 16px",
+              background: "#f0fdf4",
+              border: "1px solid #bbf7d0",
+              borderRadius: "10px",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              marginBottom: "18px",
+            }}
+          >
+            <ShieldCheck size={20} style={{ color: "#166534", flexShrink: 0 }} />
+            <div style={{ fontSize: "13px", color: "#166534", lineHeight: 1.4 }}>
+              <strong>Organized by Subject Code:</strong> Upload each note once under its Subject Code. Use the <strong>"Assign to Students"</strong> button on any note to grant or revoke access for each student separately.
+            </div>
+          </div>
 
-                return (
-                  <article className="card material-card" key={item.id}>
-                    <div className="material-card-header">
-                      <span className={`material-icon ${isDrive ? "drive" : "pdf"}`}>
-                        {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
-                      </span>
-                      <div className="material-card-badges">
-                        <span className="badge gray">{item.category}</span>
-                        {course ? (
-                          <span className="badge blue">{course.code}</span>
-                        ) : (
-                          <span className="badge green">Campus-wide</span>
-                        )}
-                      </div>
-                    </div>
+          {/* Subject Code Filter Bar */}
+          <div className="course-session-tabs" style={{ marginBottom: "20px" }}>
+            <button
+              type="button"
+              className={`course-session-tab ${selectedSubjectFilter === "all" ? "active" : ""}`}
+              onClick={() => setSelectedSubjectFilter("all")}
+            >
+              All Subject Codes ({filteredMaterials.length})
+            </button>
+            {courses.map((course) => {
+              const count = materials.filter((m) => m.course_id === course.id).length;
+              return (
+                <button
+                  key={course.id}
+                  type="button"
+                  className={`course-session-tab ${selectedSubjectFilter === course.id ? "active" : ""}`}
+                  onClick={() => setSelectedSubjectFilter(course.id)}
+                >
+                  <span style={{ fontWeight: 700 }}>{course.code}</span>
+                  <span className="course-session-pill" style={{ marginLeft: "6px" }}>{count}</span>
+                </button>
+              );
+            })}
+            {materials.some((m) => !m.course_id) && (
+              <button
+                type="button"
+                className={`course-session-tab ${selectedSubjectFilter === "campus" ? "active" : ""}`}
+                onClick={() => setSelectedSubjectFilter("campus")}
+              >
+                <span>Campus-wide</span>
+                <span className="course-session-pill" style={{ marginLeft: "6px" }}>
+                  {materials.filter((m) => !m.course_id).length}
+                </span>
+              </button>
+            )}
+          </div>
 
-                    <h3 className="material-title">{item.title}</h3>
-                    {item.description && (
-                      <p className="material-desc">{item.description}</p>
-                    )}
-
-                    <div className="material-meta">
-                      <span>
-                        <Shield size={12} />
-                        View-only in dashboard
-                      </span>
-                      {item.file_size > 0 && (
-                        <span>{(item.file_size / (1024 * 1024)).toFixed(1)} MB</span>
-                      )}
-                      {requestCount > 0 && (
-                        <span className="material-requests-pill">
-                          <Lock size={12} /> {requestCount} request{requestCount === 1 ? "" : "s"}
+          {displayedCourseGroups.length ? (
+            <div className="subject-materials-container" style={{ display: "grid", gap: "24px" }}>
+              {displayedCourseGroups.map(({ course, items, enrolledCount }) => (
+                <div
+                  key={course?.id || "campus"}
+                  className="subject-code-group"
+                  style={{
+                    background: "#ffffff",
+                    border: "1px solid var(--line)",
+                    borderRadius: "12px",
+                    padding: "20px",
+                    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04)",
+                  }}
+                >
+                  {/* Subject Code Header */}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "16px",
+                      paddingBottom: "12px",
+                      borderBottom: "1px solid var(--line)",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                      {course ? (
+                        <span className="course-code-badge" style={{ fontSize: "14px", fontWeight: 700, padding: "4px 10px" }}>
+                          {course.code}
+                        </span>
+                      ) : (
+                        <span className="badge green" style={{ fontSize: "13px", padding: "4px 10px" }}>
+                          Campus-wide / General
                         </span>
                       )}
-                    </div>
-
-                    <div className="material-actions" style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: "16px", flexWrap: "wrap" }}>
-                      <button
-                        className="button primary material-preview-btn"
-                        type="button"
-                        style={{ flex: 1, minWidth: "140px", padding: "8px 14px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
-                        onClick={() => handleOpenViewer(item)}
-                      >
-                        <Eye size={14} />
-                        <span>Preview in Dashboard</span>
-                      </button>
-
-                      {item.drive_url && (
-                        <a
-                          className="button compact"
-                          href={item.drive_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ padding: "8px 12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
-                          title="Open Google Drive or cloud link directly in a new tab"
-                        >
-                          <ExternalLink size={13} />
-                          <span>Open Link</span>
-                        </a>
+                      <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: "var(--ink)" }}>
+                        {course ? course.name : "General Study Materials"}
+                      </h2>
+                      {course?.department && (
+                        <span className="course-dept-badge">{course.department}</span>
                       )}
+                      <span className="course-session-pill" style={{ background: "#eef2ff", color: "#4f46e5", fontWeight: 600 }}>
+                        {items.length} Note{items.length === 1 ? "" : "s"}
+                      </span>
+                      {course && (
+                        <small style={{ color: "var(--muted)", fontSize: "12.5px" }}>
+                          · {enrolledCount} Students Enrolled
+                        </small>
+                      )}
+                    </div>
 
-                      <button
-                        className="button compact"
-                        type="button"
-                        style={{ padding: "8px 12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
-                        onClick={() => setEditingMaterial(item)}
-                        title="Edit material details"
-                      >
-                        <Pencil size={13} />
-                        <span>Edit</span>
-                      </button>
+                    <button
+                      type="button"
+                      className="button compact primary"
+                      style={{ fontSize: "12px" }}
+                      onClick={() => {
+                        setFormCourseId(course?.id || "");
+                        setShowAddModal(true);
+                      }}
+                    >
+                      <Plus size={13} /> Upload for {course ? course.code : "General"}
+                    </button>
+                  </div>
 
+                  {/* Grid of Materials for this Subject Code */}
+                  {items.length > 0 ? (
+                    <div className="materials-grid">
+                      {items.map((item) => {
+                        const isDrive = !!item.drive_url;
+                        const assignedStudentsForThisMat = getAssignedStudentsForMaterial(item);
+                        const assignedCount = assignedStudentsForThisMat.length;
+                        const docType = item.drive_url ? getDriveDocTypeLabel(item.drive_url) : "PDF File";
+                        const requestCount = downloadRequests.filter((r) => r.material_id === item.id).length;
+
+                        return (
+                          <article
+                            className="card material-card"
+                            key={item.id}
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              justifyContent: "space-between",
+                            }}
+                          >
+                            <div>
+                              <div className="material-card-header">
+                                <span className={`material-icon ${isDrive ? "drive" : "pdf"}`}>
+                                  {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
+                                </span>
+                                <div className="material-card-badges">
+                                  <span className="badge gray">{item.category}</span>
+                                  {course ? (
+                                    <span className="badge blue">{course.code}</span>
+                                  ) : (
+                                    <span className="badge green">Campus-wide</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <h3 className="material-title">{item.title}</h3>
+                              {item.description && (
+                                <p className="material-desc">{item.description}</p>
+                              )}
+
+                              <div className="material-meta" style={{ marginTop: "10px" }}>
+                                <span>
+                                  <Shield size={12} /> View-only in dashboard
+                                </span>
+                                {item.file_size > 0 && (
+                                  <span>{(item.file_size / (1024 * 1024)).toFixed(1)} MB</span>
+                                )}
+                                {isDrive && (
+                                  <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "10.5px" }}>
+                                    <HardDrive size={11} /> {docType}
+                                  </span>
+                                )}
+                                {requestCount > 0 && (
+                                  <span className="material-requests-pill">
+                                    <Lock size={12} /> {requestCount} download request{requestCount === 1 ? "" : "s"}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Assigned Students & Status Section */}
+                              {assignedStudentsForThisMat.length > 0 ? (
+                                <div
+                                  style={{
+                                    marginTop: "12px",
+                                    padding: "10px 12px",
+                                    background: "#f0fdf4",
+                                    border: "1px solid #bbf7d0",
+                                    borderRadius: "8px",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      marginBottom: "8px",
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        fontSize: "12px",
+                                        color: "#166534",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "6px",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      <Users size={13} />
+                                      Assigned Students ({assignedStudentsForThisMat.length})
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: "10.5px",
+                                        fontWeight: 700,
+                                        padding: "2px 7px",
+                                        borderRadius: "10px",
+                                        background: "#dcfce7",
+                                        color: "#15803d",
+                                        border: "1px solid #86efac",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "3px",
+                                      }}
+                                    >
+                                      <Check size={11} strokeWidth={3} /> Status: Assigned
+                                    </span>
+                                  </div>
+
+                                  {/* List of Assigned Student Names and Status */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                                    {assignedStudentsForThisMat.slice(0, 4).map((stud) => (
+                                      <div
+                                        key={stud.id}
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "space-between",
+                                          background: "#ffffff",
+                                          padding: "5px 8px",
+                                          borderRadius: "6px",
+                                          border: "1px solid #dcfce7",
+                                          fontSize: "12px",
+                                          gap: "6px",
+                                        }}
+                                      >
+                                        <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0, flex: 1 }}>
+                                          <span
+                                            style={{
+                                              width: "20px",
+                                              height: "20px",
+                                              borderRadius: "50%",
+                                              background: "#dcfce7",
+                                              color: "#15803d",
+                                              fontSize: "10px",
+                                              fontWeight: 700,
+                                              display: "grid",
+                                              placeItems: "center",
+                                              flexShrink: 0,
+                                            }}
+                                          >
+                                            {(stud.full_name || stud.email).slice(0, 1).toUpperCase()}
+                                          </span>
+                                          <strong
+                                            style={{
+                                              color: "var(--ink)",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                              whiteSpace: "nowrap",
+                                              fontSize: "12px",
+                                            }}
+                                            title={stud.full_name || stud.email}
+                                          >
+                                            {stud.full_name || stud.email}
+                                          </strong>
+                                        </div>
+                                        <span
+                                          style={{
+                                            fontSize: "10px",
+                                            fontWeight: 700,
+                                            color: "#15803d",
+                                            background: "#dcfce7",
+                                            padding: "2px 6px",
+                                            borderRadius: "4px",
+                                            flexShrink: 0,
+                                            border: "1px solid #86efac",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "2px",
+                                          }}
+                                        >
+                                          ✓ Assigned
+                                        </span>
+                                      </div>
+                                    ))}
+
+                                    {assignedStudentsForThisMat.length > 4 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setAssigningMaterial(item)}
+                                        style={{
+                                          background: "none",
+                                          border: "none",
+                                          color: "#166534",
+                                          fontSize: "11px",
+                                          fontWeight: 600,
+                                          cursor: "pointer",
+                                          textAlign: "left",
+                                          padding: "2px 2px",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "4px",
+                                        }}
+                                      >
+                                        <span>+{assignedStudentsForThisMat.length - 4} more assigned student(s)</span>
+                                        <span style={{ textDecoration: "underline" }}>(View all)</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    marginTop: "12px",
+                                    padding: "8px 12px",
+                                    background: "#f8fafc",
+                                    border: "1px solid #e2e8f0",
+                                    borderRadius: "8px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      fontSize: "12px",
+                                      color: "#64748b",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      fontWeight: 500,
+                                    }}
+                                  >
+                                    <Users size={13} />
+                                    No students assigned yet
+                                  </span>
+                                  <span
+                                    style={{
+                                      fontSize: "10.5px",
+                                      fontWeight: 600,
+                                      color: "#64748b",
+                                      background: "#f1f5f9",
+                                      padding: "2px 6px",
+                                      borderRadius: "6px",
+                                      border: "1px solid #e2e8f0",
+                                    }}
+                                  >
+                                    Status: Not Assigned
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Actions Toolbar */}
+                            <div className="material-actions" style={{ display: "grid", gap: "8px", marginTop: "16px" }}>
+                              {/* Primary Action Button: Assign to Students */}
+                              <button
+                                className="button primary"
+                                type="button"
+                                style={{
+                                  width: "100%",
+                                  justifyContent: "center",
+                                  fontWeight: 600,
+                                  padding: "9px 12px",
+                                  background: assignedCount > 0 ? "#15803d" : "#2563eb",
+                                }}
+                                onClick={() => setAssigningMaterial(item)}
+                                title={`Assign "${item.title}" to students separately`}
+                              >
+                                <Users size={14} />
+                                <span>
+                                  {assignedCount > 0
+                                    ? `Manage Assigned Students (${assignedCount})`
+                                    : `Assign to Students`}
+                                </span>
+                              </button>
+
+                              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                                <button
+                                  className="button compact"
+                                  type="button"
+                                  style={{ flex: 1, minWidth: "85px", justifyContent: "center" }}
+                                  onClick={() => handleOpenViewer(item)}
+                                  title="Preview note in dashboard viewer"
+                                >
+                                  <Eye size={13} /> Preview
+                                </button>
+
+                                {item.drive_url && (
+                                  <a
+                                    className="button compact"
+                                    href={item.drive_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ flex: 1, minWidth: "85px", justifyContent: "center" }}
+                                    title="Open directly in Google Drive"
+                                  >
+                                    <ExternalLink size={13} /> Drive
+                                  </a>
+                                )}
+
+                                <button
+                                  className="button compact"
+                                  type="button"
+                                  onClick={() => setEditingMaterial(item)}
+                                  title="Edit material details"
+                                >
+                                  <Pencil size={13} />
+                                </button>
+
+                                <button
+                                  className="quiet-icon danger-icon"
+                                  type="button"
+                                  aria-label={`Delete ${item.title}`}
+                                  title="Delete material"
+                                  disabled={busy}
+                                  onClick={() => handleDeleteMaterial(item)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "28px 16px", textAlign: "center", background: "#f8fafc", borderRadius: "8px", border: "1px dashed #cbd5e1" }}>
+                      <FileText size={24} style={{ color: "var(--muted)", margin: "0 auto 6px" }} />
+                      <p style={{ margin: 0, fontSize: "13px", color: "var(--muted)" }}>
+                        No notes or materials uploaded yet for <strong>{course?.code}</strong>.
+                      </p>
                       <button
-                        className="quiet-icon danger-icon"
                         type="button"
-                        aria-label={`Delete ${item.title}`}
-                        title="Delete material"
-                        disabled={busy}
-                        onClick={() => handleDeleteMaterial(item)}
+                        className="button compact primary"
+                        style={{ marginTop: "10px" }}
+                        onClick={() => {
+                          setFormCourseId(course?.id || "");
+                          setShowAddModal(true);
+                        }}
                       >
-                        <Trash2 size={15} />
+                        <Plus size={12} /> Upload First Note for {course?.code}
                       </button>
                     </div>
-                  </article>
-                );
-              })}
+                  )}
+                </div>
+              ))}
             </div>
           ) : (
             <div className="card portal-empty">
@@ -664,7 +1210,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
               <strong>No materials found</strong>
               <span>
                 {materials.length
-                  ? "Try a different search term."
+                  ? "Try a different search term or subject code filter."
                   : "Upload a PDF or add a Google Drive link to make it securely viewable in the student dashboard."}
               </span>
             </div>
@@ -897,19 +1443,37 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                 </label>
 
                 <label className="form-field">
-                  <span>Course Enrollment</span>
+                  <span>Subject / Course Code</span>
                   <select
                     value={formCourseId}
                     onChange={(e) => setFormCourseId(e.target.value)}
                   >
-                    <option value="">Campus-wide (All Students)</option>
+                    <option value="">General / Campus-wide</option>
                     {courses.map((course) => (
                       <option key={course.id} value={course.id}>
-                        {course.code} — {course.name}
+                        [{course.code}] {course.name}
                       </option>
                     ))}
                   </select>
                 </label>
+              </div>
+
+              <div
+                style={{
+                  padding: "10px 14px",
+                  background: "#f0fdf4",
+                  border: "1px solid #bbf7d0",
+                  borderRadius: "8px",
+                  marginBottom: "14px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <ShieldCheck size={16} style={{ color: "#166534", flexShrink: 0 }} />
+                <span style={{ fontSize: "12px", color: "#166534" }}>
+                  <strong>Upload Once, Assign Separately:</strong> Upload your note or Drive link once under this Subject Code. After saving, you will immediately be able to assign it to each student separately.
+                </span>
               </div>
 
               {formSource === "upload" ? (
@@ -1075,6 +1639,21 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           onClose={() => setEditingMaterial(null)}
           onSave={updateMaterial}
           onDelete={handleDeleteMaterial}
+        />
+      )}
+
+      {assigningMaterial && (
+        <AssignMaterialModal
+          material={assigningMaterial}
+          courses={courses}
+          students={studentsList}
+          enrollments={enrollments}
+          materialRecipients={materialRecipients}
+          studentNotes={studentNotes}
+          onClose={() => setAssigningMaterial(null)}
+          onAssignStudent={handleAssignStudent}
+          onRevokeStudent={handleRevokeStudent}
+          onPreviewDoc={handleOpenViewer}
         />
       )}
     </div>

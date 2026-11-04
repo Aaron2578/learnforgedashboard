@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight, BookOpen, CalendarClock, CheckCircle2, ClipboardList, Clock3,
+  ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
   Copy, Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
@@ -181,7 +181,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     setNotifications(notificationResult.data ?? []);
     setMaterials(materialResult.data ?? []);
     setDownloadRequests(requestResult.data ?? []);
-    setPermittedMaterialIds(new Set((materialRecipientsResult?.data ?? []).map((r) => r.material_id)));
+    const permittedMatIds = new Set((materialRecipientsResult?.data ?? []).map((r) => r.material_id));
+    for (const n of (noteResult.data ?? [])) {
+      if (n.material_id) permittedMatIds.add(n.material_id);
+    }
+    setPermittedMaterialIds(permittedMatIds);
     setPermittedAssessmentIds(new Set((assessmentRecipientsResult?.data ?? []).map((r) => r.assessment_id)));
     setEnrolledCourseIds(new Set((enrollmentResult?.data ?? []).map((r) => r.course_id)));
     setQuestions(questionResult.data ?? []);
@@ -738,6 +742,18 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                 {item.description && <p className="material-desc">{item.description}</p>}
 
                 <div className="material-meta">
+                  <span
+                    className="badge green"
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "3px",
+                    }}
+                  >
+                    <Check size={11} strokeWidth={3} /> Status: Assigned
+                  </span>
                   <span className="badge-view-only" title="Protected view">
                     <Eye size={12} /> View-only in dashboard
                   </span>
@@ -1023,6 +1039,18 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                           <HardDrive size={11} /> {docType}
                         </span>
                       )}
+                      <span
+                        className="badge green"
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "3px",
+                        }}
+                      >
+                        <Check size={11} strokeWidth={3} /> Status: Assigned
+                      </span>
                     </div>
 
                     <small style={{ display: "block", marginTop: "3px", color: "var(--muted)" }}>

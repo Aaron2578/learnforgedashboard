@@ -100,10 +100,10 @@ export default function StudentAccessModal({
     try {
       if (isPermitted) {
         await onRevokeNote(material, student.id);
-        setNotice(`Access to "${material.title}" revoked.`);
+        setNotice(`Access to "${material.title}" revoked for ${student.full_name || student.email}. Status: Not Assigned.`);
       } else {
         await onPermitNote(material, student.id);
-        setNotice(`"${material.title}" permitted! Now visible in student portal.`);
+        setNotice(`✓ Assigned to ${student.full_name || student.email}: "${material.title}" status is now Assigned!`);
       }
       setTimeout(() => setNotice(""), 3500);
     } catch (err) {
@@ -517,7 +517,7 @@ export default function StudentAccessModal({
                                 )}
 
                                 <span className={`modal-status-pill ${isPermitted ? "permitted" : "locked"}`}>
-                                  {isPermitted ? "✓ Permitted" : "Locked (No Access)"}
+                                  {isPermitted ? "✓ Status: Assigned" : "Status: Not Assigned"}
                                 </span>
 
                                 <button
@@ -526,7 +526,7 @@ export default function StudentAccessModal({
                                   disabled={isBusy}
                                   onClick={() => handleToggleNote(mat, isPermitted)}
                                 >
-                                  {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Permit for Student"}
+                                  {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Assign to Student"}
                                 </button>
                               </div>
                             </div>
@@ -571,7 +571,7 @@ export default function StudentAccessModal({
 
                               <div className="modal-resource-actions">
                                 <span className={`modal-status-pill ${isPermitted ? "permitted" : "locked"}`}>
-                                  {isPermitted ? "✓ Permitted" : "Locked (No Access)"}
+                                  {isPermitted ? "✓ Status: Assigned" : "Status: Not Assigned"}
                                 </span>
 
                                 <button
@@ -580,7 +580,7 @@ export default function StudentAccessModal({
                                   disabled={isBusy}
                                   onClick={() => handleToggleTest(test, isPermitted)}
                                 >
-                                  {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Permit for Student"}
+                                  {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Assign to Student"}
                                 </button>
                               </div>
                             </div>

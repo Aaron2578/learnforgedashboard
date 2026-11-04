@@ -560,7 +560,11 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           }
         }
       } else {
-        await supabase.from("material_recipients").upsert({ material_id: material.id, student_id: studentId }, { onConflict: "material_id,student_id" });
+        try {
+          await supabase.from("material_recipients").upsert({ material_id: material.id, student_id: studentId }, { onConflict: "material_id,student_id" });
+        } catch (mrErr) {
+          console.warn("material_recipients upsert note:", mrErr);
+        }
         const existing = allStudentNotes.find((n) => n.student_id === studentId && (n.material_id === material.id || n.title.trim().toLowerCase() === material.title.trim().toLowerCase()));
         if (!existing) {
           let { error: insertErr } = await supabase.from("student_notes").insert({
@@ -595,6 +599,13 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     try {
       if (material.id && !material.isFromStudentNotes) {
         await supabase.from("material_recipients").delete().eq("material_id", material.id).eq("student_id", studentId);
+      }
+      try {
+        if (material.id) {
+          await supabase.from("student_notes").delete().eq("student_id", studentId).eq("material_id", material.id);
+        }
+      } catch (e) {
+        console.warn(e);
       }
       await supabase.from("student_notes").delete().eq("student_id", studentId).eq("title", material.title);
       onToast(`Access to "${material.title}" revoked.`);
@@ -1773,6 +1784,21 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
                         <p style={{ margin: "4px 0 0", fontSize: "13px", color: "var(--muted)" }}>
                           Student: <strong>{student?.full_name || student?.email || "Student"}</strong>
+                          <span
+                            className="badge green"
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 700,
+                              marginLeft: "8px",
+                              padding: "2px 7px",
+                              borderRadius: "10px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "3px",
+                            }}
+                          >
+                            <Check size={11} strokeWidth={3} /> Status: Assigned
+                          </span>
                           {course ? ` · ${course.name}` : ""}
                           <span style={{ marginLeft: "10px", fontSize: "12px", opacity: 0.8 }}>
                             {formatCourseDate(record.created_at)}
