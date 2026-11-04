@@ -8,9 +8,13 @@ import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
+<<<<<<< HEAD
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import ManageNoteAccessModal from "../components/ManageNoteAccessModal";
 import { parseNoteAttachment, formatNoteBodyWithAttachment, uploadNotePdfToStorage } from "../lib/noteAttachments.js";
+=======
+import WeatherMoodBanner from "../components/WeatherMoodBanner.jsx";
+>>>>>>> 568f72a81c15e9e0a6b0918695bec09612ad2baa
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
@@ -747,6 +751,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       {["Students", "Courses", "Attendance", "Notes"].includes(view) && <button className="button primary" onClick={() => { setShowForm((current) => !current); setError(""); }}><Plus size={15} />{view === "Students" ? "Add student" : view === "Courses" ? "Add course" : view === "Attendance" ? "Record attendance" : "Add note"}</button>}
       <button className="button" onClick={loadData}>Refresh</button>
     </div></div>
+    {view === "Overview" && <WeatherMoodBanner userName={user?.email} />}
     {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
 
     {recentInvites.length > 0 && <div className="card invite-links-box">

@@ -38,3 +38,4 @@ create policy "Users can update their own profile"
   to authenticated
   using (id = (select auth.uid()))
   with check (id = (select auth.uid()) and role = 'student');
+
