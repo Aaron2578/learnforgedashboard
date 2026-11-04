@@ -1359,100 +1359,157 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             {[["all", "All"], ["pending", "Pending"], ["approved", "Approved"]].map(([value, label]) => <button key={value} type="button" className={`button ${studentStatus === value ? "primary" : ""}`} onClick={() => setStudentStatus(value)}>{label}{value === "pending" ? ` (${students.filter((student) => !student.is_approved).length})` : ""}</button>)}
           </div>
         </div>
-        <section className="admin-work-list">
-          {filteredStudents.map((student) => (
-            <article className="card admin-assignment-card" key={student.id}>
-              <div className="panel-heading">
-                <div className="admin-student">
-                  <span className="student-avatar">{(student.full_name || student.email).slice(0, 1).toUpperCase()}</span>
-                  <span>
-                    <strong>{student.full_name || "Student"}</strong>
-                    <small>{student.email}</small>
-                    <small>Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}</small>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
-                      <span className="student-timing-chip">
-                        <Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
-                      </span>
-                      <span
-                        className="student-timing-chip"
-                        style={{
-                          background: (notesCountByStudent[student.id] || 0) > 0 ? "#eef2ff" : undefined,
-                          color: (notesCountByStudent[student.id] || 0) > 0 ? "#4f46e5" : undefined,
-                          borderColor: (notesCountByStudent[student.id] || 0) > 0 ? "#c7d2fe" : undefined,
-                          cursor: "pointer",
-                        }}
-                        onClick={() => {
-                          setSelectedStudentFilter(student.id);
-                          onNavigate("Notes");
-                        }}
-                        title={`Click to view notes specifically for ${student.full_name || student.email}`}
-                      >
-                        <FileText size={12} /> Notes: <strong>{notesCountByStudent[student.id] || 0}</strong>
-                      </span>
-                    </div>
+        <section className="admin-work-list student-cards-grid">
+          {filteredStudents.map((student) => {
+            const studentEnrollments = enrollments.filter((e) => e.student_id === student.id);
+            const notesCount = notesCountByStudent[student.id] || 0;
 
-                    {/* Enrolled Courses Badges */}
-                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginTop: "6px" }}>
-                      <span style={{ fontSize: "11px", color: "var(--muted)" }}>Enrolled Courses:</span>
-                      {enrollments.filter((e) => e.student_id === student.id).map((e) => {
+            return (
+              <article className="card student-card-item" key={student.id}>
+                {/* Top Profile Header */}
+                <div className="student-item-top">
+                  <div className="student-item-profile">
+                    <span className="student-avatar" style={{ width: "42px", height: "42px", fontSize: "16px", flexShrink: 0 }}>
+                      {(student.full_name || student.email).slice(0, 1).toUpperCase()}
+                    </span>
+                    <div className="student-item-details">
+                      <div className="student-item-name-row">
+                        <strong className="student-item-name">{student.full_name || "Student"}</strong>
+                        <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>
+                          {student.is_approved ? "Approved" : "Pending Approval"}
+                        </span>
+                      </div>
+                      <span className="student-item-email">{student.email}</span>
+                      <small className="student-item-date">
+                        Joined {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}
+                      </small>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Meta Information Container (Timing, Notes & Courses) */}
+                <div className="student-item-meta">
+                  <span className="student-timing-chip">
+                    <Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
+                  </span>
+
+                  <span
+                    className="student-timing-chip"
+                    style={{
+                      background: notesCount > 0 ? "#eef2ff" : undefined,
+                      color: notesCount > 0 ? "#4f46e5" : undefined,
+                      borderColor: notesCount > 0 ? "#c7d2fe" : undefined,
+                      cursor: "pointer",
+                    }}
+                    onClick={() => {
+                      setSelectedStudentFilter(student.id);
+                      onNavigate("Notes");
+                    }}
+                    title={`Click to view ${notesCount} note(s) specifically for ${student.full_name || student.email}`}
+                  >
+                    <FileText size={12} /> Notes: <strong>{notesCount}</strong>
+                  </span>
+
+                  {/* Enrolled Courses Badges */}
+                  <div className="student-item-courses">
+                    <span style={{ fontSize: "11px", color: "var(--muted)", fontWeight: 600 }}>Courses:</span>
+                    {studentEnrollments.length > 0 ? (
+                      studentEnrollments.map((e) => {
                         const c = coursesById[e.course_id];
                         return c ? (
-                          <span key={c.id} className="course-code-badge" style={{ fontSize: "10.5px" }} title={c.name}>
+                          <span key={c.id} className="course-code-badge" style={{ fontSize: "11px" }} title={c.name}>
                             {c.code}
                           </span>
                         ) : null;
-                      })}
-                      {!enrollments.some((e) => e.student_id === student.id) && (
-                        <span style={{ fontSize: "11px", color: "var(--muted)", fontStyle: "italic" }}>
-                          None enrolled
-                        </span>
-                      )}
-                    </div>
-                  </span>
+                      })
+                    ) : (
+                      <span style={{ fontSize: "11px", color: "var(--muted)", fontStyle: "italic" }}>
+                        None enrolled
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`}>
-                  {student.is_approved ? "Approved" : "Pending approval"}
-                </span>
-              </div>
-              <div className="form-actions">
-                <button
-                  className="button primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setManagingStudentAccess(student)}
-                  title={`Manage course notes, tests, and permissions specifically for ${student.full_name || student.email}`}
-                >
-                  <ShieldCheck size={13} /> Notes &amp; Tests Permissions
-                </button>
-                <button
-                  className="button"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setNotePrefillStudentId(student.id);
-                    setNoteRecipientType("single");
-                    onNavigate("Notes");
-                    setShowForm(true);
-                  }}
-                  title={`Add a note or Google Drive link specifically for ${student.full_name || student.email}`}
-                >
-                  <FileText size={13} /> Add Note
-                </button>
-                <button className="button" type="button" disabled={busy} onClick={() => setEditingStudent(student)}>
-                  <Pencil size={13} /> Edit Profile &amp; Timing
-                </button>
-                <button className="button" disabled={busy} onClick={() => approveStudent(student, !student.is_approved)}>
-                  {student.is_approved ? "Suspend access" : <><Check size={14} />Approve access</>}
-                </button>
-                <button className="button" disabled={busy} type="button" onClick={() => copyInviteLink(student)} title="Copy sign-in / invite link for student">
-                  <Link2 size={14} />Copy invite link
-                </button>
-                <button className="button danger-icon" disabled={busy} onClick={() => deleteStudent(student)}>
-                  <Trash2 size={14} />Delete account
-                </button>
-              </div>
-            </article>
-          ))}
+
+                {/* Structured Responsive Action Bar */}
+                <div className="student-item-actions">
+                  <div className="student-actions-row-primary">
+                    <button
+                      className="button primary compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setManagingStudentAccess(student)}
+                      title={`Manage course notes, tests, and permissions specifically for ${student.full_name || student.email}`}
+                    >
+                      <ShieldCheck size={13} />
+                      <span>Permissions &amp; Notes</span>
+                    </button>
+
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setNotePrefillStudentId(student.id);
+                        setNoteRecipientType("single");
+                        onNavigate("Notes");
+                        setShowForm(true);
+                      }}
+                      title={`Add a note or Google Drive link specifically for ${student.full_name || student.email}`}
+                    >
+                      <FileText size={13} />
+                      <span>Add Note</span>
+                    </button>
+
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setEditingStudent(student)}
+                      title="Edit student profile and timing"
+                    >
+                      <Pencil size={13} />
+                      <span>Edit Profile</span>
+                    </button>
+                  </div>
+
+                  <div className="student-actions-row-secondary">
+                    <button
+                      className={`button compact ${student.is_approved ? "" : "button-approve-accent"}`}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => approveStudent(student, !student.is_approved)}
+                      title={student.is_approved ? "Suspend student portal access" : "Approve student portal access"}
+                    >
+                      {student.is_approved ? "Suspend Access" : <><Check size={13} /> Approve Access</>}
+                    </button>
+
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => copyInviteLink(student)}
+                      title="Copy sign-in invite link"
+                    >
+                      <Link2 size={13} />
+                      <span>Copy Invite</span>
+                    </button>
+
+                    <button
+                      className="button compact danger-icon"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => deleteStudent(student)}
+                      title="Delete student account"
+                      aria-label="Delete student account"
+                    >
+                      <Trash2 size={13} />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
           {!filteredStudents.length && <div className="card portal-empty"><Users size={22} /><strong>{students.length ? "No students match this filter" : "No student accounts yet"}</strong><span>{students.length ? "Change the search or approval filter." : "Add a student to send a secure sign-in invitation."}</span></div>}
         </section>
       </section>
