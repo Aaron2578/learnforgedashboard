@@ -1348,9 +1348,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       </section>
     </> : view === "Students" ? <>
       <section className="student-admin-summary">
-        <article className="card summary-card"><span>Total students</span><strong>{students.length}</strong><i className="summary-indicator blue" /></article>
-        <article className="card summary-card"><span>Awaiting approval</span><strong>{students.filter((student) => !student.is_approved).length}</strong><i className="summary-indicator amber" /></article>
-        <article className="card summary-card"><span>Approved access</span><strong>{students.filter((student) => student.is_approved).length}</strong><i className="summary-indicator green" /></article>
+        <article className="card summary-card summary-card-total"><span>Total students</span><strong>{students.length}</strong></article>
+        <article className="card summary-card summary-card-pending"><span>Awaiting approval</span><strong>{students.filter((student) => !student.is_approved).length}</strong></article>
+        <article className="card summary-card summary-card-approved"><span>Approved access</span><strong>{students.filter((student) => student.is_approved).length}</strong></article>
       </section>
       <section className="card student-admin-directory">
         <div className="student-admin-toolbar">
