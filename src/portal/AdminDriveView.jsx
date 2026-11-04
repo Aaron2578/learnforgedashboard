@@ -31,6 +31,12 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [courses, setCourses] = useState([]);
   const [downloadRequests, setDownloadRequests] = useState([]);
   const [students, setStudents] = useState({});
+  const [enrollments, setEnrollments] = useState([]);
+  const [materialRecipients, setMaterialRecipients] = useState([]);
+  const [studentsList, setStudentsList] = useState([]);
+  const [formSelectedStudentIds, setFormSelectedStudentIds] = useState([]);
+  const [formStudentSearch, setFormStudentSearch] = useState("");
+  const [recipientOption, setRecipientOption] = useState("all_enrolled");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -74,7 +80,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setError("");
 
     try {
-      const [materialsRes, coursesRes, requestsRes, profilesRes] = await Promise.all([
+      const [materialsRes, coursesRes, requestsRes, profilesRes, enrollmentsRes, materialRecipientsRes] = await Promise.all([
         supabase
           .from("course_materials")
           .select("*")
@@ -89,7 +95,15 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           .order("requested_at", { ascending: false }),
         supabase
           .from("profiles")
-          .select("id, full_name, email"),
+          .select("id, full_name, email, role, is_approved")
+          .order("full_name"),
+        supabase
+          .from("course_enrollments")
+          .select("id, course_id, student_id"),
+        supabase
+          .from("material_recipients")
+          .select("id, material_id, student_id")
+          .then((r) => r.error ? { data: [] } : r),
       ]);
 
       if (materialsRes.error) throw materialsRes.error;
@@ -103,6 +117,10 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       setStudents(
         Object.fromEntries((profilesRes.data || []).map((p) => [p.id, p]))
       );
+      const approvedStudents = (profilesRes.data || []).filter((p) => p.role === "student" && p.is_approved !== false);
+      setStudentsList(approvedStudents);
+      setEnrollments(enrollmentsRes?.data || []);
+      setMaterialRecipients(materialRecipientsRes?.data || []);
     } catch (err) {
       console.error("Error loading drive materials:", err);
       setError(err.message || "Could not load drive files.");
@@ -242,7 +260,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         cleanDriveUrl = rawUrl;
       }
 
-      const { error: insertError } = await supabase.from("course_materials").insert({
+      const { data: insertedMat, error: insertError } = await supabase.from("course_materials").insert({
         title: formTitle.trim(),
         description: formDescription.trim(),
         category: formCategory,
@@ -253,11 +271,47 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         file_type: fileType,
         drive_url: cleanDriveUrl,
         created_by: user?.id || null,
-      });
+      }).select().single();
 
       if (insertError) throw insertError;
 
-      onToast("Material added successfully.");
+      // Determine target student IDs
+      let targetStudentIds = [];
+      if (recipientOption === "custom" && formSelectedStudentIds.length > 0) {
+        targetStudentIds = formSelectedStudentIds;
+      } else if (formCourseId) {
+        const enrolled = enrollments.filter((e) => e.course_id === formCourseId).map((e) => e.student_id);
+        targetStudentIds = enrolled.length > 0 ? enrolled : studentsList.map((s) => s.id);
+      } else {
+        targetStudentIds = studentsList.map((s) => s.id);
+      }
+
+      if (insertedMat?.id && targetStudentIds.length > 0) {
+        const recipientPayloads = targetStudentIds.map((sid) => ({
+          material_id: insertedMat.id,
+          student_id: sid,
+          granted_by: user?.id || null,
+        }));
+        await supabase.from("material_recipients").upsert(recipientPayloads, { onConflict: "material_id,student_id" });
+
+        // Mirror in student_notes so it appears in student's Notes as well
+        const notePayloads = targetStudentIds.map((sid) => ({
+          student_id: sid,
+          course_id: formCourseId || null,
+          title: formTitle.trim(),
+          body: formDescription.trim() || `Course material: ${formTitle.trim()}`,
+          drive_url: cleanDriveUrl || null,
+          material_id: insertedMat.id,
+          created_by: user?.id || null,
+        }));
+        try {
+          await supabase.from("student_notes").insert(notePayloads);
+        } catch (e) {
+          console.warn("Could not insert mirror student_notes:", e);
+        }
+      }
+
+      onToast(`Material added and access granted to ${targetStudentIds.length} student${targetStudentIds.length === 1 ? "" : "s"}.`);
       setShowAddModal(false);
       resetForm();
       await loadData();
@@ -277,6 +331,9 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setFormDriveUrl("");
     setSelectedFile(null);
     setFormSource("upload");
+    setFormSelectedStudentIds([]);
+    setFormStudentSearch("");
+    setRecipientOption("all_enrolled");
   }
 
   async function handleDeleteMaterial(material) {
@@ -550,10 +607,11 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                       )}
                     </div>
 
-                    <div className="material-actions">
+                    <div className="material-actions" style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: "16px", flexWrap: "wrap" }}>
                       <button
                         className="button primary material-preview-btn"
                         type="button"
+                        style={{ flex: 1, minWidth: "140px", padding: "8px 14px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                         onClick={() => handleOpenViewer(item)}
                       >
                         <Eye size={14} />
@@ -566,6 +624,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                           href={item.drive_url}
                           target="_blank"
                           rel="noopener noreferrer"
+                          style={{ padding: "8px 12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
                           title="Open Google Drive or cloud link directly in a new tab"
                         >
                           <ExternalLink size={13} />
@@ -576,6 +635,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                       <button
                         className="button compact"
                         type="button"
+                        style={{ padding: "8px 12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
                         onClick={() => setEditingMaterial(item)}
                         title="Edit material details"
                       >

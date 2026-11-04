@@ -69,6 +69,17 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [sharingNoteRecord, setSharingNoteRecord] = useState(null);
   const [shareTargetStudentId, setShareTargetStudentId] = useState("");
   const [sharingBusy, setSharingBusy] = useState(false);
+  const [noteSelectedStudentIds, setNoteSelectedStudentIds] = useState([]);
+  const [noteStudentSearch, setNoteStudentSearch] = useState("");
+  const [noteFormCourseId, setNoteFormCourseId] = useState("");
+  const [shareSelectedStudentIds, setShareSelectedStudentIds] = useState([]);
+  const [shareStudentSearch, setShareStudentSearch] = useState("");
+
+  useEffect(() => {
+    if (notePrefillStudentId) {
+      setNoteSelectedStudentIds((prev) => Array.from(new Set([...prev, notePrefillStudentId])));
+    }
+  }, [notePrefillStudentId]);
 
   const notesCountByStudent = useMemo(() => {
     const map = {};
@@ -408,9 +419,11 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       return;
     }
 
-    // view === "Notes" - strictly per-student individual note access
-    const selectedStudentId = values.get("student_id") || notePrefillStudentId;
-    const courseId = values.get("course_id") || null;
+    // view === "Notes" - multi-student checkbox access
+    const targetStudentIds = noteSelectedStudentIds.length > 0
+      ? noteSelectedStudentIds
+      : (values.get("student_id") || notePrefillStudentId ? [values.get("student_id") || notePrefillStudentId] : []);
+    const courseId = noteFormCourseId || values.get("course_id") || null;
     const title = String(values.get("title") || "").trim();
     const driveUrl = String(values.get("drive_url") || noteDriveUrl || "").trim();
     let body = String(values.get("body") || "").trim();
@@ -421,8 +434,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       return;
     }
 
-    if (!selectedStudentId) {
-      setError("Please select the student who will receive this note. Each note must be assigned to an individual student.");
+    if (targetStudentIds.length === 0) {
+      setError("Please select at least one student using the checkboxes.");
       setBusy(false);
       return;
     }
@@ -433,28 +446,28 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         : "Class note";
     }
 
-    const payloadWithDrive = {
-      student_id: selectedStudentId,
+    const payloadsWithDrive = targetStudentIds.map((sid) => ({
+      student_id: sid,
       course_id: courseId,
       title,
       body,
       drive_url: driveUrl || null,
       created_by: user.id,
-    };
+    }));
 
-    let { error: insertError } = await supabase.from("student_notes").insert(payloadWithDrive);
+    let { error: insertError } = await supabase.from("student_notes").insert(payloadsWithDrive);
 
     // Fallback if drive_url column not in DB yet
     if (insertError && (insertError.message?.includes("drive_url") || insertError.code === "PGRST204" || insertError.code === "42703")) {
       const bodyWithDrive = driveUrl && !body.includes(driveUrl) ? `${body}\n\nDrive Link: ${driveUrl}` : body;
-      const payloadFallback = {
-        student_id: selectedStudentId,
+      const payloadsFallback = targetStudentIds.map((sid) => ({
+        student_id: sid,
         course_id: courseId,
         title,
         body: bodyWithDrive,
         created_by: user.id,
-      };
-      const retryResult = await supabase.from("student_notes").insert(payloadFallback);
+      }));
+      const retryResult = await supabase.from("student_notes").insert(payloadsFallback);
       insertError = retryResult.error;
     }
 
@@ -465,8 +478,10 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       form.reset();
       setNoteDriveUrl("");
       setNotePrefillStudentId("");
-      const studentName = studentsById[selectedStudentId]?.full_name || studentsById[selectedStudentId]?.email || "Student";
-      onToast(`Note and Drive link saved and permitted for ${studentName}.`);
+      const count = targetStudentIds.length;
+      setNoteSelectedStudentIds([]);
+      setNoteFormCourseId("");
+      onToast(`Note and Drive link saved and permitted for ${count} student${count === 1 ? "" : "s"}!`);
       await loadData();
     }
     setBusy(false);
@@ -622,49 +637,52 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     }
   }
 
-  async function handleShareNoteWithAnotherStudent(noteRecord, targetStudentId) {
-    if (!targetStudentId) return;
+  async function handleShareNoteWithStudents(noteRecord, targetStudentIds) {
+    const ids = Array.isArray(targetStudentIds) ? targetStudentIds : (targetStudentIds ? [targetStudentIds] : []);
+    if (!ids.length) return;
     setSharingBusy(true);
     try {
-      const existing = allStudentNotes.find((n) => n.student_id === targetStudentId && n.title === noteRecord.title);
-      if (existing) {
-        setError(`${studentsById[targetStudentId]?.full_name || "This student"} already has this note permitted.`);
-        setSharingBusy(false);
-        return;
-      }
-      let { error: insErr } = await supabase.from("student_notes").insert({
-        student_id: targetStudentId,
+      const inserts = ids.map((sid) => ({
+        student_id: sid,
         course_id: noteRecord.course_id || null,
         title: noteRecord.title,
         body: noteRecord.body,
         drive_url: noteRecord.drive_url || null,
         material_id: noteRecord.material_id || null,
         created_by: user.id,
-      });
+      }));
+      let { error: insErr } = await supabase.from("student_notes").insert(inserts);
       if (insErr && (insErr.message?.includes("drive_url") || insErr.message?.includes("material_id") || insErr.code === "PGRST204" || insErr.code === "42703")) {
-        await supabase.from("student_notes").insert({
-          student_id: targetStudentId,
+        const fallbackInserts = ids.map((sid) => ({
+          student_id: sid,
           course_id: noteRecord.course_id || null,
           title: noteRecord.title,
           body: noteRecord.body,
           created_by: user.id,
-        });
+        }));
+        await supabase.from("student_notes").insert(fallbackInserts);
       }
       if (noteRecord.material_id) {
-        await supabase.from("material_recipients").upsert({
+        const recipientInserts = ids.map((sid) => ({
           material_id: noteRecord.material_id,
-          student_id: targetStudentId,
-        }, { onConflict: "material_id,student_id" });
+          student_id: sid,
+        }));
+        await supabase.from("material_recipients").upsert(recipientInserts, { onConflict: "material_id,student_id" });
       }
-      onToast(`Note and Drive link granted to ${studentsById[targetStudentId]?.full_name || studentsById[targetStudentId]?.email}.`);
+      onToast(`Note and Drive link granted to ${ids.length} student${ids.length === 1 ? "" : "s"}.`);
       setSharingNoteRecord(null);
       setShareTargetStudentId("");
+      setShareSelectedStudentIds([]);
       await loadData();
     } catch (err) {
       setError(`Could not grant note: ${err.message}`);
     } finally {
       setSharingBusy(false);
     }
+  }
+
+  async function handleShareNoteWithAnotherStudent(noteRecord, targetStudentId) {
+    return handleShareNoteWithStudents(noteRecord, [targetStudentId]);
   }
 
   const filteredStudents = students.filter((student) => {
@@ -978,49 +996,173 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
         </div>
 
-        {notePrefillStudentId && (
-          <div style={{ marginTop: "12px", padding: "8px 12px", background: "#eef2ff", borderRadius: "8px", border: "1px solid #c7d2fe", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: "12.5px", color: "#3730a3" }}>
-              Target Student: <strong>{studentsById[notePrefillStudentId]?.full_name || studentsById[notePrefillStudentId]?.email}</strong>
-            </span>
-            <button
-              type="button"
-              className="text-link"
-              style={{ fontSize: "12px", color: "#4f46e5" }}
-              onClick={() => setNotePrefillStudentId("")}
-            >
-              Change Student
-            </button>
-          </div>
-        )}
-
-        <div className="form-grid-2" style={{ marginTop: "12px" }}>
+        <div style={{ marginTop: "12px" }}>
           <label className="form-field">
-            <span>Assign Note To Student *</span>
+            <span>Linked Course (Optional)</span>
             <select
-              name="student_id"
-              required
-              key={notePrefillStudentId || "empty"}
-              defaultValue={notePrefillStudentId || ""}
+              name="course_id"
+              value={noteFormCourseId}
+              onChange={(e) => {
+                const cid = e.target.value;
+                setNoteFormCourseId(cid);
+                if (cid) {
+                  const enrolled = enrollments.filter((en) => en.course_id === cid).map((en) => en.student_id);
+                  const approvedEnrolled = students.filter((s) => s.is_approved && enrolled.includes(s.id)).map((s) => s.id);
+                  if (approvedEnrolled.length > 0) {
+                    setNoteSelectedStudentIds(approvedEnrolled);
+                  }
+                }
+              }}
             >
-              <option value="" disabled>Choose individual student...</option>
-              {students.filter((student) => student.is_approved).map((student) => (
-                <option key={student.id} value={student.id}>
-                  {student.full_name || student.email} · {student.email}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="form-field">
-            <span>Linked Course (optional)</span>
-            <select name="course_id" defaultValue="">
-              <option value="">No specific course (General / Campus-wide)</option>
+              <option value="">Campus-wide / General (All Courses)</option>
               {courses.map((course) => (
                 <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
               ))}
             </select>
           </label>
+        </div>
+
+        {/* Multi-Student Checkbox Selection */}
+        <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+            <span style={{ fontWeight: 750, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", fontSize: "13.5px" }}>
+              <Users size={16} style={{ color: "#4f46e5" }} />
+              <span>Select Students to Grant Note Access *</span>
+            </span>
+            <span className="badge blue" style={{ fontSize: "11.5px", padding: "3px 8px" }}>
+              {noteSelectedStudentIds.length} student{noteSelectedStudentIds.length === 1 ? "" : "s"} selected
+            </span>
+          </div>
+
+          {/* Quick Actions & Search Filter */}
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px", alignItems: "center" }}>
+            <input
+              type="search"
+              placeholder="Search student by name or email…"
+              value={noteStudentSearch}
+              onChange={(e) => setNoteStudentSearch(e.target.value)}
+              style={{ flex: 1, minWidth: "180px", height: "32px", fontSize: "12px", padding: "0 10px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
+            />
+            <button
+              type="button"
+              className="button compact"
+              style={{ fontSize: "11.5px", height: "32px" }}
+              onClick={() => {
+                const allApproved = students.filter((s) => s.is_approved).map((s) => s.id);
+                setNoteSelectedStudentIds(allApproved);
+              }}
+            >
+              <Check size={12} /> Select All ({students.filter((s) => s.is_approved).length})
+            </button>
+            {noteFormCourseId && (
+              <button
+                type="button"
+                className="button compact"
+                style={{ fontSize: "11.5px", height: "32px" }}
+                onClick={() => {
+                  const enrolled = enrollments.filter((en) => en.course_id === noteFormCourseId).map((en) => en.student_id);
+                  const approvedEnrolled = students.filter((s) => s.is_approved && enrolled.includes(s.id)).map((s) => s.id);
+                  setNoteSelectedStudentIds(approvedEnrolled);
+                }}
+              >
+                <BookOpen size={12} /> Select Enrolled ({coursesById[noteFormCourseId]?.code})
+              </button>
+            )}
+            {noteSelectedStudentIds.length > 0 && (
+              <button
+                type="button"
+                className="button compact"
+                style={{ fontSize: "11.5px", height: "32px", color: "var(--danger)" }}
+                onClick={() => setNoteSelectedStudentIds([])}
+              >
+                Clear Selection
+              </button>
+            )}
+          </div>
+
+          {/* Checkbox List Box */}
+          <div
+            style={{
+              maxHeight: "220px",
+              overflowY: "auto",
+              border: "1px solid var(--line)",
+              borderRadius: "8px",
+              background: "#ffffff",
+              padding: "6px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}
+          >
+            {students
+              .filter((s) => s.is_approved)
+              .filter((s) => {
+                if (!noteStudentSearch.trim()) return true;
+                const q = noteStudentSearch.trim().toLowerCase();
+                return (s.full_name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
+              })
+              .map((student) => {
+                const isChecked = noteSelectedStudentIds.includes(student.id);
+                const isEnrolled = noteFormCourseId
+                  ? enrollments.some((en) => en.course_id === noteFormCourseId && en.student_id === student.id)
+                  : false;
+
+                return (
+                  <label
+                    key={student.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "7px 10px",
+                      borderRadius: "6px",
+                      background: isChecked ? "#eef2ff" : "#ffffff",
+                      border: isChecked ? "1px solid #c7d2fe" : "1px solid transparent",
+                      cursor: "pointer",
+                      userSelect: "none",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setNoteSelectedStudentIds((prev) => [...prev, student.id]);
+                        } else {
+                          setNoteSelectedStudentIds((prev) => prev.filter((id) => id !== student.id));
+                        }
+                      }}
+                      style={{ width: "16px", height: "16px", accentColor: "#4f46e5", cursor: "pointer" }}
+                    />
+                    <span className="student-avatar" style={{ width: "26px", height: "26px", fontSize: "11px" }}>
+                      {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block" }}>
+                          {student.full_name || student.email}
+                        </strong>
+                        <small style={{ fontSize: "11px", color: "var(--muted)" }}>{student.email}</small>
+                      </div>
+                      {isEnrolled && (
+                        <span className="badge blue" style={{ fontSize: "10px", padding: "1px 6px" }}>
+                          Enrolled
+                        </span>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            {students.filter((s) => s.is_approved).length === 0 && (
+              <div style={{ padding: "16px", textAlign: "center", color: "var(--muted)", fontSize: "12px" }}>
+                No approved students found.
+              </div>
+            )}
+          </div>
+          <small className="muted" style={{ display: "block", marginTop: "6px", fontSize: "11.5px" }}>
+            Check the students who should receive access. You do not need to add the note multiple times.
+          </small>
         </div>
 
         <label className="form-field" style={{ marginTop: "12px" }}>
@@ -1613,61 +1755,152 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                         borderRadius: "8px",
                       }}
                     >
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                        <Users size={14} style={{ color: "#166534" }} />
-                        <strong style={{ fontSize: "13px", color: "#166534" }}>
-                          Give this note link to another student (individual access):
-                        </strong>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <Users size={14} style={{ color: "#166534" }} />
+                          <strong style={{ fontSize: "13px", color: "#166534" }}>
+                            Give this note to additional students (check students):
+                          </strong>
+                        </div>
+                        <span className="badge green" style={{ fontSize: "11px" }}>
+                          {shareSelectedStudentIds.length} selected
+                        </span>
                       </div>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
-                        <select
-                          value={shareTargetStudentId}
-                          onChange={(e) => setShareTargetStudentId(e.target.value)}
-                          style={{
-                            flex: 1,
-                            minWidth: "220px",
-                            padding: "6px 10px",
-                            borderRadius: "6px",
-                            border: "1px solid #86efac",
-                            background: "#fff",
-                            fontSize: "12.5px",
+
+                      {/* Quick Select Buttons */}
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "8px", alignItems: "center" }}>
+                        <input
+                          type="search"
+                          placeholder="Filter students…"
+                          value={shareStudentSearch}
+                          onChange={(e) => setShareStudentSearch(e.target.value)}
+                          style={{ flex: 1, minWidth: "150px", height: "30px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid #86efac", background: "#fff" }}
+                        />
+                        <button
+                          type="button"
+                          className="button compact"
+                          style={{ height: "30px", fontSize: "11.5px" }}
+                          onClick={() => {
+                            const eligibleIds = students
+                              .filter((s) => s.is_approved && s.id !== record.student_id)
+                              .map((s) => s.id);
+                            setShareSelectedStudentIds(eligibleIds);
                           }}
                         >
-                          <option value="">Select a student to grant this note link...</option>
-                          {students
-                            .filter((s) => s.is_approved && s.id !== record.student_id)
-                            .map((s) => {
-                              const isEnrolledInCourse = record.course_id
-                                ? enrollments.some((e) => e.course_id === record.course_id && e.student_id === s.id)
-                                : false;
-                              return (
-                                <option key={s.id} value={s.id}>
-                                  {s.full_name || s.email} {isEnrolledInCourse ? `(Enrolled in ${course?.code || "Course"})` : ""}
-                                </option>
-                              );
-                            })}
-                        </select>
+                          Select All
+                        </button>
+                        {record.course_id && (
+                          <button
+                            type="button"
+                            className="button compact"
+                            style={{ height: "30px", fontSize: "11.5px" }}
+                            onClick={() => {
+                              const enrolled = enrollments
+                                .filter((e) => e.course_id === record.course_id && e.student_id !== record.student_id)
+                                .map((e) => e.student_id);
+                              setShareSelectedStudentIds(enrolled);
+                            }}
+                          >
+                            Select Enrolled
+                          </button>
+                        )}
+                        {shareSelectedStudentIds.length > 0 && (
+                          <button
+                            type="button"
+                            className="button compact"
+                            style={{ height: "30px", fontSize: "11.5px" }}
+                            onClick={() => setShareSelectedStudentIds([])}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Scrollable Checkbox List */}
+                      <div
+                        style={{
+                          maxHeight: "150px",
+                          overflowY: "auto",
+                          border: "1px solid #bbf7d0",
+                          borderRadius: "6px",
+                          background: "#fff",
+                          padding: "4px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "3px",
+                          marginBottom: "10px",
+                        }}
+                      >
+                        {students
+                          .filter((s) => s.is_approved && s.id !== record.student_id)
+                          .filter((s) => {
+                            if (!shareStudentSearch.trim()) return true;
+                            const q = shareStudentSearch.trim().toLowerCase();
+                            return (s.full_name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
+                          })
+                          .map((s) => {
+                            const isChecked = shareSelectedStudentIds.includes(s.id);
+                            const isEnrolled = record.course_id
+                              ? enrollments.some((e) => e.course_id === record.course_id && e.student_id === s.id)
+                              : false;
+                            return (
+                              <label
+                                key={s.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  padding: "5px 8px",
+                                  borderRadius: "4px",
+                                  background: isChecked ? "#f0fdf4" : "#ffffff",
+                                  border: isChecked ? "1px solid #86efac" : "1px solid transparent",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setShareSelectedStudentIds((prev) => [...prev, s.id]);
+                                    } else {
+                                      setShareSelectedStudentIds((prev) => prev.filter((id) => id !== s.id));
+                                    }
+                                  }}
+                                  style={{ accentColor: "#16a34a" }}
+                                />
+                                <span style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
+                                  <span style={{ fontWeight: 600, color: "#166534" }}>{s.full_name || s.email}</span>
+                                  {isEnrolled && <span className="badge blue" style={{ fontSize: "9.5px", padding: "1px 5px" }}>Enrolled</span>}
+                                </span>
+                              </label>
+                            );
+                          })}
+                      </div>
+
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                         <button
                           type="button"
                           className="button primary compact"
-                          disabled={!shareTargetStudentId || sharingBusy}
-                          onClick={() => handleShareNoteWithAnotherStudent(record, shareTargetStudentId)}
+                          disabled={shareSelectedStudentIds.length === 0 || sharingBusy}
+                          onClick={() => handleShareNoteWithStudents(record, shareSelectedStudentIds)}
                         >
-                          <Check size={12} /> {sharingBusy ? "Granting…" : "Grant Access"}
+                          <Check size={12} /> {sharingBusy ? "Granting…" : `Grant Access to (${shareSelectedStudentIds.length}) Student${shareSelectedStudentIds.length === 1 ? "" : "s"}`}
                         </button>
                         <button
                           type="button"
                           className="button compact"
                           onClick={() => {
                             setSharingNoteRecord(null);
-                            setShareTargetStudentId("");
+                            setShareSelectedStudentIds([]);
                           }}
                         >
                           Cancel
                         </button>
                       </div>
                       <small style={{ color: "#15803d", display: "block", marginTop: "6px", fontSize: "11.5px" }}>
-                        Access is strictly given to the chosen student. Other students in the same course will remain without access.
+                        Checked students will immediately receive access to this note in their student portal.
                       </small>
                     </div>
                   )}
