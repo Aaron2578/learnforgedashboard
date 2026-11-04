@@ -26,7 +26,7 @@ export default function StudentAccessModal({
   onUnenrollStudent,
   onPreviewDoc,
 }) {
-  const [activeTab, setActiveTab] = useState("courses"); // "courses" | "notes" | "tests"
+  const [activeTab, setActiveTab] = useState("courses"); // "courses" | "notes"
   const [showAddNoteForm, setShowAddNoteForm] = useState(false);
   const [prefilledCourseId, setPrefilledCourseId] = useState("");
   const [manualTitle, setManualTitle] = useState("");
@@ -58,8 +58,17 @@ export default function StudentAccessModal({
       .map((r) => r.material_id)
   );
 
-  // Notes linked directly to student in student_notes
+  // Notes linked directly to this student in student_notes
   const currentStudentNotes = studentNotes.filter((n) => n.student_id === student.id);
+
+  // Deduplicated permitted count
+  const uniquePermittedCount = new Set([
+    ...currentStudentNotes.map((n) => (n.title || "").trim().toLowerCase()),
+    ...Array.from(permittedMaterialIds).map((id) => {
+      const found = materials.find((m) => m.id === id);
+      return (found?.title || id).trim().toLowerCase();
+    }),
+  ]).size;
 
   async function handleCreateManualNote(e) {
     e.preventDefault();
@@ -122,6 +131,9 @@ export default function StudentAccessModal({
     }
   }
 
+  // Campus-wide or unlinked materials
+  const generalMaterials = materials.filter((m) => !m.course_id);
+
   return (
     <div
       className="modal-backdrop"
@@ -129,27 +141,58 @@ export default function StudentAccessModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal" style={{ maxWidth: "880px", width: "95vw", maxHeight: "90vh", overflowY: "auto" }} role="dialog" aria-modal="true">
+      <div className="modal student-access-modal" role="dialog" aria-modal="true">
         {/* Header */}
-        <div className="modal-heading">
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <span className="student-avatar" style={{ width: "44px", height: "44px", fontSize: "16px", flexShrink: 0 }}>
+        <div className="modal-heading" style={{ marginBottom: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: 1 }}>
+            <span
+              style={{
+                width: "44px",
+                height: "44px",
+                fontSize: "17px",
+                fontWeight: 700,
+                color: "#ffffff",
+                background: "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
+                borderRadius: "10px",
+                display: "grid",
+                placeItems: "center",
+                flexShrink: 0,
+                boxShadow: "0 2px 8px rgba(79, 70, 229, 0.25)",
+              }}
+            >
               {(student.full_name || student.email).slice(0, 1).toUpperCase()}
             </span>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <h2 style={{ margin: 0 }}>{student.full_name || "Student"}</h2>
-                <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`} style={{ fontSize: "11px" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0, fontSize: "19px", color: "var(--ink)", fontWeight: 700 }}>
+                  {student.full_name || "Student"}
+                </h2>
+                <span className={`portal-status ${student.is_approved ? "submitted" : "pending"}`} style={{ fontSize: "11px", padding: "2px 8px" }}>
                   {student.is_approved ? "Approved Access" : "Pending"}
                 </span>
               </div>
-              <p style={{ margin: "2px 0 0", fontSize: "13px", color: "var(--muted)" }}>
-                {student.email} · Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
+              <p style={{ margin: "3px 0 0", fontSize: "12.5px", color: "var(--muted)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                {student.email} · Class Timing: <strong style={{ color: "var(--ink)" }}>{student.timing || "10:00 AM - 12:00 PM"}</strong>
               </p>
             </div>
           </div>
-          <button type="button" className="quiet-icon" onClick={onClose} aria-label="Close modal">
-            <X size={18} />
+          <button
+            type="button"
+            className="quiet-icon"
+            onClick={onClose}
+            aria-label="Close modal"
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "8px",
+              border: "1px solid #e2e8f0",
+              background: "#ffffff",
+              display: "grid",
+              placeItems: "center",
+              cursor: "pointer",
+            }}
+          >
+            <X size={16} />
           </button>
         </div>
 
@@ -161,36 +204,36 @@ export default function StudentAccessModal({
         )}
 
         {/* Quick Stats Summary */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", margin: "16px 0" }}>
-          <div style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "10px", margin: "14px 0 18px" }}>
+          <div style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
             <span style={{ fontSize: "12px", color: "var(--muted)", display: "block" }}>Enrolled Courses</span>
-            <strong style={{ fontSize: "18px", color: "var(--ink)" }}>{studentCourses.length}</strong>
+            <strong style={{ fontSize: "20px", color: "var(--ink)", fontWeight: 800 }}>{studentCourses.length}</strong>
           </div>
-          <div style={{ padding: "12px 14px", background: "#f0fdf4", borderRadius: "8px", border: "1px solid #bbf7d0" }}>
+          <div style={{ padding: "12px 14px", background: "#f0fdf4", borderRadius: "10px", border: "1px solid #bbf7d0" }}>
             <span style={{ fontSize: "12px", color: "#166534", display: "block" }}>Permitted Notes &amp; Files</span>
-            <strong style={{ fontSize: "18px", color: "#15803d" }}>
-              {currentStudentNotes.length + permittedMaterialIds.size}
+            <strong style={{ fontSize: "20px", color: "#15803d", fontWeight: 800 }}>
+              {uniquePermittedCount}
             </strong>
           </div>
-          <div style={{ padding: "12px 14px", background: "#eff6ff", borderRadius: "8px", border: "1px solid #bfdbfe" }}>
+          <div style={{ padding: "12px 14px", background: "#eff6ff", borderRadius: "10px", border: "1px solid #bfdbfe" }}>
             <span style={{ fontSize: "12px", color: "#1e40af", display: "block" }}>Permitted Tests</span>
-            <strong style={{ fontSize: "18px", color: "#2563eb" }}>{permittedTestIds.size}</strong>
+            <strong style={{ fontSize: "20px", color: "#2563eb", fontWeight: 800 }}>{permittedTestIds.size}</strong>
           </div>
         </div>
 
-        {/* Action Button: Add Note Manually */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-          <div className="source-toggle-tabs" style={{ margin: 0 }} role="group">
+        {/* Modern Tab Bar + Action Button Row */}
+        <div className="modal-tab-action-bar">
+          <div className="modal-segmented-tabs" role="group">
             <button
               type="button"
-              className={`source-toggle-btn ${activeTab === "courses" ? "active" : ""}`}
+              className={`modal-tab-pill ${activeTab === "courses" ? "active" : ""}`}
               onClick={() => setActiveTab("courses")}
             >
               <BookOpen size={14} /> Course Notes &amp; Tests ({studentCourses.length} Courses)
             </button>
             <button
               type="button"
-              className={`source-toggle-btn ${activeTab === "notes" ? "active" : ""}`}
+              className={`modal-tab-pill ${activeTab === "notes" ? "active" : ""}`}
               onClick={() => setActiveTab("notes")}
             >
               <FileText size={14} /> Student Private Notes ({currentStudentNotes.length})
@@ -199,13 +242,14 @@ export default function StudentAccessModal({
 
           <button
             type="button"
-            className="button primary compact"
+            className={`modal-btn-add-note ${showAddNoteForm ? "close-mode" : ""}`}
             onClick={() => {
               setPrefilledCourseId(studentCourses[0]?.id || "");
               setShowAddNoteForm((prev) => !prev);
             }}
           >
-            <Plus size={13} /> {showAddNoteForm ? "Close Form" : "Add Note Manually"}
+            {showAddNoteForm ? <X size={14} /> : <Plus size={14} />}
+            <span>{showAddNoteForm ? "Close Form" : "Add Note Manually"}</span>
           </button>
         </div>
 
@@ -214,10 +258,10 @@ export default function StudentAccessModal({
           <form
             onSubmit={handleCreateManualNote}
             style={{
-              padding: "16px",
+              padding: "16px 18px",
               background: "#f0f7ff",
               border: "1px solid #bfdbfe",
-              borderRadius: "10px",
+              borderRadius: "12px",
               marginBottom: "20px",
             }}
           >
@@ -226,7 +270,7 @@ export default function StudentAccessModal({
                 <HardDrive size={15} />
               </span>
               <strong style={{ fontSize: "14px", color: "var(--ink)" }}>
-                Add Note Manually for {student.full_name || student.email}
+                Add Note &amp; Permit for {student.full_name || student.email}
               </strong>
             </div>
 
@@ -252,7 +296,7 @@ export default function StudentAccessModal({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Chapter 4 Data Structures Notes"
+                  placeholder="e.g. Full Stack Syllabus / Chapter Notes"
                   value={manualTitle}
                   onChange={(e) => setManualTitle(e.target.value)}
                 />
@@ -263,7 +307,7 @@ export default function StudentAccessModal({
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   <HardDrive size={14} style={{ color: "#4f46e5" }} />
-                  <span>Google Drive Link (Upload via Drive Link)</span>
+                  <span>Google Drive Link (Upload / View in Dashboard)</span>
                 </span>
                 {manualDriveUrl.trim() && (
                   <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "10.5px" }}>
@@ -330,65 +374,92 @@ export default function StudentAccessModal({
         {activeTab === "courses" && (
           <div>
             {studentCourses.map((course) => {
-              const courseMaterials = materials.filter((m) => m.course_id === course.id);
+              // 1. Direct course materials matching course.id
+              const courseDirectMaterials = materials.filter((m) => m.course_id === course.id);
+
+              // 2. All unique course notes created for this course from studentNotes
+              const seenTitles = new Set(courseDirectMaterials.map((m) => m.title.trim().toLowerCase()));
+              const courseNotesFromDB = [];
+
+              for (const n of studentNotes) {
+                const titleKey = n.title?.trim().toLowerCase();
+                const matchesCourse =
+                  n.course_id === course.id ||
+                  (course.code && n.title?.toUpperCase().includes(course.code.toUpperCase()));
+
+                if (matchesCourse && titleKey && !seenTitles.has(titleKey)) {
+                  seenTitles.add(titleKey);
+                  courseNotesFromDB.push({
+                    id: n.material_id || n.id,
+                    title: n.title,
+                    description: n.body,
+                    drive_url: n.drive_url || extractDriveUrl(n.body),
+                    course_id: n.course_id || course.id,
+                    category: n.drive_url || extractDriveUrl(n.body) ? "Google Drive Document" : "Lecture Note",
+                    isFromStudentNotes: true,
+                    sourceNote: n,
+                  });
+                }
+              }
+
+              const courseMaterials = [...courseDirectMaterials, ...courseNotesFromDB];
               const courseTests = assessments.filter((a) => a.course_id === course.id || !a.course_id);
 
               return (
                 <div
                   key={course.id}
                   style={{
-                    border: "1px solid var(--line)",
-                    borderRadius: "10px",
-                    padding: "16px",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "12px",
+                    padding: "18px",
                     marginBottom: "16px",
                     background: "#ffffff",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
                   }}
                 >
                   {/* Course Header */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px", gap: "10px" }}>
                     <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                         <span className="course-code-badge">{course.code}</span>
-                        <h3 style={{ margin: 0, fontSize: "16px" }}>{course.name}</h3>
+                        <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "var(--ink)" }}>{course.name}</h3>
                         {course.department && <span className="course-dept-badge">{course.department}</span>}
                       </div>
-                      <small style={{ color: "var(--muted)", marginTop: "4px", display: "block" }}>
+                      <small style={{ color: "var(--muted)", marginTop: "4px", display: "block", fontSize: "12px" }}>
                         Instructor: {course.instructor || "Faculty TBA"} · Venue: {course.room || "TBA"}
                       </small>
                     </div>
 
                     <button
                       type="button"
-                      className="quiet-icon danger-icon"
-                      style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+                      className="modal-unenroll-btn"
                       onClick={() => onUnenrollStudent(course.id, student.id)}
                       title={`Remove student from ${course.code}`}
                     >
-                      <X size={13} /> Unenroll
+                      <X size={12} /> Unenroll
                     </button>
                   </div>
 
                   {/* Section: Notes Available for this Course */}
-                  <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                      <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
-                        <HardDrive size={14} style={{ color: "#4f46e5" }} />
+                  <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px", flexWrap: "wrap", gap: "8px" }}>
+                      <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
+                        <HardDrive size={15} style={{ color: "#4f46e5" }} />
                         Available Notes &amp; Drive Links ({courseMaterials.length})
                       </span>
                       <button
                         type="button"
-                        className="text-link"
-                        style={{ fontSize: "12px" }}
+                        className="modal-add-sub-btn"
                         onClick={() => {
                           setPrefilledCourseId(course.id);
                           setShowAddNoteForm(true);
                         }}
                       >
-                        + Add note for this student
+                        <Plus size={12} /> Add note for this student
                       </button>
                     </div>
                     <small style={{ color: "var(--muted)", fontSize: "11.5px", display: "block", marginBottom: "10px" }}>
-                      🔒 Individual access only: Permitting or revoking here applies strictly to <strong>{student.full_name || student.email}</strong>. Other students in this course remain unaffected.
+                      🔒 Individual access only: Permitting or revoking here applies strictly to <strong>{student.full_name || student.email}</strong>.
                     </small>
 
                     {courseMaterials.length > 0 ? (
@@ -397,23 +468,21 @@ export default function StudentAccessModal({
                           const isPermitted =
                             permittedMaterialIds.has(mat.id) ||
                             currentStudentNotes.some(
-                              (n) => n.material_id === mat.id || (n.course_id === course.id && n.title === mat.title)
+                              (n) =>
+                                (mat.id && n.material_id === mat.id) ||
+                                (n.course_id === course.id && n.title.trim().toLowerCase() === mat.title.trim().toLowerCase()) ||
+                                (mat.drive_url && (n.drive_url === mat.drive_url || (n.body && n.body.includes(mat.drive_url))))
                             );
                           const isBusy = togglingId === `note-${mat.id}`;
-                          const docType = mat.drive_url ? getDriveDocTypeLabel(mat.drive_url) : "PDF";
+                          const docType = mat.drive_url ? getDriveDocTypeLabel(mat.drive_url) : "Lecture Note";
 
                           return (
                             <div
                               key={mat.id}
+                              className="modal-resource-row"
                               style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                padding: "10px 12px",
                                 background: isPermitted ? "#f0fdf4" : "#f8fafc",
                                 border: `1px solid ${isPermitted ? "#bbf7d0" : "#e2e8f0"}`,
-                                borderRadius: "8px",
-                                gap: "10px",
                               }}
                             >
                               <div style={{ minWidth: 0, flex: 1 }}>
@@ -422,43 +491,34 @@ export default function StudentAccessModal({
                                   <span className="badge-view-only" style={{ fontSize: "10.5px" }}>{mat.category || docType}</span>
                                 </div>
                                 {mat.drive_url && (
-                                  <small style={{ color: "var(--muted)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", display: "block" }}>
+                                  <small style={{ color: "var(--muted)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", display: "block", marginTop: "2px", fontSize: "11.5px" }}>
                                     Drive: {mat.drive_url}
                                   </small>
                                 )}
                               </div>
 
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                              <div className="modal-resource-actions">
                                 {mat.drive_url && (
                                   <button
                                     type="button"
                                     className="button compact"
                                     onClick={() => onPreviewDoc(mat.title, `${course.code} · ${course.name}`, mat.drive_url)}
                                     title="Preview note document"
+                                    style={{ height: "30px", width: "32px", padding: 0, display: "grid", placeItems: "center" }}
                                   >
-                                    <Eye size={12} />
+                                    <Eye size={13} />
                                   </button>
                                 )}
 
-                                <span
-                                  style={{
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    padding: "3px 8px",
-                                    borderRadius: "12px",
-                                    background: isPermitted ? "#dcfce7" : "#f1f5f9",
-                                    color: isPermitted ? "#15803d" : "#64748b",
-                                  }}
-                                >
-                                  {isPermitted ? "✓ Permitted to Student" : "Locked (No Access)"}
+                                <span className={`modal-status-pill ${isPermitted ? "permitted" : "locked"}`}>
+                                  {isPermitted ? "✓ Permitted" : "Locked (No Access)"}
                                 </span>
 
                                 <button
                                   type="button"
-                                  className={`button compact ${isPermitted ? "danger-outline" : "primary"}`}
+                                  className={isPermitted ? "modal-btn-revoke" : "modal-btn-permit"}
                                   disabled={isBusy}
                                   onClick={() => handleToggleNote(mat, isPermitted)}
-                                  style={{ minWidth: "125px", justifyContent: "center" }}
                                 >
                                   {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Permit for Student"}
                                 </button>
@@ -469,15 +529,15 @@ export default function StudentAccessModal({
                       </div>
                     ) : (
                       <p style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic", margin: "4px 0" }}>
-                        No course notes uploaded yet for this course. Click "+ Add note for this course" to create one.
+                        No course notes uploaded yet for this course. Click "+ Add note for this student" above to create one.
                       </p>
                     )}
                   </div>
 
                   {/* Section: Tests Available for this Course */}
-                  <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
-                    <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                      <ClipboardList size={14} style={{ color: "#0284c7" }} />
+                  <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "14px" }}>
+                    <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                      <ClipboardList size={15} style={{ color: "#0284c7" }} />
                       Available Tests for this Course ({courseTests.length})
                     </span>
 
@@ -490,44 +550,29 @@ export default function StudentAccessModal({
                           return (
                             <div
                               key={test.id}
+                              className="modal-resource-row"
                               style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                padding: "10px 12px",
                                 background: isPermitted ? "#f0fdf4" : "#f8fafc",
                                 border: `1px solid ${isPermitted ? "#bbf7d0" : "#e2e8f0"}`,
-                                borderRadius: "8px",
-                                gap: "10px",
                               }}
                             >
                               <div style={{ minWidth: 0, flex: 1 }}>
                                 <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>{test.title}</strong>
-                                <small style={{ color: "var(--muted)" }}>
+                                <small style={{ color: "var(--muted)", fontSize: "11.5px" }}>
                                   {test.description ? `${test.description.slice(0, 70)}…` : "Online Test / Assessment"}
                                 </small>
                               </div>
 
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-                                <span
-                                  style={{
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    padding: "3px 8px",
-                                    borderRadius: "12px",
-                                    background: isPermitted ? "#dcfce7" : "#f1f5f9",
-                                    color: isPermitted ? "#15803d" : "#64748b",
-                                  }}
-                                >
-                                  {isPermitted ? "✓ Permitted to Student" : "Locked (No Access)"}
+                              <div className="modal-resource-actions">
+                                <span className={`modal-status-pill ${isPermitted ? "permitted" : "locked"}`}>
+                                  {isPermitted ? "✓ Permitted" : "Locked (No Access)"}
                                 </span>
 
                                 <button
                                   type="button"
-                                  className={`button compact ${isPermitted ? "danger-outline" : "primary"}`}
+                                  className={isPermitted ? "modal-btn-revoke" : "modal-btn-permit"}
                                   disabled={isBusy}
                                   onClick={() => handleToggleTest(test, isPermitted)}
-                                  style={{ minWidth: "125px", justifyContent: "center" }}
                                 >
                                   {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Permit for Student"}
                                 </button>
@@ -546,27 +591,81 @@ export default function StudentAccessModal({
               );
             })}
 
+            {/* Campus-wide / General Materials Section if present */}
+            {generalMaterials.length > 0 && (
+              <div
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  marginBottom: "16px",
+                  background: "#ffffff",
+                }}
+              >
+                <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                  <HardDrive size={15} style={{ color: "#10b981" }} />
+                  Campus-wide Study Materials &amp; Guides ({generalMaterials.length})
+                </span>
+                <div style={{ display: "grid", gap: "8px" }}>
+                  {generalMaterials.map((mat) => {
+                    const isPermitted = permittedMaterialIds.has(mat.id);
+                    const isBusy = togglingId === `note-${mat.id}`;
+
+                    return (
+                      <div
+                        key={mat.id}
+                        className="modal-resource-row"
+                        style={{
+                          background: isPermitted ? "#f0fdf4" : "#f8fafc",
+                          border: `1px solid ${isPermitted ? "#bbf7d0" : "#e2e8f0"}`,
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>{mat.title}</strong>
+                          <span className="badge-view-only" style={{ fontSize: "10.5px", marginLeft: "6px" }}>{mat.category || "General"}</span>
+                        </div>
+                        <div className="modal-resource-actions">
+                          <span className={`modal-status-pill ${isPermitted ? "permitted" : "locked"}`}>
+                            {isPermitted ? "✓ Permitted" : "Locked (No Access)"}
+                          </span>
+                          <button
+                            type="button"
+                            className={isPermitted ? "modal-btn-revoke" : "modal-btn-permit"}
+                            disabled={isBusy}
+                            onClick={() => handleToggleNote(mat, isPermitted)}
+                          >
+                            {isBusy ? "Updating…" : isPermitted ? "Revoke Access" : "Permit for Student"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* If Student is not enrolled in any course */}
             {!studentCourses.length && (
               <div className="card portal-empty" style={{ padding: "24px", background: "#f8fafc" }}>
                 <BookOpen size={24} />
                 <strong>No courses enrolled yet</strong>
-                <span>When you enroll this student in a course, the course's available notes and tests will appear here ready to permit.</span>
+                <span>Enroll this student in a course below to view available notes and tests ready to permit.</span>
               </div>
             )}
 
             {/* Quick Course Enrollment Section */}
             {availableToEnrollCourses.length > 0 && (
-              <div style={{ marginTop: "16px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
-                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--ink)", display: "block", marginBottom: "8px" }}>
+              <div className="modal-enroll-box">
+                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                  <GraduationCap size={15} style={{ color: "#4f46e5" }} />
                   Enroll {student.full_name || student.email} in a Course:
                 </span>
-                <div style={{ display: "flex", gap: "8px" }}>
+                <div className="modal-enroll-controls">
                   <select
                     value={selectedEnrollCourse}
                     onChange={(e) => setSelectedEnrollCourse(e.target.value)}
                     className="status-select"
-                    style={{ flex: 1 }}
+                    style={{ flex: 1, height: "40px", borderRadius: "8px" }}
                   >
                     <option value="">Select a course to enroll…</option>
                     {availableToEnrollCourses.map((c) => (
@@ -577,7 +676,7 @@ export default function StudentAccessModal({
                   </select>
                   <button
                     type="button"
-                    className="button primary"
+                    className="modal-btn-enroll"
                     disabled={!selectedEnrollCourse || enrolling}
                     onClick={async () => {
                       if (!selectedEnrollCourse) return;
@@ -588,7 +687,7 @@ export default function StudentAccessModal({
                       setNotice("Student enrolled in course! Available course notes and tests are ready.");
                     }}
                   >
-                    <Plus size={14} /> Enroll
+                    <Plus size={14} /> {enrolling ? "Enrolling…" : "Enroll"}
                   </button>
                 </div>
               </div>
@@ -611,16 +710,16 @@ export default function StudentAccessModal({
                     <div
                       key={note.id}
                       style={{
-                        padding: "14px",
+                        padding: "14px 16px",
                         background: "#ffffff",
-                        border: "1px solid var(--line)",
+                        border: "1px solid #e2e8f0",
                         borderRadius: "10px",
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
                         <div>
                           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                            <strong style={{ fontSize: "15px", color: "var(--ink)" }}>{note.title}</strong>
+                            <strong style={{ fontSize: "15px", color: "var(--ink)", fontWeight: 700 }}>{note.title}</strong>
                             {linkedCourse && <span className="course-code-badge">{linkedCourse.code}</span>}
                             {driveUrl && (
                               <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
@@ -628,18 +727,18 @@ export default function StudentAccessModal({
                               </span>
                             )}
                           </div>
-                          <small style={{ color: "var(--muted)", display: "block", marginTop: "2px" }}>
+                          <small style={{ color: "var(--muted)", display: "block", marginTop: "3px", fontSize: "12px" }}>
                             Added {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(note.created_at))}
                           </small>
                         </div>
 
                         <button
                           type="button"
-                          className="quiet-icon danger-icon"
+                          className="modal-unenroll-btn"
                           onClick={() => onDeleteManualNote(note.id)}
                           title="Delete note"
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={13} /> Delete
                         </button>
                       </div>
 
@@ -650,7 +749,7 @@ export default function StudentAccessModal({
                       )}
 
                       {driveUrl && (
-                        <div style={{ marginTop: "10px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <div style={{ marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
                           <button
                             type="button"
                             className="button primary compact"
@@ -672,7 +771,7 @@ export default function StudentAccessModal({
                 })}
               </div>
             ) : (
-              <div className="card portal-empty" style={{ padding: "24px" }}>
+              <div className="card portal-empty" style={{ padding: "24px", background: "#f8fafc" }}>
                 <FileText size={24} />
                 <strong>No private notes added yet</strong>
                 <span>Click "Add Note Manually" above to write or upload a Google Drive note specifically for this student.</span>
@@ -681,13 +780,13 @@ export default function StudentAccessModal({
           </div>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "20px" }}>
-          <button type="button" className="button" onClick={onClose}>
-            Close
+        {/* Modal Footer */}
+        <div className="modal-footer-bar">
+          <button type="button" className="modal-btn-close" onClick={onClose}>
+            <X size={14} /> Close
           </button>
         </div>
       </div>
     </div>
   );
 }
-

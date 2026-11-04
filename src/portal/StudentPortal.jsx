@@ -65,6 +65,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [downloadRequests, setDownloadRequests] = useState([]);
   const [permittedMaterialIds, setPermittedMaterialIds] = useState(() => new Set());
   const [permittedAssessmentIds, setPermittedAssessmentIds] = useState(() => new Set());
+  const [enrolledCourseIds, setEnrolledCourseIds] = useState(() => new Set());
   const [viewingDocument, setViewingDocument] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [attempts, setAttempts] = useState([]);
@@ -130,6 +131,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       requestResult,
       materialRecipientsResult,
       assessmentRecipientsResult,
+      enrollmentResult,
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
@@ -144,6 +146,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       supabase.from("download_requests").select("*").eq("student_id", user.id),
       materialRecipientsQuery,
       assessmentRecipientsQuery,
+      supabase.from("course_enrollments").select("course_id").eq("student_id", user.id).then((r) => (r.error ? { data: [] } : r)),
     ]);
     const failed = [assignmentResult, submissionResult, testResult, attemptResult, conversationResult, courseResult, noteResult, attendanceResult, notificationResult, materialResult, requestResult].find((result) => result.error);
     if (failed) {
@@ -180,6 +183,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     setDownloadRequests(requestResult.data ?? []);
     setPermittedMaterialIds(new Set((materialRecipientsResult?.data ?? []).map((r) => r.material_id)));
     setPermittedAssessmentIds(new Set((assessmentRecipientsResult?.data ?? []).map((r) => r.assessment_id)));
+    setEnrolledCourseIds(new Set((enrollmentResult?.data ?? []).map((r) => r.course_id)));
     setQuestions(questionResult.data ?? []);
     setAttempts(attemptResult.data ?? []);
     setConversations(loadedConversations);
@@ -653,8 +657,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderMaterials() {
-    const filtered = materials.filter((item) => {
-      // Strictly per-student: only display materials explicitly permitted to this student individually
+    // 1. Direct course materials permitted to this student
+    const directMaterials = materials.filter((item) => {
       const isPermitted = permittedMaterialIds.has(item.id);
       if (!isPermitted) return false;
       const course = coursesById[item.course_id];
@@ -662,6 +666,46 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         .toLowerCase()
         .includes(query.trim().toLowerCase());
     });
+
+    // 2. Also include any Google Drive attachments from student's notes
+    const noteDriveItems = notes
+      .filter((n) => n.drive_url || extractDriveUrl(n.body))
+      .map((n) => {
+        const driveUrl = n.drive_url || extractDriveUrl(n.body);
+        return {
+          id: `note-${n.id}`,
+          title: n.title,
+          description: cleanNoteBody(n.body, driveUrl),
+          category: getDriveDocTypeLabel(driveUrl),
+          course_id: n.course_id,
+          drive_url: driveUrl,
+          created_at: n.created_at,
+          file_size: 0,
+          isFromNotes: true,
+        };
+      });
+
+    const seenUrls = new Set();
+    const filtered = [];
+
+    for (const m of directMaterials) {
+      if (m.drive_url) seenUrls.add(m.drive_url.trim().toLowerCase());
+      filtered.push(m);
+    }
+
+    for (const nd of noteDriveItems) {
+      const u = nd.drive_url?.trim().toLowerCase();
+      if (!u || !seenUrls.has(u)) {
+        if (u) seenUrls.add(u);
+        const course = coursesById[nd.course_id];
+        const match = `${nd.title} ${nd.description || ""} ${nd.category} ${course?.name ?? ""} ${course?.code ?? ""}`
+          .toLowerCase()
+          .includes(query.trim().toLowerCase());
+        if (match) {
+          filtered.push(nd);
+        }
+      }
+    }
 
     return (
       <section className="portal-materials-section">
@@ -767,7 +811,9 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderCourses() {
-    const filtered = courses.filter((course) => {
+    // Only display courses the student is actually enrolled in (fallback to all if no enrollments recorded yet)
+    const activeCourses = enrolledCourseIds.size > 0 ? courses.filter((c) => enrolledCourseIds.has(c.id)) : courses;
+    const filtered = activeCourses.filter((course) => {
       const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
       return search.includes(query.trim().toLowerCase());
     });

@@ -537,27 +537,51 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
   async function handlePermitNoteForStudent(material, studentId) {
     try {
-      await supabase.from("material_recipients").upsert({ material_id: material.id, student_id: studentId }, { onConflict: "material_id,student_id" });
-      const existing = allStudentNotes.find((n) => n.student_id === studentId && (n.material_id === material.id || n.title === material.title));
-      if (!existing) {
-        let { error: insertErr } = await supabase.from("student_notes").insert({
-          student_id: studentId,
-          course_id: material.course_id,
-          title: material.title,
-          body: material.description || `Course study material: ${material.title}`,
-          drive_url: material.drive_url || null,
-          material_id: material.id,
-          created_by: user.id,
-        });
-        if (insertErr && (insertErr.message?.includes("drive_url") || insertErr.message?.includes("material_id") || insertErr.code === "PGRST204" || insertErr.code === "42703")) {
-          const bodyWithDrive = material.drive_url ? `${material.description || ""}\n\nDrive Link: ${material.drive_url}`.trim() : (material.description || "Course note");
-          await supabase.from("student_notes").insert({
+      if (material.isFromStudentNotes && material.sourceNote) {
+        const existing = allStudentNotes.find((n) => n.student_id === studentId && n.title.trim().toLowerCase() === material.title.trim().toLowerCase());
+        if (!existing) {
+          let { error: insertErr } = await supabase.from("student_notes").insert({
             student_id: studentId,
-            course_id: material.course_id,
+            course_id: material.course_id || null,
             title: material.title,
-            body: bodyWithDrive,
+            body: material.sourceNote.body || material.description || `Course study material: ${material.title}`,
+            drive_url: material.drive_url || null,
+            material_id: material.sourceNote.material_id || null,
             created_by: user.id,
           });
+          if (insertErr && (insertErr.message?.includes("drive_url") || insertErr.code === "PGRST204" || insertErr.code === "42703")) {
+            await supabase.from("student_notes").insert({
+              student_id: studentId,
+              course_id: material.course_id || null,
+              title: material.title,
+              body: material.sourceNote.body || material.description || `Course study material: ${material.title}`,
+              created_by: user.id,
+            });
+          }
+        }
+      } else {
+        await supabase.from("material_recipients").upsert({ material_id: material.id, student_id: studentId }, { onConflict: "material_id,student_id" });
+        const existing = allStudentNotes.find((n) => n.student_id === studentId && (n.material_id === material.id || n.title.trim().toLowerCase() === material.title.trim().toLowerCase()));
+        if (!existing) {
+          let { error: insertErr } = await supabase.from("student_notes").insert({
+            student_id: studentId,
+            course_id: material.course_id || null,
+            title: material.title,
+            body: material.description || `Course study material: ${material.title}`,
+            drive_url: material.drive_url || null,
+            material_id: material.id,
+            created_by: user.id,
+          });
+          if (insertErr && (insertErr.message?.includes("drive_url") || insertErr.message?.includes("material_id") || insertErr.code === "PGRST204" || insertErr.code === "42703")) {
+            const bodyWithDrive = material.drive_url ? `${material.description || ""}\n\nDrive Link: ${material.drive_url}`.trim() : (material.description || "Course note");
+            await supabase.from("student_notes").insert({
+              student_id: studentId,
+              course_id: material.course_id || null,
+              title: material.title,
+              body: bodyWithDrive,
+              created_by: user.id,
+            });
+          }
         }
       }
       onToast(`Note "${material.title}" permitted for student.`);
@@ -569,7 +593,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
   async function handleRevokeNoteForStudent(material, studentId) {
     try {
-      await supabase.from("material_recipients").delete().eq("material_id", material.id).eq("student_id", studentId);
+      if (material.id && !material.isFromStudentNotes) {
+        await supabase.from("material_recipients").delete().eq("material_id", material.id).eq("student_id", studentId);
+      }
       await supabase.from("student_notes").delete().eq("student_id", studentId).eq("title", material.title);
       onToast(`Access to "${material.title}" revoked.`);
       await loadData();
