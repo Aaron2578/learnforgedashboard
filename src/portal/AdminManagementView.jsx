@@ -9,6 +9,7 @@ import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import ManageNoteAccessModal from "../components/ManageNoteAccessModal";
 import { parseNoteAttachment, formatNoteBodyWithAttachment, uploadNotePdfToStorage } from "../lib/noteAttachments.js";
 
 const headings = {
@@ -55,6 +56,15 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [viewingAttachment, setViewingAttachment] = useState(null);
   const [copiedNoteId, setCopiedNoteId] = useState(null);
 
+  // Notes student checkboxes & access management
+  const [selectedNoteStudentIds, setSelectedNoteStudentIds] = useState([]);
+  const [selectedNoteCourseId, setSelectedNoteCourseId] = useState("");
+  const [noteStudentSearch, setNoteStudentSearch] = useState("");
+  const [managingAccessNote, setManagingAccessNote] = useState(null);
+  const [noteFilterTab, setNoteFilterTab] = useState("all"); // 'all' | 'drive'
+  const [noteStudentFilter, setNoteStudentFilter] = useState("all");
+  const [notesViewMode, setNotesViewMode] = useState("grouped"); // 'grouped' | 'individual'
+
   function copyNoteLink(id, url) {
     if (!url) return;
     navigator.clipboard?.writeText(url).then(() => {
@@ -62,6 +72,45 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       onToast?.("Note link copied to clipboard.");
       setTimeout(() => setCopiedNoteId(null), 2500);
     });
+  }
+
+  async function saveManagedAccess(noteGroup, newStudentIds) {
+    setBusy(true);
+    setError("");
+    try {
+      const existingRecords = noteGroup.records || [noteGroup];
+      const existingStudentIds = existingRecords.map((r) => r.student_id);
+      const toAdd = newStudentIds.filter((id) => !existingStudentIds.includes(id));
+      const toRemove = existingStudentIds.filter((id) => !newStudentIds.includes(id));
+
+      if (toAdd.length > 0) {
+        const newRecords = toAdd.map((studentId) => ({
+          student_id: studentId,
+          course_id: noteGroup.course_id || null,
+          title: noteGroup.title,
+          body: noteGroup.body,
+          created_by: user.id,
+        }));
+        const { error: insertError } = await supabase.from("student_notes").insert(newRecords);
+        if (insertError) throw insertError;
+      }
+
+      if (toRemove.length > 0) {
+        const idsToDelete = existingRecords
+          .filter((r) => toRemove.includes(r.student_id))
+          .map((r) => r.id);
+        const { error: deleteError } = await supabase.from("student_notes").delete().in("id", idsToDelete);
+        if (deleteError) throw deleteError;
+      }
+
+      onToast(`Student access updated for “${noteGroup.title}”.`);
+      setManagingAccessNote(null);
+      await loadData();
+    } catch (err) {
+      setError(`Could not update note access: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const loadData = useCallback(async (forceLoading = false) => {
@@ -415,30 +464,51 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       }
     }
 
-    const payload = isAttendance ? {
-      student_id: values.get("student_id"),
-      course_id: values.get("course_id") || null,
-      attendance_date: values.get("attendance_date"),
-      status: values.get("status"),
-      note: String(values.get("note")).trim(),
-      created_by: user.id,
-    } : {
-      student_id: values.get("student_id"),
-      course_id: values.get("course_id") || null,
-      title: String(values.get("title")).trim(),
-      body: finalBody,
-      created_by: user.id,
-    };
-    const { error: insertError } = await supabase.from(table).insert(payload);
-    if (insertError) setError(insertError.message);
-    else {
-      setShowForm(false);
-      form.reset();
-      setNoteAttachmentType("none");
-      setNotePdfFile(null);
-      setNoteDriveLink("");
-      onToast(isAttendance ? "Attendance recorded." : "Private student note saved with attachment.");
-      await loadData();
+    if (!isAttendance) {
+      if (selectedNoteStudentIds.length === 0) {
+        setError("Please check at least one student in the checkbox list to grant access.");
+        setBusy(false);
+        return;
+      }
+      const payloads = selectedNoteStudentIds.map((studentId) => ({
+        student_id: studentId,
+        course_id: values.get("course_id") || null,
+        title: String(values.get("title")).trim(),
+        body: finalBody,
+        created_by: user.id,
+      }));
+      const { error: insertError } = await supabase.from(table).insert(payloads);
+      if (insertError) {
+        setError(insertError.message);
+      } else {
+        setShowForm(false);
+        form.reset();
+        setSelectedNoteStudentIds([]);
+        setSelectedNoteCourseId("");
+        setNoteAttachmentType("none");
+        setNotePdfFile(null);
+        setNoteDriveLink("");
+        onToast(`Private note granted to ${payloads.length} student${payloads.length > 1 ? "s" : ""} without duplicate creation.`);
+        await loadData();
+      }
+    } else {
+      const payload = {
+        student_id: values.get("student_id"),
+        course_id: values.get("course_id") || null,
+        attendance_date: values.get("attendance_date"),
+        status: values.get("status"),
+        note: String(values.get("note")).trim(),
+        created_by: user.id,
+      };
+      const { error: insertError } = await supabase.from(table).insert(payload);
+      if (insertError) {
+        setError(insertError.message);
+      } else {
+        setShowForm(false);
+        form.reset();
+        onToast("Attendance recorded.");
+        await loadData();
+      }
     }
     setBusy(false);
   }
@@ -723,8 +793,138 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     </form>}
     {showForm && (view === "Attendance" || view === "Notes") && <form className="card admin-create-form" onSubmit={createRecord}>
       <div className="panel-heading"><div><h2>{view === "Attendance" ? "Record attendance" : "Write a student note"}</h2><p>{view === "Attendance" ? "Attendance is private to the student and administrators." : "Only this student and administrators can view the note."}</p></div></div>
-      <label className="form-field"><span>Student</span><select name="student_id" required defaultValue=""><option value="" disabled>Select a student</option>{students.filter((student) => student.is_approved).map((student) => <option key={student.id} value={student.id}>{student.full_name || student.email} · {student.email}</option>)}</select></label>
-      <label className="form-field"><span>Course (optional)</span><select name="course_id" defaultValue=""><option value="">No course</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.name}</option>)}</select></label>
+      {view === "Attendance" ? (
+        <label className="form-field">
+          <span>Student *</span>
+          <select name="student_id" required defaultValue="">
+            <option value="" disabled>Select a student</option>
+            {students.filter((student) => student.is_approved).map((student) => (
+              <option key={student.id} value={student.id}>
+                {student.full_name || student.email} · {student.email}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <fieldset className="admin-options" style={{ marginTop: "8px", marginBottom: "14px" }}>
+          <legend style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+            <span>Grant Note Access to Students *</span>
+            <small style={{ fontWeight: "700", color: selectedNoteStudentIds.length ? "var(--blue)" : "var(--muted)" }}>
+              ✓ {selectedNoteStudentIds.length} of {students.filter(s => s.is_approved).length} students selected
+            </small>
+          </legend>
+
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "10px" }}>
+            <button
+              type="button"
+              className="button compact"
+              onClick={() => setSelectedNoteStudentIds(students.filter(s => s.is_approved).map(s => s.id))}
+              style={{ fontSize: "12px", height: "30px" }}
+            >
+              Select All ({students.filter(s => s.is_approved).length})
+            </button>
+            <button
+              type="button"
+              className="button compact"
+              onClick={() => setSelectedNoteStudentIds([])}
+              style={{ fontSize: "12px", height: "30px" }}
+            >
+              Clear All
+            </button>
+            {selectedNoteCourseId && (
+              <button
+                type="button"
+                className="button compact primary"
+                onClick={() => {
+                  const enrolledIds = enrollments
+                    .filter((e) => e.course_id === selectedNoteCourseId)
+                    .map((e) => e.student_id);
+                  setSelectedNoteStudentIds((prev) => Array.from(new Set([...prev, ...enrolledIds])));
+                }}
+                style={{ fontSize: "12px", height: "30px" }}
+              >
+                Select Students Enrolled in this Course
+              </button>
+            )}
+            <input
+              type="search"
+              placeholder="Search students..."
+              value={noteStudentSearch}
+              onChange={(e) => setNoteStudentSearch(e.target.value)}
+              style={{ marginLeft: "auto", maxWidth: "200px", height: "30px", fontSize: "12px" }}
+            />
+          </div>
+
+          <div style={{ maxHeight: "200px", overflowY: "auto", display: "grid", gap: "6px", paddingRight: "4px" }}>
+            {students
+              .filter((s) => s.is_approved)
+              .filter((s) => !noteStudentSearch.trim() || `${s.full_name} ${s.email}`.toLowerCase().includes(noteStudentSearch.trim().toLowerCase()))
+              .map((student) => {
+                const isChecked = selectedNoteStudentIds.includes(student.id);
+                const studentCourses = enrollments
+                  .filter((e) => e.student_id === student.id)
+                  .map((e) => coursesById[e.course_id]?.code)
+                  .filter(Boolean);
+
+                return (
+                  <label
+                    className="admin-option"
+                    key={student.id}
+                    style={{
+                      cursor: "pointer",
+                      background: isChecked ? "var(--blue-soft, #eef2ff)" : "#ffffff",
+                      borderColor: isChecked ? "var(--blue, #4f46e5)" : "var(--line, #e2e8f0)",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedNoteStudentIds((prev) => [...prev, student.id]);
+                        } else {
+                          setSelectedNoteStudentIds((prev) => prev.filter((id) => id !== student.id));
+                        }
+                      }}
+                    />
+                    <span style={{ fontWeight: isChecked ? "700" : "500" }}>
+                      {student.full_name || student.email}
+                    </span>
+                    <small>{student.email}</small>
+                    {studentCourses.length > 0 && (
+                      <span style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
+                        {studentCourses.slice(0, 2).map((c) => (
+                          <span key={c} className="badge blue" style={{ fontSize: "10px", padding: "1px 6px" }}>{c}</span>
+                        ))}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            {!students.some((student) => student.is_approved) && (
+              <p style={{ color: "var(--muted)", fontStyle: "italic", padding: "8px" }}>
+                No approved students available. Approve students in Students tab first.
+              </p>
+            )}
+          </div>
+        </fieldset>
+      )}
+
+      <label className="form-field">
+        <span>Course (optional)</span>
+        <select
+          name="course_id"
+          defaultValue=""
+          onChange={(e) => setSelectedNoteCourseId(e.target.value)}
+        >
+          <option value="">No course</option>
+          {courses.map((course) => (
+            <option key={course.id} value={course.id}>
+              {course.code} · {course.name}
+            </option>
+          ))}
+        </select>
+      </label>
       {view === "Attendance" ? <>
         <label className="form-field"><span>Date</span><input name="attendance_date" type="date" required defaultValue={attendancePrefillDate || new Date().toISOString().slice(0, 10)} /></label>
         <label className="form-field"><span>Status</span><select name="status" defaultValue="present"><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option></select></label>
@@ -1094,94 +1294,272 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           setShowForm(true);
         }}
       />
-    ) : <section className="admin-work-list">
-      {records.map((record) => {
-        const { text: cleanBody, attachmentUrl, attachmentName, isDrive, isPdf } = parseNoteAttachment(record.body);
+    ) : (() => {
+      // Group records by title + body + course_id so identical notes don't duplicate
+      const groupsMap = new Map();
+      records.forEach((record) => {
+        const { isDrive } = parseNoteAttachment(record.body);
+        const groupKey = `${record.title.trim().toLowerCase()}:::${record.course_id || ""}:::${record.body.trim()}`;
+        if (!groupsMap.has(groupKey)) {
+          groupsMap.set(groupKey, {
+            id: record.id,
+            key: groupKey,
+            title: record.title,
+            body: record.body,
+            course_id: record.course_id,
+            created_at: record.created_at,
+            isDrive,
+            records: [record],
+            studentIds: [record.student_id],
+          });
+        } else {
+          const g = groupsMap.get(groupKey);
+          g.records.push(record);
+          if (!g.studentIds.includes(record.student_id)) {
+            g.studentIds.push(record.student_id);
+          }
+        }
+      });
+      const allGroups = Array.from(groupsMap.values());
+      const driveGroupsCount = allGroups.filter((g) => g.isDrive).length;
+
+      // Filter groups
+      const filteredGroups = allGroups.filter((g) => {
+        if (noteFilterTab === "drive" && !g.isDrive) return false;
+        if (noteStudentFilter !== "all" && !g.studentIds.includes(noteStudentFilter)) return false;
+        if (!query.trim()) return true;
+        const term = query.trim().toLowerCase();
+        const course = coursesById[g.course_id];
         return (
-          <article className="card admin-assignment-card" key={record.id}>
-            <div className="panel-heading">
-              <div className="admin-assignment-title" style={{ width: "100%" }}>
-                <span className="portal-item-icon assignment"><GraduationCap size={16} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
-                    <h2>{record.title}</h2>
-                    <div className="heading-actions" style={{ margin: 0 }}>
-                      <button className="button compact" type="button" onClick={() => setEditingRecord(record)}>
-                        <Pencil size={13} /> Edit
-                      </button>
-                      <button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note">
-                        <Trash2 size={15} />
-                      </button>
+          g.title.toLowerCase().includes(term) ||
+          g.body.toLowerCase().includes(term) ||
+          course?.name?.toLowerCase().includes(term) ||
+          course?.code?.toLowerCase().includes(term) ||
+          g.studentIds.some((sid) => studentsById[sid]?.full_name?.toLowerCase().includes(term))
+        );
+      });
+
+      return (
+        <section className="admin-notes-container">
+          {/* Top Filter Bar (matching user's screenshot) */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", marginBottom: "18px" }}>
+            <div className="portal-tabs" style={{ margin: 0 }}>
+              <button
+                type="button"
+                className={`portal-tab ${noteFilterTab === "all" ? "active" : ""}`}
+                onClick={() => setNoteFilterTab("all")}
+              >
+                <span>All Notes</span>
+                <span className="portal-tab-count">{allGroups.length}</span>
+              </button>
+              <button
+                type="button"
+                className={`portal-tab ${noteFilterTab === "drive" ? "active" : ""}`}
+                onClick={() => setNoteFilterTab("drive")}
+              >
+                <Link2 size={14} />
+                <span>Drive Links</span>
+                <span className="portal-tab-count">{driveGroupsCount}</span>
+              </button>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: "600", color: "var(--muted)" }}>
+                <Users size={14} /> Filter by Student:
+                <select
+                  value={noteStudentFilter}
+                  onChange={(e) => setNoteStudentFilter(e.target.value)}
+                  style={{ height: "34px", borderRadius: "8px", fontSize: "13px" }}
+                >
+                  <option value="all">All Students ({records.length} notes)</option>
+                  {students.filter(s => s.is_approved).map((s) => {
+                    const count = records.filter(r => r.student_id === s.id).length;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name || s.email} ({count} note{count === 1 ? "" : "s"})
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                className="button compact"
+                style={{ height: "34px" }}
+                onClick={() => setNotesViewMode((curr) => curr === "grouped" ? "individual" : "grouped")}
+                title={notesViewMode === "grouped" ? "Switch to Individual Card View" : "Switch to Grouped View"}
+              >
+                {notesViewMode === "grouped" ? "View Individual" : "View Grouped"}
+              </button>
+            </div>
+          </div>
+
+          <div className="admin-work-list">
+            {filteredGroups.map((group) => {
+              const { text: cleanBody, attachmentUrl, attachmentName, isDrive, isPdf } = parseNoteAttachment(group.body);
+              const course = coursesById[group.course_id];
+              const assignedStudents = group.studentIds.map((sid) => studentsById[sid]).filter(Boolean);
+
+              return (
+                <article className="card admin-assignment-card" key={group.key}>
+                  <div className="panel-heading">
+                    <div className="admin-assignment-title" style={{ width: "100%" }}>
+                      <span className={`portal-item-icon ${isDrive ? "drive" : "assignment"}`}>
+                        {isDrive ? <Link2 size={16} /> : <GraduationCap size={16} />}
+                      </span>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                            <h2 style={{ margin: 0 }}>{group.title}</h2>
+                            {course && (
+                              <span className="badge blue" style={{ fontSize: "11px" }}>
+                                {course.code}
+                              </span>
+                            )}
+                            {isDrive && (
+                              <span className="badge green" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                <Link2 size={11} /> Google Drive Document
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="heading-actions" style={{ margin: 0, display: "flex", gap: "6px", alignItems: "center" }}>
+                            <button
+                              className="button compact primary"
+                              type="button"
+                              onClick={() => setManagingAccessNote(group)}
+                              title="Give access to another student using checkboxes"
+                            >
+                              <Users size={13} />
+                              <span>Give to another student</span>
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => setEditingRecord(group.records[0])}
+                            >
+                              <Pencil size={13} /> Edit
+                            </button>
+                            <button
+                              className="quiet-icon danger-icon"
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm(`Delete note “${group.title}”? This will remove it for all ${group.records.length} student(s).`)) {
+                                  const ids = group.records.map((r) => r.id);
+                                  await supabase.from("student_notes").delete().in("id", ids);
+                                  onToast("Note removed.");
+                                  await loadData();
+                                }
+                              }}
+                              aria-label="Delete note"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Student Access Badges */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "8px" }}>
+                          <span style={{ fontSize: "12.5px", fontWeight: "600", color: "var(--ink)" }}>
+                            Access ({assignedStudents.length} student{assignedStudents.length === 1 ? "" : "s"}):
+                          </span>
+                          {assignedStudents.map((s) => (
+                            <span
+                              key={s.id}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                background: "var(--canvas, #f1f5f9)",
+                                padding: "2px 8px",
+                                borderRadius: "6px",
+                                fontSize: "12px",
+                                color: "var(--ink-soft)",
+                                border: "1px solid var(--line)",
+                              }}
+                            >
+                              <strong>{s.full_name || s.email}</strong>
+                              {course ? <small style={{ color: "var(--muted)" }}>· {course.name}</small> : null}
+                            </span>
+                          ))}
+                        </div>
+
+                        {cleanBody && (
+                          <div style={{ marginTop: "10px", fontSize: "13.5px", lineHeight: "1.5", color: "var(--ink-soft)" }}>
+                            {cleanBody}
+                          </div>
+                        )}
+
+                        {attachmentUrl && (
+                          <div className="note-attachment-banner">
+                            <div className="note-attachment-info">
+                              <span className={`note-attachment-icon ${isDrive ? "drive" : "pdf"}`}>
+                                {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
+                              </span>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <strong className="note-attachment-title">
+                                  {attachmentName || (isDrive ? "Google Drive Document Attached" : "Attached PDF Notes")}
+                                </strong>
+                                <span className="note-attachment-sub">
+                                  {attachmentUrl.length > 60 ? attachmentUrl.slice(0, 60) + "…" : attachmentUrl}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="note-attachment-actions">
+                              <button
+                                type="button"
+                                className="button primary compact"
+                                onClick={() =>
+                                  setViewingAttachment({
+                                    title: group.title,
+                                    subtitle: `Attached Document · ${assignedStudents.map(s => s.full_name || s.email).join(", ")}`,
+                                    url: attachmentUrl,
+                                  })
+                                }
+                              >
+                                <Eye size={13} />
+                                <span>View Document</span>
+                              </button>
+                              <a
+                                href={attachmentUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="button compact"
+                                title="Open Drive or link in new tab"
+                              >
+                                <ExternalLink size={13} />
+                                <span>Open Drive</span>
+                              </a>
+                              <button
+                                type="button"
+                                className="button compact"
+                                onClick={() => copyNoteLink(group.id, attachmentUrl)}
+                                title="Copy attachment link"
+                              >
+                                {copiedNoteId === group.id ? <Check size={13} color="var(--green)" /> : <Copy size={13} />}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <p style={{ marginTop: "4px" }}>
-                    <strong>{studentsById[record.student_id]?.full_name || studentsById[record.student_id]?.email || "Student"}</strong>
-                    {record.course_id ? ` · ${coursesById[record.course_id]?.name || ""}` : ""}
-                  </p>
-                  <small style={{ marginTop: "8px", fontSize: "13.5px", lineHeight: "1.5", color: "var(--ink-soft)" }}>
-                    {cleanBody}
-                  </small>
-
-                  {attachmentUrl && (
-                    <div className="note-attachment-banner">
-                      <div className="note-attachment-info">
-                        <span className={`note-attachment-icon ${isDrive ? "drive" : "pdf"}`}>
-                          {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
-                        </span>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <strong className="note-attachment-title">
-                            {attachmentName || (isDrive ? "Google Drive Document" : "Attached PDF Notes")}
-                          </strong>
-                          <span className="note-attachment-sub">
-                            {isDrive ? "Google Drive / Web Document" : "PDF Document · Stored in Drive"}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="note-attachment-actions">
-                        <button
-                          type="button"
-                          className="button primary compact"
-                          onClick={() =>
-                            setViewingAttachment({
-                              title: record.title,
-                              subtitle: `${studentsById[record.student_id]?.full_name || "Student"} · Attached Notes`,
-                              url: attachmentUrl,
-                            })
-                          }
-                        >
-                          <Eye size={13} />
-                          <span>Preview PDF</span>
-                        </button>
-                        <a
-                          href={attachmentUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="button compact"
-                          title="Open in new tab"
-                        >
-                          <ExternalLink size={13} />
-                          <span>Open Link</span>
-                        </a>
-                        <button
-                          type="button"
-                          className="button compact"
-                          onClick={() => copyNoteLink(record.id, attachmentUrl)}
-                          title="Copy attachment link"
-                        >
-                          {copiedNoteId === record.id ? <Check size={13} color="var(--green)" /> : <Copy size={13} />}
-                          <span>{copiedNoteId === record.id ? "Copied" : "Copy"}</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                </article>
+              );
+            })}
+            {!filteredGroups.length && (
+              <div className="card portal-empty">
+                <GraduationCap size={22} />
+                <strong>No notes found</strong>
+                <span>Use the button above to add notes and assign to students with checkboxes.</span>
               </div>
-            </div>
-          </article>
-        );
-      })}
-      {!records.length && <div className="card portal-empty"><GraduationCap size={22} /><strong>No notes records yet</strong><span>Use the button above to add one.</span></div>}
-    </section>}
+            )}
+          </div>
+        </section>
+      );
+    })()}
 
     {editingCourse && (
       <EditCourseModal
@@ -1217,6 +1595,18 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         userEmail={user.email}
         isSuperuser={true}
         onClose={() => setViewingAttachment(null)}
+      />
+    )}
+
+    {managingAccessNote && (
+      <ManageNoteAccessModal
+        noteGroup={managingAccessNote}
+        students={students}
+        courses={courses}
+        enrollments={enrollments}
+        onClose={() => setManagingAccessNote(null)}
+        onSave={saveManagedAccess}
+        busy={busy}
       />
     )}
 
