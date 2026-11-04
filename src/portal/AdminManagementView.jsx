@@ -853,16 +853,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
               <select
                 id={`enroll-${course.id}`}
                 defaultValue=""
-                className="status-select"
-                style={{
-                  height: "32px",
-                  flex: "1",
-                  padding: "0 8px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--line)",
-                  background: "#ffffff",
-                  fontSize: "12px",
-                }}
+                className="status-select course-enroll-select"
               >
                 <option value="" disabled>Enroll student…</option>
                 {eligibleStudents.map((s) => (
@@ -870,8 +861,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                 ))}
               </select>
               <button
-                className="button compact primary"
-                style={{ height: "32px", fontSize: "12px" }}
+                className="button primary course-enroll-btn"
                 type="button"
                 onClick={() => {
                   const el = document.getElementById(`enroll-${course.id}`);
@@ -881,7 +871,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                   }
                 }}
               >
-                <Plus size={12} /> Enroll
+                <Plus size={13} /> Enroll
               </button>
             </div>
           )}
@@ -1540,26 +1530,22 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         </section>
       </section>
     </> : view === "Courses" ? <>
-      <section className="student-admin-summary">
-        <article className="card summary-card">
+      <section className="student-admin-summary course-admin-summary">
+        <article className="card summary-card summary-card-courses">
           <span>Total courses</span>
           <strong>{courses.length}</strong>
-          <i className="summary-indicator blue" />
         </article>
-        <article className="card summary-card">
+        <article className="card summary-card summary-card-enrollments">
           <span>Active enrollments</span>
           <strong>{enrollments.length}</strong>
-          <i className="summary-indicator green" />
         </article>
-        <article className="card summary-card">
+        <article className="card summary-card summary-card-size">
           <span>Avg class size</span>
           <strong>{courses.length ? (enrollments.length / courses.length).toFixed(1) : 0}</strong>
-          <i className="summary-indicator purple" />
         </article>
-        <article className="card summary-card">
+        <article className="card summary-card summary-card-depts">
           <span>Departments</span>
           <strong>{new Set(courses.map((c) => c.department).filter(Boolean)).size || (courses.length > 0 ? 1 : 0)}</strong>
-          <i className="summary-indicator amber" />
         </article>
       </section>
 

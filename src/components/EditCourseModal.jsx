@@ -241,12 +241,12 @@ export default function EditCourseModal({
           </div>
 
           <div
-            className="modal-actions"
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "24px" }}
+            className="modal-actions edit-course-modal-actions"
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "24px", flexWrap: "wrap", gap: "12px" }}
           >
             <button
               type="button"
-              className="button danger-icon"
+              className="button danger-icon edit-course-delete-btn"
               style={{ color: "var(--red)", borderColor: "rgba(239, 68, 68, 0.3)" }}
               onClick={() => {
                 if (window.confirm(`Delete course “${course.name}”? This cannot be undone.`)) {
@@ -258,7 +258,7 @@ export default function EditCourseModal({
               <Trash2 size={14} /> Delete Course
             </button>
 
-            <div style={{ display: "flex", gap: "10px" }}>
+            <div className="edit-course-btn-group" style={{ display: "flex", gap: "10px" }}>
               <button type="button" className="button" onClick={onClose} disabled={saving}>
                 Cancel
               </button>
