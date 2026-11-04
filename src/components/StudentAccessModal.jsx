@@ -203,21 +203,19 @@ export default function StudentAccessModal({
           </div>
         )}
 
-        {/* Quick Stats Summary */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "10px", margin: "14px 0 18px" }}>
-          <div style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-            <span style={{ fontSize: "12px", color: "var(--muted)", display: "block" }}>Enrolled Courses</span>
-            <strong style={{ fontSize: "20px", color: "var(--ink)", fontWeight: 800 }}>{studentCourses.length}</strong>
+        {/* Quick Stats Summary: 3 Cards (Left, Center, Right) */}
+        <div className="modal-stats-grid">
+          <div className="modal-stat-card">
+            <span className="modal-stat-label">Enrolled Courses</span>
+            <strong className="modal-stat-value">{studentCourses.length}</strong>
           </div>
-          <div style={{ padding: "12px 14px", background: "#f0fdf4", borderRadius: "10px", border: "1px solid #bbf7d0" }}>
-            <span style={{ fontSize: "12px", color: "#166534", display: "block" }}>Permitted Notes &amp; Files</span>
-            <strong style={{ fontSize: "20px", color: "#15803d", fontWeight: 800 }}>
-              {uniquePermittedCount}
-            </strong>
+          <div className="modal-stat-card center-stat-card">
+            <span className="modal-stat-label green">Permitted Notes &amp; Files</span>
+            <strong className="modal-stat-value green">{uniquePermittedCount}</strong>
           </div>
-          <div style={{ padding: "12px 14px", background: "#eff6ff", borderRadius: "10px", border: "1px solid #bfdbfe" }}>
-            <span style={{ fontSize: "12px", color: "#1e40af", display: "block" }}>Permitted Tests</span>
-            <strong style={{ fontSize: "20px", color: "#2563eb", fontWeight: 800 }}>{permittedTestIds.size}</strong>
+          <div className="modal-stat-card">
+            <span className="modal-stat-label blue">Permitted Tests</span>
+            <strong className="modal-stat-value blue">{permittedTestIds.size}</strong>
           </div>
         </div>
 

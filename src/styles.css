@@ -6135,18 +6135,106 @@ img, video, iframe {
   padding: 24px !important;
   border-radius: 16px !important;
   box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25) !important;
+  margin: auto !important;
+  box-sizing: border-box !important;
 }
 
 @media (max-width: 640px) {
   .student-access-modal {
-    padding: 16px 20px 18px 16px !important;
-    width: calc(100vw - 24px) !important;
-    max-width: calc(100vw - 24px) !important;
-    margin: 12px auto !important;
-    margin-right: 12px !important;
-    margin-left: 12px !important;
+    padding: 16px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: auto !important;
     border-radius: 14px !important;
     box-sizing: border-box !important;
+  }
+}
+
+/* Quick Stats 3-Card Grid (Left, Center, Right) */
+.modal-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 18px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px 10px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  box-sizing: border-box;
+}
+
+.modal-stat-card.center-stat-card {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.modal-stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  display: block;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.modal-stat-label.green {
+  color: #166534;
+}
+
+.modal-stat-label.blue {
+  color: #1e40af;
+}
+
+.modal-stat-value {
+  font-size: 20px;
+  color: var(--ink);
+  font-weight: 800;
+  text-align: center;
+}
+
+.modal-stat-value.green {
+  color: #15803d;
+}
+
+.modal-stat-value.blue {
+  color: #2563eb;
+}
+
+@media (max-width: 640px) {
+  .modal-stats-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    margin: 12px 0 16px !important;
+    width: 100% !important;
+  }
+
+  .modal-stat-card {
+    padding: 10px 4px !important;
+    border-radius: 9px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+  }
+
+  .modal-stat-label {
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+    text-align: center !important;
+  }
+
+  .modal-stat-value {
+    font-size: 18px !important;
+    text-align: center !important;
   }
 }
 
