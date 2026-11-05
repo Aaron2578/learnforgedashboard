@@ -1559,7 +1559,34 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                         </span>
                       </div>
                       <span className="student-item-email">{student.email}</span>
-                      <small className="student-item-date">
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "3px" }}>
+                        <code
+                          style={{
+                            fontSize: "11px",
+                            background: "#f1f5f9",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                            color: "#334155",
+                            fontFamily: "monospace",
+                          }}
+                          title={`Full Student ID: ${student.id}`}
+                        >
+                          ID: {student.id.slice(0, 8)}...
+                        </code>
+                        <button
+                          type="button"
+                          className="text-link"
+                          style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
+                          onClick={() => {
+                            navigator.clipboard.writeText(student.id);
+                            onToast(`Copied Student ID for ${student.full_name || student.email}`);
+                          }}
+                          title="Copy Full Student ID"
+                        >
+                          <Copy size={11} /> Copy ID
+                        </button>
+                      </div>
+                      <small className="student-item-date" style={{ marginTop: "3px" }}>
                         Joined {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}
                       </small>
                     </div>
@@ -1866,6 +1893,98 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                   <span className={`portal-status ${trainer.is_approved ? "submitted" : "pending"}`}>
                     {trainer.is_approved ? "Active" : "Suspended"}
                   </span>
+                </div>
+
+                {/* Trainer ID & Assigned Students Details */}
+                <div style={{ marginTop: "12px", padding: "10px 12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "6px" }}>
+                    <span style={{ fontSize: "11px", color: "var(--muted)", fontFamily: "monospace" }}>
+                      Trainer ID: <strong>{trainer.id}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      className="text-link"
+                      style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}
+                      onClick={() => {
+                        navigator.clipboard.writeText(trainer.id);
+                        onToast(`Trainer ID copied: ${trainer.id}`);
+                      }}
+                    >
+                      <Copy size={11} /> Copy Trainer ID
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const assignedStudentIds = new Set(
+                      trainerStudents.filter((ts) => ts.trainer_id === trainer.id).map((ts) => ts.student_id)
+                        .concat(students.filter((s) => s.trainer_id === trainer.id).map((s) => s.id))
+                    );
+                    const assignedList = students.filter((s) => assignedStudentIds.has(s.id));
+
+                    return (
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <strong style={{ fontSize: "12px", color: "#1e3a8a", display: "flex", alignItems: "center", gap: "4px" }}>
+                            <Users size={13} /> Assigned Students ({assignedList.length}):
+                          </strong>
+                          <button
+                            type="button"
+                            className="button compact"
+                            style={{ padding: "2px 8px", fontSize: "11px" }}
+                            onClick={() => setAssigningTrainer(trainer)}
+                          >
+                            + Assign / Edit
+                          </button>
+                        </div>
+
+                        {assignedList.length > 0 ? (
+                          <div style={{ display: "grid", gap: "4px" }}>
+                            {assignedList.map((s) => (
+                              <div
+                                key={s.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  padding: "6px 8px",
+                                  background: "#ffffff",
+                                  border: "1px solid var(--line)",
+                                  borderRadius: "6px",
+                                  fontSize: "12px",
+                                }}
+                              >
+                                <div>
+                                  <strong>{s.full_name || s.email}</strong>
+                                  <span style={{ color: "var(--muted)", marginLeft: "6px", fontSize: "11px" }}>({s.email})</span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                  <code style={{ fontSize: "10.5px", background: "#f1f5f9", padding: "2px 5px", borderRadius: "4px", color: "#334155" }} title={`Full Student ID: ${s.id}`}>
+                                    ID: {s.id.slice(0, 8)}...
+                                  </code>
+                                  <button
+                                    type="button"
+                                    className="quiet-icon"
+                                    style={{ padding: "2px" }}
+                                    title={`Copy Student ID: ${s.id}`}
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(s.id);
+                                      onToast(`Copied Student ID for ${s.full_name || s.email}`);
+                                    }}
+                                  >
+                                    <Copy size={11} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic", padding: "4px 0" }}>
+                            No students assigned yet. Click "Assign Students" to assign students.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="student-card-bottom" style={{ borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" }}>

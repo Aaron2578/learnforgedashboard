@@ -82,6 +82,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [courses, setCourses] = useState([]);
   const [students, setStudents] = useState([]);
   const [trainerStudents, setTrainerStudents] = useState([]);
+  const [trainersList, setTrainersList] = useState([]);
+  const [selectedTrainerId, setSelectedTrainerId] = useState("");
   const [studentScopeFilter, setStudentScopeFilter] = useState("all");
   const [enrollments, setEnrollments] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -151,6 +153,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         coursesRes,
         studentsRes,
         trainerStudentsRes,
+        trainersRes,
         enrollmentsRes,
         tasksRes,
         materialsRes,
@@ -161,6 +164,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         supabase.from("courses").select("*").order("created_at", { ascending: false }),
         supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }),
         supabase.from("trainer_students").select("trainer_id, student_id").then((r) => r.error ? { data: [] } : r),
+        supabase.from("profiles").select("id, email, full_name, timing").eq("role", "trainer").order("full_name", { ascending: true }).then((r) => r.error ? { data: [] } : r),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.from("student_notes").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("course_materials").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
@@ -173,6 +177,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setCourses(coursesRes.data || []);
       setStudents(studentsRes.data || []);
       setTrainerStudents(trainerStudentsRes.data || []);
+      const loadedTrainers = trainersRes.data || [];
+      setTrainersList(loadedTrainers);
+      if (loadedTrainers.length > 0) {
+        setSelectedTrainerId((prev) => prev || loadedTrainers[0].id);
+      }
       setEnrollments(enrollmentsRes.data || []);
       setTasks(tasksRes.data || []);
       setMaterials(materialsRes.data || []);
@@ -208,16 +217,19 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     };
   }, [supabase, loadTrainerData]);
 
+  const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
+
   const myAssignedStudentIds = useMemo(() => {
     const ids = new Set();
+    const targetId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
     for (const ts of trainerStudents) {
-      if (ts.trainer_id === user?.id) ids.add(ts.student_id);
+      if (ts.trainer_id === targetId) ids.add(ts.student_id);
     }
     for (const s of students) {
-      if (s.trainer_id === user?.id) ids.add(s.id);
+      if (s.trainer_id === targetId) ids.add(s.id);
     }
     return ids;
-  }, [trainerStudents, students, user?.id]);
+  }, [trainerStudents, students, user?.id, isAdminPreview, selectedTrainerId, trainersList]);
 
   // Load chat messages when a conversation is selected
   useEffect(() => {
@@ -2302,8 +2314,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "12px 16px" }}>Student</th>
+                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Student ID</th>
                   <th style={{ textAlign: "left", padding: "12px 16px" }}>Program / Timing</th>
                   <th style={{ textAlign: "left", padding: "12px 16px" }}>Enrolled Courses</th>
+                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Assignment Status</th>
                   <th style={{ textAlign: "right", padding: "12px 16px" }}>Actions</th>
                 </tr>
               </thead>
@@ -2313,12 +2327,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     .filter((e) => e.student_id === student.id)
                     .map((e) => coursesById[e.course_id])
                     .filter(Boolean);
+                  const isAssigned = myAssignedStudentIds.has(student.id);
 
                   return (
-                    <tr key={student.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                    <tr key={student.id} style={{ borderBottom: "1px solid var(--line)", background: isAssigned ? "rgba(240, 253, 244, 0.4)" : undefined }}>
                       <td style={{ padding: "12px 16px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <span className="student-avatar" style={{ width: "34px", height: "34px", fontSize: "12px" }}>
+                          <span className="student-avatar" style={{ width: "34px", height: "34px", fontSize: "12px", background: isAssigned ? "#16a34a" : undefined, color: isAssigned ? "#ffffff" : undefined }}>
                             {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
                           </span>
                           <div>
@@ -2326,14 +2341,44 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                               <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>
                                 {student.full_name || "Student"}
                               </strong>
-                              {myAssignedStudentIds.has(student.id) && (
-                                <span className="badge green" style={{ fontSize: "10.5px" }}>
-                                  Assigned to You
+                              {isAssigned && (
+                                <span className="badge green" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                                  Assigned
                                 </span>
                               )}
                             </div>
                             <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
                           </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 16px" }}>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                          <code
+                            style={{
+                              fontSize: "11px",
+                              background: "#f1f5f9",
+                              padding: "2px 6px",
+                              borderRadius: "4px",
+                              color: "#334155",
+                              fontFamily: "monospace",
+                            }}
+                            title={`Full Student ID: ${student.id}`}
+                          >
+                            {student.id.slice(0, 8)}...
+                          </code>
+                          <button
+                            type="button"
+                            className="quiet-icon"
+                            style={{ padding: "3px" }}
+                            title={`Copy Student ID: ${student.id}`}
+                            onClick={() => {
+                              navigator.clipboard.writeText(student.id);
+                              setToast(`Copied Student ID: ${student.id}`);
+                            }}
+                          >
+                            <Copy size={11} />
+                          </button>
                         </div>
                       </td>
 
@@ -2348,6 +2393,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           ))}
                           {!studentCourses.length && <span style={{ color: "var(--muted)", fontSize: "12px" }}>Not enrolled</span>}
                         </div>
+                      </td>
+
+                      <td style={{ padding: "12px 16px" }}>
+                        {isAssigned ? (
+                          <span className="badge green" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                            <Check size={11} /> Assigned to You
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ fontSize: "11px", color: "var(--muted)" }}>
+                            Campus Student
+                          </span>
+                        )}
                       </td>
 
                       <td style={{ padding: "12px 16px", textAlign: "right" }}>
@@ -2503,9 +2560,38 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               Trainer Portal <span>/</span> <strong>{activeTab}</strong>
             </div>
             {isAdminPreview && (
-              <span className="badge blue" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "10px" }}>
-                <Shield size={12} /> Admin Preview Mode
-              </span>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", marginLeft: "12px" }}>
+                <span className="badge blue" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                  <Shield size={12} /> Admin Mode
+                </span>
+                {trainersList.length > 0 && (
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: "4px", margin: 0 }}>
+                    <span style={{ fontSize: "11.5px", color: "var(--muted)", fontWeight: 700 }}>Trainer:</span>
+                    <select
+                      value={activeTrainerId}
+                      onChange={(e) => setSelectedTrainerId(e.target.value)}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: "6px",
+                        border: "1px solid #93c5fd",
+                        background: "#eff6ff",
+                        color: "#1e3a8a",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        height: "28px",
+                        cursor: "pointer",
+                      }}
+                      title="Select trainer to view"
+                    >
+                      {trainersList.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.full_name || t.email} {t.timing ? `(${t.timing})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
             )}
           </div>
 

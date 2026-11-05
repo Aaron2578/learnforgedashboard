@@ -42,3 +42,4 @@ begin
       with check ((select public.is_trainer()));
   end if;
 end $$;
+
