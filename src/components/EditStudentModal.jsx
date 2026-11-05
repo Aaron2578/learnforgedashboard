@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Users, X } from "lucide-react";
 
-export default function EditStudentModal({ student, onClose, onSave, onDelete }) {
+export default function EditStudentModal({ student, trainers = [], onClose, onSave, onDelete }) {
   const [fullName, setFullName] = useState(student.full_name || "");
   const [timing, setTiming] = useState(student.timing || "");
+  const [trainerId, setTrainerId] = useState(student.trainer_id || "");
   const [isApproved, setIsApproved] = useState(Boolean(student.is_approved));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -22,6 +23,7 @@ export default function EditStudentModal({ student, onClose, onSave, onDelete })
         full_name: fullName.trim(),
         timing: timing.trim(),
         is_approved: isApproved,
+        trainer_id: trainerId || null,
       });
     } catch (err) {
       setError(err.message || "Failed to update student profile.");
@@ -93,6 +95,24 @@ export default function EditStudentModal({ student, onClose, onSave, onDelete })
             />
             <small style={{ display: "block", marginTop: "3px", color: "var(--muted)", fontSize: "11.5px" }}>
               Set this student's individual lecture or batch time. Appears on their dashboard.
+            </small>
+          </label>
+
+          <label className="form-field" style={{ marginTop: "14px" }}>
+            <span>Assigned Trainer / Instructor</span>
+            <select
+              value={trainerId}
+              onChange={(e) => setTrainerId(e.target.value)}
+            >
+              <option value="">Unassigned (No Trainer Assigned)</option>
+              {trainers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.full_name || t.email} {t.timing ? `(${t.timing})` : ""}
+                </option>
+              ))}
+            </select>
+            <small style={{ display: "block", marginTop: "3px", color: "var(--muted)", fontSize: "11.5px" }}>
+              The assigned trainer can supervise this student, take attendance, and assign tasks.
             </small>
           </label>
 

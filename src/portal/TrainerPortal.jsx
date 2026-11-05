@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
+  ArrowLeft,
   ArrowRight,
   BookOpen,
   CalendarCheck,
@@ -68,7 +69,7 @@ function localDate(d = new Date()) {
   return new Date(d.getTime() - offset * 60_000).toISOString().slice(0, 10);
 }
 
-export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
+export default function TrainerPortal({ user, profile, supabase, onSignOut, onExitToAdmin, isAdminPreview }) {
   const [activeTab, setActiveTab] = useState("Overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -80,6 +81,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
   // Core Data
   const [courses, setCourses] = useState([]);
   const [students, setStudents] = useState([]);
+  const [trainerStudents, setTrainerStudents] = useState([]);
+  const [studentScopeFilter, setStudentScopeFilter] = useState("all");
   const [enrollments, setEnrollments] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -147,6 +150,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
       const [
         coursesRes,
         studentsRes,
+        trainerStudentsRes,
         enrollmentsRes,
         tasksRes,
         materialsRes,
@@ -156,6 +160,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
       ] = await Promise.all([
         supabase.from("courses").select("*").order("created_at", { ascending: false }),
         supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }),
+        supabase.from("trainer_students").select("trainer_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.from("student_notes").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("course_materials").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
@@ -167,6 +172,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
       if (coursesRes.error) throw coursesRes.error;
       setCourses(coursesRes.data || []);
       setStudents(studentsRes.data || []);
+      setTrainerStudents(trainerStudentsRes.data || []);
       setEnrollments(enrollmentsRes.data || []);
       setTasks(tasksRes.data || []);
       setMaterials(materialsRes.data || []);
@@ -201,6 +207,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
       supabase.removeChannel(channel);
     };
   }, [supabase, loadTrainerData]);
+
+  const myAssignedStudentIds = useMemo(() => {
+    const ids = new Set();
+    for (const ts of trainerStudents) {
+      if (ts.trainer_id === user?.id) ids.add(ts.student_id);
+    }
+    for (const s of students) {
+      if (s.trainer_id === user?.id) ids.add(s.id);
+    }
+    return ids;
+  }, [trainerStudents, students, user?.id]);
 
   // Load chat messages when a conversation is selected
   useEffect(() => {
@@ -724,13 +741,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
             <small>Active curriculums</small>
           </article>
 
-          <article className="card metric-card">
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => { setStudentScopeFilter("assigned"); setActiveTab("Students"); }}>
             <div className="metric-top">
-              <span>Enrolled Students</span>
+              <span>My Assigned Students</span>
               <span className="metric-icon green"><Users size={17} /></span>
             </div>
-            <strong>{students.length}</strong>
-            <small>Approved student accounts</small>
+            <strong>{students.filter((s) => myAssignedStudentIds.has(s.id)).length}</strong>
+            <small>{students.length} total across campus</small>
           </article>
 
           <article className="card metric-card">
@@ -1035,9 +1052,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
                             {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
                           </span>
                           <div>
-                            <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
-                              {student.full_name || "Student"}
-                            </strong>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>
+                                {student.full_name || "Student"}
+                              </strong>
+                              {myAssignedStudentIds.has(student.id) && (
+                                <span className="badge green" style={{ fontSize: "10.5px" }}>
+                                  Assigned to You
+                                </span>
+                              )}
+                            </div>
                             <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
                           </div>
                         </div>
@@ -2231,7 +2255,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
   // Tab 7: Students Directory
   // ----------------------------------------------------
   function renderStudents() {
-    const filteredStudents = students.filter((s) => {
+    const listToFilter = studentScopeFilter === "assigned"
+      ? students.filter((s) => myAssignedStudentIds.has(s.id))
+      : students;
+
+    const filteredStudents = listToFilter.filter((s) => {
       if (!query.trim()) return true;
       const q = query.trim().toLowerCase();
       return (s.full_name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
@@ -2243,8 +2271,29 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
           <div>
             <div className="eyebrow">Student Directory</div>
             <h1>Students &amp; Cohorts</h1>
-            <p>{students.length} approved students active across your training programs.</p>
+            <p>
+              {studentScopeFilter === "assigned"
+                ? `${students.filter((s) => myAssignedStudentIds.has(s.id)).length} students specifically assigned to you.`
+                : `${students.length} approved students active across your training programs.`}
+            </p>
           </div>
+        </div>
+
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "16px" }}>
+          <button
+            type="button"
+            className={`button ${studentScopeFilter === "assigned" ? "primary" : ""}`}
+            onClick={() => setStudentScopeFilter("assigned")}
+          >
+            <Users size={14} /> My Assigned Students ({students.filter((s) => myAssignedStudentIds.has(s.id)).length})
+          </button>
+          <button
+            type="button"
+            className={`button ${studentScopeFilter === "all" ? "primary" : ""}`}
+            onClick={() => setStudentScopeFilter("all")}
+          >
+            All Campus Students ({students.length})
+          </button>
         </div>
 
         <div className="card" style={{ padding: "6px" }}>
@@ -2273,9 +2322,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
                             {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
                           </span>
                           <div>
-                            <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
-                              {student.full_name || "Student"}
-                            </strong>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>
+                                {student.full_name || "Student"}
+                              </strong>
+                              {myAssignedStudentIds.has(student.id) && (
+                                <span className="badge green" style={{ fontSize: "10.5px" }}>
+                                  Assigned to You
+                                </span>
+                              )}
+                            </div>
                             <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
                           </div>
                         </div>
@@ -2412,12 +2468,23 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
           </span>
         </div>
 
-        {onSignOut && (
+        {isAdminPreview ? (
+          <button
+            className="signout-button"
+            type="button"
+            onClick={onExitToAdmin || onSignOut}
+            title="Return to Admin Workspace"
+            style={{ color: "#2563eb", background: "rgba(37, 99, 235, 0.08)", borderColor: "rgba(37, 99, 235, 0.2)" }}
+          >
+            <ArrowLeft size={15} />
+            <span>Back to Admin</span>
+          </button>
+        ) : onSignOut ? (
           <button className="signout-button" type="button" onClick={onSignOut} title="Sign out">
             <LogOut size={15} />
             <span>Sign out</span>
           </button>
-        )}
+        ) : null}
       </aside>
 
       {/* Main Content Area */}
@@ -2435,6 +2502,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
             <div className="breadcrumb">
               Trainer Portal <span>/</span> <strong>{activeTab}</strong>
             </div>
+            {isAdminPreview && (
+              <span className="badge blue" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "10px" }}>
+                <Shield size={12} /> Admin Preview Mode
+              </span>
+            )}
           </div>
 
           <div className="top-actions">
@@ -2452,7 +2524,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
               {(profile?.full_name || "TR").slice(0, 2).toUpperCase()}
             </span>
 
-            {onSignOut && (
+            {isAdminPreview ? (
+              <button
+                className="button primary compact"
+                type="button"
+                onClick={onExitToAdmin || onSignOut}
+                title="Return to Admin Workspace"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontWeight: 600,
+                  fontSize: "12.5px",
+                }}
+              >
+                <ArrowLeft size={13} />
+                <span>Back to Admin Dashboard</span>
+              </button>
+            ) : onSignOut ? (
               <button
                 className="button compact"
                 type="button"
@@ -2472,7 +2561,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
                 <LogOut size={13} />
                 <span>Sign out</span>
               </button>
-            )}
+            ) : null}
           </div>
         </header>
 

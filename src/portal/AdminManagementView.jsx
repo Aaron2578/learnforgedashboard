@@ -12,6 +12,7 @@ import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import StudentAccessModal from "../components/StudentAccessModal";
 import CreateTrainerModal from "../components/CreateTrainerModal";
+import AssignTrainerStudentsModal from "../components/AssignTrainerStudentsModal";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 const headings = {
@@ -38,6 +39,8 @@ function formatCourseDate(value) {
 function AdminManagementView({ view, supabase, user, query, onToast, onNavigate }) {
   const [students, setStudents] = useState([]);
   const [trainers, setTrainers] = useState([]);
+  const [trainerStudents, setTrainerStudents] = useState([]);
+  const [assigningTrainer, setAssigningTrainer] = useState(null);
   const [showTrainerModal, setShowTrainerModal] = useState(false);
   const [trainerSearch, setTrainerSearch] = useState("");
   const [courses, setCourses] = useState([]);
@@ -104,6 +107,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       const [
         studentResult,
         trainerResult,
+        trainerStudentsResult,
         courseResult,
         enrollmentResult,
         storageResult,
@@ -114,8 +118,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         materialRecipientsResult,
         allNotesResult,
       ] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "student").order("created_at", { ascending: false }),
+        supabase.from("profiles").select("id, email, full_name, is_approved, timing, trainer_id, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "trainer").order("created_at", { ascending: false }),
+        supabase.from("trainer_students").select("trainer_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
@@ -144,6 +149,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       }
       setStudents(studentResult.data ?? []);
       setTrainers(trainerResult.data ?? []);
+      setTrainerStudents(trainerStudentsResult.data ?? []);
       setCourses(courseResult.data ?? []);
       setEnrollments(enrollmentResult.data ?? []);
       setMaterials(materialsResult.data ?? []);
@@ -632,11 +638,53 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     if (updateError) {
       setError(updateError.message);
     } else {
+      if (updates.trainer_id) {
+        await supabase.from("trainer_students").upsert({
+          trainer_id: updates.trainer_id,
+          student_id: studentId,
+        }, { onConflict: "trainer_id,student_id" });
+      } else if (updates.trainer_id === null) {
+        await supabase.from("trainer_students").delete().eq("student_id", studentId);
+      }
       setEditingStudent(null);
       onToast("Student profile updated.");
       await loadData();
     }
     setBusy(false);
+  }
+
+  async function handleSaveTrainerStudents(trainerId, selectedStudentIds) {
+    setBusy(true);
+    setError("");
+    try {
+      await supabase.from("trainer_students").delete().eq("trainer_id", trainerId);
+
+      if (selectedStudentIds.length > 0) {
+        const rows = selectedStudentIds.map((studentId) => ({
+          trainer_id: trainerId,
+          student_id: studentId,
+        }));
+        const { error: insertErr } = await supabase.from("trainer_students").insert(rows);
+        if (insertErr) throw insertErr;
+
+        await supabase.from("profiles").update({ trainer_id: trainerId }).in("id", selectedStudentIds);
+      }
+
+      const removedStudentIds = trainerStudents
+        .filter((ts) => ts.trainer_id === trainerId && !selectedStudentIds.includes(ts.student_id))
+        .map((ts) => ts.student_id);
+      if (removedStudentIds.length > 0) {
+        await supabase.from("profiles").update({ trainer_id: null }).in("id", removedStudentIds);
+      }
+
+      onToast("Student assignments saved for trainer.");
+      setAssigningTrainer(null);
+      await loadData();
+    } catch (err) {
+      setError(`Failed to save trainer student assignments: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handlePermitNoteForStudent(material, studentId) {
@@ -1524,6 +1572,30 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                     <Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
                   </span>
 
+                  {(() => {
+                    const assignedTrainerId = student.trainer_id || trainerStudents.find((ts) => ts.student_id === student.id)?.trainer_id;
+                    const assignedTrainer = trainers.find((t) => t.id === assignedTrainerId);
+                    return assignedTrainer ? (
+                      <span
+                        className="student-timing-chip"
+                        style={{ background: "#f0fdf4", color: "#166534", borderColor: "#bbf7d0", cursor: "pointer" }}
+                        onClick={() => setAssigningTrainer(assignedTrainer)}
+                        title={`Assigned to trainer ${assignedTrainer.full_name || assignedTrainer.email}. Click to manage.`}
+                      >
+                        <GraduationCap size={12} /> Trainer: <strong>{assignedTrainer.full_name || assignedTrainer.email}</strong>
+                      </span>
+                    ) : (
+                      <span
+                        className="student-timing-chip"
+                        style={{ color: "#94a3b8", borderStyle: "dashed", cursor: "pointer" }}
+                        onClick={() => setEditingStudent(student)}
+                        title="Click Edit Profile to assign a trainer"
+                      >
+                        <GraduationCap size={12} /> Trainer: <em>Unassigned</em>
+                      </span>
+                    );
+                  })()}
+
                   <span
                     className="student-timing-chip"
                     style={{
@@ -1779,6 +1851,15 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                             <Clock3 size={11} style={{ marginRight: "3px" }} /> {trainer.timing}
                           </span>
                         )}
+                        <span
+                          className="badge green"
+                          style={{ fontSize: "11px", cursor: "pointer" }}
+                          onClick={() => setAssigningTrainer(trainer)}
+                          title="Click to manage assigned students"
+                        >
+                          <Users size={11} style={{ marginRight: "3px" }} />
+                          {trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length} Assigned Students
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1788,7 +1869,19 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                 </div>
 
                 <div className="student-card-bottom" style={{ borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" }}>
-                  <div className="student-actions-row-secondary" style={{ width: "100%", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                  <div className="student-actions-row-secondary" style={{ width: "100%", display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setAssigningTrainer(trainer)}
+                      style={{ background: "#eff6ff", color: "#2563eb", borderColor: "#bfdbfe", fontWeight: 600 }}
+                      title={`Assign students to ${trainer.full_name || trainer.email}`}
+                    >
+                      <Users size={13} />
+                      <span>Assign Students ({trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length})</span>
+                    </button>
+
                     <button
                       className="button compact"
                       type="button"
@@ -2444,9 +2537,20 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     {editingStudent && (
       <EditStudentModal
         student={editingStudent}
+        trainers={trainers}
         onClose={() => setEditingStudent(null)}
         onSave={updateStudentProfile}
         onDelete={deleteStudent}
+      />
+    )}
+
+    {assigningTrainer && (
+      <AssignTrainerStudentsModal
+        trainer={assigningTrainer}
+        students={students}
+        assignedStudentIds={trainerStudents.filter((ts) => ts.trainer_id === assigningTrainer.id).map((ts) => ts.student_id)}
+        onSave={handleSaveTrainerStudents}
+        onClose={() => setAssigningTrainer(null)}
       />
     )}
 

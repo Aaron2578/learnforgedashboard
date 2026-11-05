@@ -626,7 +626,16 @@ function App({ user, profile, supabase, onSignOut }) {
     return <AdminDriveView key={activeView} supabase={supabase} user={user} query={query} onToast={setToast} />;
   }
   function renderTrainerPortalView() {
-    return <TrainerPortal user={user} profile={profile} supabase={supabase} onSignOut={onSignOut} />;
+    return (
+      <TrainerPortal
+        user={user}
+        profile={profile}
+        supabase={supabase}
+        onSignOut={() => changeView("Overview")}
+        onExitToAdmin={() => changeView("Overview")}
+        isAdminPreview={true}
+      />
+    );
   }
 
   const viewContent = {
