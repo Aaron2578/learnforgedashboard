@@ -37,3 +37,4 @@ end;
 $$;
 
 grant execute on function public.get_trainer_student_assignments() to anon, authenticated;
+

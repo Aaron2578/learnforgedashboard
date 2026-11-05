@@ -17,3 +17,4 @@ create policy "Profiles are visible to their owner, trainers and superusers"
 -- Also ensure trainers can update attendance records and tasks for their students
 grant select, insert, update on public.profiles to authenticated;
 grant select, insert, update, delete on public.trainer_students to authenticated;
+

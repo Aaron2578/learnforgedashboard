@@ -44,6 +44,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [showTrainerModal, setShowTrainerModal] = useState(false);
   const [trainerSearch, setTrainerSearch] = useState("");
   const [courses, setCourses] = useState([]);
+  const [newCourseTrainerId, setNewCourseTrainerId] = useState("");
+  const [newCourseInstructor, setNewCourseInstructor] = useState("");
   const [enrollments, setEnrollments] = useState([]);
   const [records, setRecords] = useState([]);
   const [storageStats, setStorageStats] = useState(null);
@@ -383,7 +385,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       name: String(values.get("name")).trim(),
       code: String(values.get("code")).trim().toUpperCase(),
       department: String(values.get("department") || "").trim(),
-      instructor: String(values.get("instructor") || "").trim(),
+      instructor: String(values.get("instructor") || newCourseInstructor || "").trim(),
+      trainer_id: newCourseTrainerId || String(values.get("trainer_id") || "").trim() || null,
       schedule: null,
       room: String(values.get("room") || "").trim(),
       description: String(values.get("description") || "").trim(),
@@ -401,6 +404,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       }
     }
     setShowForm(false);
+    setNewCourseTrainerId("");
+    setNewCourseInstructor("");
     onToast(studentIds.length > 0 ? "Course created and students enrolled." : "Course created successfully.");
     await loadData();
     setBusy(false);
@@ -417,6 +422,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           code: formData.code.trim().toUpperCase(),
           department: (formData.department || "").trim(),
           instructor: (formData.instructor || "").trim(),
+          trainer_id: formData.trainer_id || null,
           schedule: (formData.schedule || "").trim(),
           room: (formData.room || "").trim(),
           description: (formData.description || "").trim(),
@@ -1126,8 +1132,110 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       </div>
       <div className="form-grid-2" style={{ marginTop: "10px" }}>
         <label className="form-field"><span>Department (e.g. IT or SAP)</span><input name="department" maxLength="100" placeholder="e.g. IT or SAP" /></label>
-        <label className="form-field"><span>Instructor / Faculty</span><input name="instructor" maxLength="100" placeholder="e.g. Faculty Name" /></label>
+        <div className="form-field">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+            <span>Instructor / Assigned Trainer</span>
+            {newCourseTrainerId && (
+              <span className="badge green" style={{ fontSize: "11px" }}>
+                <Check size={11} style={{ marginRight: "2px" }} /> Trainer Linked
+              </span>
+            )}
+          </div>
+          <input type="hidden" name="trainer_id" value={newCourseTrainerId} />
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              name="instructor"
+              maxLength="100"
+              placeholder="Click a trainer profile below or type name"
+              value={newCourseInstructor}
+              onChange={(e) => {
+                const val = e.target.value;
+                setNewCourseInstructor(val);
+                const match = trainers.find((t) => (t.full_name || t.email).toLowerCase() === val.toLowerCase());
+                setNewCourseTrainerId(match ? match.id : "");
+              }}
+              style={{ flex: 1 }}
+            />
+            {newCourseTrainerId && (
+              <button
+                type="button"
+                className="button compact"
+                onClick={() => {
+                  setNewCourseTrainerId("");
+                  setNewCourseInstructor("");
+                }}
+                title="Clear selected trainer"
+                style={{ fontSize: "11px" }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Available Trainer Profiles for Clickable Assignment */}
+      {trainers.length > 0 && (
+        <div style={{ marginTop: "10px", padding: "10px 14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
+          <div style={{ fontSize: "12.5px", fontWeight: 700, color: "#1e3a8a", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <GraduationCap size={15} /> Available Trainer Profiles (Click to assign as Instructor):
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            {trainers.map((t) => {
+              const isSelected = newCourseTrainerId === t.id || (newCourseInstructor && newCourseInstructor.toLowerCase() === (t.full_name || t.email).toLowerCase());
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setNewCourseTrainerId(t.id);
+                    setNewCourseInstructor(t.full_name || t.email);
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "6px 12px",
+                    borderRadius: "8px",
+                    border: isSelected ? "1.5px solid #2563eb" : "1px solid var(--line)",
+                    background: isSelected ? "#eff6ff" : "#ffffff",
+                    cursor: "pointer",
+                    fontSize: "12.5px",
+                    boxShadow: isSelected ? "0 2px 4px rgba(37, 99, 235, 0.15)" : "none",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <span
+                    className="student-avatar"
+                    style={{
+                      width: "26px",
+                      height: "26px",
+                      fontSize: "11px",
+                      background: isSelected ? "#2563eb" : undefined,
+                      color: isSelected ? "#ffffff" : undefined,
+                    }}
+                  >
+                    {(t.full_name || t.email).slice(0, 1).toUpperCase()}
+                  </span>
+                  <div style={{ textAlign: "left" }}>
+                    <strong style={{ color: isSelected ? "#1e40af" : "var(--ink)", display: "block", fontSize: "12px" }}>
+                      {t.full_name || t.email}
+                    </strong>
+                    {t.timing && (
+                      <small style={{ color: "var(--muted)", fontSize: "11px" }}>{t.timing}</small>
+                    )}
+                  </div>
+                  {isSelected && (
+                    <span className="badge green" style={{ fontSize: "10.5px", padding: "1px 5px", marginLeft: "4px" }}>
+                      <Check size={10} /> Assigned
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <label className="form-field" style={{ marginTop: "10px" }}><span>Classroom / Lab Venue</span><input name="room" maxLength="80" placeholder="e.g. Lab 4 / Virtual Hall" /></label>
       <label className="form-field" style={{ marginTop: "10px" }}><span>Description &amp; Syllabus</span><textarea name="description" rows="3" maxLength="3000" placeholder="Outline course syllabus, prerequisites, and learning objectives..." /></label>
       <fieldset className="admin-options" style={{ marginTop: "12px" }}><legend>Enroll approved students</legend>{students.filter((student) => student.is_approved).map((student) => <label className="admin-option" key={student.id}><input type="checkbox" name="student_ids" value={student.id} /><span>{student.full_name || student.email}</span><small>{student.email}</small></label>)}{!students.some((student) => student.is_approved) && <p>Approve a student before creating an enrollment.</p>}</fieldset>
@@ -2632,6 +2740,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       <EditCourseModal
         course={editingCourse}
         students={students}
+        trainers={trainers}
         enrollments={enrollments}
         onClose={() => setEditingCourse(null)}
         onSave={updateCourse}
