@@ -861,29 +861,37 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
           {eligibleStudents.length > 0 && (
             <div className="course-quick-enroll">
-              <select
-                id={`enroll-${course.id}`}
-                defaultValue=""
-                className="status-select course-enroll-select"
-              >
-                <option value="" disabled>Enroll student…</option>
-                {eligibleStudents.map((s) => (
-                  <option key={s.id} value={s.id}>{s.full_name || s.email}</option>
-                ))}
-              </select>
-              <button
-                className="button primary course-enroll-btn"
-                type="button"
-                onClick={() => {
-                  const el = document.getElementById(`enroll-${course.id}`);
-                  if (el?.value) {
-                    enrollStudentInCourse(course.id, el.value);
-                    el.value = "";
-                  }
-                }}
-              >
-                <Plus size={13} /> Enroll
-              </button>
+              <span className="course-quick-enroll-label">Enroll an approved student:</span>
+              <div className="course-quick-enroll-inputs">
+                <select
+                  id={`enroll-${course.id}`}
+                  defaultValue=""
+                  className="status-select course-enroll-select"
+                  aria-label="Select student to enroll"
+                >
+                  <option value="" disabled>Select approved student…</option>
+                  {eligibleStudents.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.full_name || s.email} {s.full_name && s.email ? `(${s.email})` : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="button primary course-enroll-btn"
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById(`enroll-${course.id}`);
+                    if (el?.value) {
+                      enrollStudentInCourse(course.id, el.value);
+                      el.value = "";
+                    } else {
+                      onToast?.("Please select a student to enroll.");
+                    }
+                  }}
+                >
+                  <Plus size={14} /> Enroll
+                </button>
+              </div>
             </div>
           )}
         </div>

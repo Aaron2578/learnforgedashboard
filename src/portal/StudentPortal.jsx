@@ -723,7 +723,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             const isDrive = !!item.drive_url;
 
             return (
-              <article className="card material-card" key={item.id}>
+              <article className={`card material-card ${isDrive ? "material-card-drive" : "material-card-pdf"}`} key={item.id}>
                 <div className="material-card-header">
                   <span className={`material-icon ${isDrive ? "drive" : "pdf"}`}>
                     {isDrive ? <Link2 size={18} /> : <FileText size={18} />}
@@ -769,7 +769,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                   )}
                 </div>
 
-                <div className="material-actions">
+                <div className={`material-actions student-material-actions ${isDrive || isApproved || isPending ? "two-buttons" : "single-button"}`}>
                   <button
                     className="button primary material-preview-btn"
                     type="button"
@@ -784,30 +784,40 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                     }
                   >
                     <Eye size={14} />
-                    <span>Open in Dashboard</span>
+                    <span>{isDrive ? "Open in App" : "Open in Dashboard"}</span>
                   </button>
 
                   {isApproved ? (
                     <button
-                      className="button"
+                      className="button material-student-action-btn material-btn-unlocked"
                       type="button"
                       onClick={() => downloadApprovedItem(item)}
                       title="Download file approved by administrator"
                     >
-                      <Download size={13} /> Download
+                      <Download size={13} /> <span>Download</span>
                     </button>
                   ) : isPending ? (
-                    <button className="button disabled" type="button" disabled title="Waiting for admin approval">
-                      <Clock3 size={13} /> Pending
+                    <button className="button disabled material-student-action-btn" type="button" disabled title="Waiting for admin approval">
+                      <Clock3 size={13} /> <span>Pending</span>
                     </button>
+                  ) : isDrive ? (
+                    <a
+                      className="button material-student-action-btn material-open-link-btn"
+                      href={item.drive_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open Google Drive document"
+                    >
+                      <ExternalLink size={13} /> <span>Open Drive</span>
+                    </a>
                   ) : (
                     <button
-                      className="button"
+                      className="button material-student-action-btn material-btn-request"
                       type="button"
                       onClick={() => submitDownloadRequest(item.id, null)}
                       title="Request administrator permission to download this file"
                     >
-                      <Lock size={13} /> Request Download
+                      <Lock size={13} /> <span>Request Download</span>
                     </button>
                   )}
                 </div>

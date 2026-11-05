@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpen, Check, Clock3, GraduationCap, MapPin, Trash2, Users, X } from "lucide-react";
+import { BookOpen, Check, Clock3, GraduationCap, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 
 export default function EditCourseModal({
   course,
@@ -205,37 +205,30 @@ export default function EditCourseModal({
             </div>
 
             {eligibleStudents.length > 0 && (
-              <div style={{ display: "flex", gap: "8px", marginTop: "10px", alignItems: "center" }}>
-                <select
-                  value={selectedStudentToEnroll}
-                  onChange={(e) => setSelectedStudentToEnroll(e.target.value)}
-                  className="status-select"
-                  style={{
-                    height: "36px",
-                    flex: "1",
-                    padding: "0 10px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--line)",
-                    background: "#ffffff",
-                    fontSize: "12.5px",
-                  }}
-                >
-                  <option value="">Select approved student to enroll…</option>
-                  {eligibleStudents.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.full_name || s.email} ({s.email})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="button"
-                  style={{ height: "36px", fontSize: "12.5px" }}
-                  disabled={!selectedStudentToEnroll}
-                  onClick={handleEnrollStudent}
-                >
-                  Add Student
-                </button>
+              <div className="course-modal-enroll-box">
+                <span className="course-quick-enroll-label">Enroll an approved student:</span>
+                <div className="course-modal-enroll-row">
+                  <select
+                    value={selectedStudentToEnroll}
+                    onChange={(e) => setSelectedStudentToEnroll(e.target.value)}
+                    className="status-select course-modal-enroll-select"
+                  >
+                    <option value="">Select approved student to enroll…</option>
+                    {eligibleStudents.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name || s.email} ({s.email})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="button primary course-modal-enroll-btn"
+                    disabled={!selectedStudentToEnroll}
+                    onClick={handleEnrollStudent}
+                  >
+                    <Plus size={14} /> Add Student
+                  </button>
+                </div>
               </div>
             )}
           </div>
