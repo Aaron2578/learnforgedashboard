@@ -11,11 +11,13 @@ import EditStudentModal from "../components/EditStudentModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import StudentAccessModal from "../components/StudentAccessModal";
+import CreateTrainerModal from "../components/CreateTrainerModal";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
   Students: ["People", "Students", "Approve access, invite students, and manage student accounts."],
+  Trainers: ["Faculty & Staff", "Trainers & Instructors", "Create trainer accounts, manage credentials, and assign timing."],
   Courses: ["Academic programs", "Courses", "Create courses, manage schedules and instructors, and enroll students."],
   Attendance: ["Academic operations", "Attendance", "Record and review daily student attendance."],
   Tasks: ["Academic & Student support", "Tasks", "Assign tasks, homework, and practice milestones to students separately or in batches."],
@@ -35,6 +37,9 @@ function formatCourseDate(value) {
 
 function AdminManagementView({ view, supabase, user, query, onToast, onNavigate }) {
   const [students, setStudents] = useState([]);
+  const [trainers, setTrainers] = useState([]);
+  const [showTrainerModal, setShowTrainerModal] = useState(false);
+  const [trainerSearch, setTrainerSearch] = useState("");
   const [courses, setCourses] = useState([]);
   const [enrollments, setEnrollments] = useState([]);
   const [records, setRecords] = useState([]);
@@ -98,6 +103,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     try {
       const [
         studentResult,
+        trainerResult,
         courseResult,
         enrollmentResult,
         storageResult,
@@ -109,6 +115,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         allNotesResult,
       ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "student").order("created_at", { ascending: false }),
+        supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "trainer").order("created_at", { ascending: false }),
         supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
@@ -136,6 +143,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         return;
       }
       setStudents(studentResult.data ?? []);
+      setTrainers(trainerResult.data ?? []);
       setCourses(courseResult.data ?? []);
       setEnrollments(enrollmentResult.data ?? []);
       setMaterials(materialsResult.data ?? []);
@@ -214,6 +222,74 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     if (deleteError || data?.error) setError(deleteError ? await getFunctionErrorMessage(deleteError) : data.error);
     else {
       onToast("Student account and associated records deleted.");
+      await loadData();
+    }
+    setBusy(false);
+  }
+
+  async function promoteToTrainer(student) {
+    if (!window.confirm(`Promote ${student.full_name || student.email} to Trainer? They will have full access to the Trainer Dashboard.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { data, error: updateErr } = await supabase.functions.invoke("admin-actions", {
+        body: { action: "update_user_role", userId: student.id, role: "trainer" },
+      });
+      if (updateErr || data?.error) {
+        throw new Error(updateErr ? await getFunctionErrorMessage(updateErr) : data.error);
+      }
+      onToast(`${student.full_name || student.email} has been promoted to Trainer!`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not promote user: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function demoteToStudent(trainer) {
+    if (!window.confirm(`Change ${trainer.full_name || trainer.email}'s role back to Student?`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { data, error: updateErr } = await supabase.functions.invoke("admin-actions", {
+        body: { action: "update_user_role", userId: trainer.id, role: "student" },
+      });
+      if (updateErr || data?.error) {
+        throw new Error(updateErr ? await getFunctionErrorMessage(updateErr) : data.error);
+      }
+      onToast(`${trainer.full_name || trainer.email} role changed to Student.`);
+      await loadData();
+    } catch (err) {
+      setError(`Could not demote user: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleTrainerStatus(trainer) {
+    setBusy(true);
+    setError("");
+    const nextStatus = !trainer.is_approved;
+    const { error: updateError } = await supabase.from("profiles").update({ is_approved: nextStatus }).eq("id", trainer.id);
+    if (updateError) setError(updateError.message);
+    else {
+      onToast(nextStatus ? `${trainer.full_name || trainer.email} activated.` : `${trainer.full_name || trainer.email} suspended.`);
+      await loadData();
+    }
+    setBusy(false);
+  }
+
+  async function deleteTrainer(trainer) {
+    if (!window.confirm(`Permanently delete trainer ${trainer.full_name || trainer.email}? This cannot be undone.`)) return;
+    setBusy(true);
+    setError("");
+    const { data, error: deleteError } = await supabase.functions.invoke("admin-actions", {
+      body: { action: "delete_student", studentId: trainer.id },
+    });
+    if (deleteError || data?.error) setError(deleteError ? await getFunctionErrorMessage(deleteError) : data.error);
+    else {
+      onToast("Trainer account deleted.");
       await loadData();
     }
     setBusy(false);
@@ -939,7 +1015,30 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
   return <div className="admin-workspace">
     <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="heading-actions">
-      {["Students", "Courses", "Attendance", "Notes", "Tasks"].includes(view) && <button className="button primary" onClick={() => { setShowForm((current) => !current); setError(""); }}><Plus size={15} />{view === "Students" ? "Add student" : view === "Courses" ? "Add course" : view === "Attendance" ? "Record attendance" : "Assign task"}</button>}
+      {["Students", "Trainers", "Courses", "Attendance", "Notes", "Tasks"].includes(view) && (
+        <button
+          className="button primary"
+          onClick={() => {
+            if (view === "Trainers") {
+              setShowTrainerModal(true);
+            } else {
+              setShowForm((current) => !current);
+            }
+            setError("");
+          }}
+        >
+          <Plus size={15} />
+          {view === "Students"
+            ? "Add student"
+            : view === "Trainers"
+            ? "Create trainer account"
+            : view === "Courses"
+            ? "Add course"
+            : view === "Attendance"
+            ? "Record attendance"
+            : "Assign task"}
+        </button>
+      )}
       <button className="button" onClick={loadData}>Refresh</button>
     </div></div>
     {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
@@ -1280,13 +1379,13 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           <div className="metric-value">{students.length}</div>
           <div className="metric-foot">Registered student accounts</div>
         </article>
-        <article className="card metric-card">
-          <div className="metric-top"><span>Approved access</span><span className="metric-icon green"><Check size={17} /></span></div>
-          <div className="metric-value">{students.filter((s) => s.is_approved).length}</div>
-          <div className="metric-foot">Active in student portal</div>
+        <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => onNavigate("Trainers")}>
+          <div className="metric-top"><span>Trainers &amp; Faculty</span><span className="metric-icon blue"><GraduationCap size={17} /></span></div>
+          <div className="metric-value">{trainers.length}</div>
+          <div className="metric-foot">{trainers.filter((t) => t.is_approved).length} active instructors</div>
         </article>
         <article className="card metric-card">
-          <div className="metric-top"><span>Active courses</span><span className="metric-icon amber"><GraduationCap size={17} /></span></div>
+          <div className="metric-top"><span>Active courses</span><span className="metric-icon amber"><BookOpen size={17} /></span></div>
           <div className="metric-value">{courses.length}</div>
           <div className="metric-foot">{enrollments.length} total enrollments</div>
         </article>
@@ -1316,6 +1415,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             <div><h2>Quick actions</h2><p>Common campus administrative tasks</p></div>
           </div>
           <div style={{ display: "grid", gap: "10px", marginTop: "14px" }}>
+            <button className="button" style={{ justifyContent: "flex-start" }} type="button" onClick={() => { onNavigate("Trainers"); setShowTrainerModal(true); }}>
+              <GraduationCap size={14} /> Create trainer account
+            </button>
             <button className="button" style={{ justifyContent: "flex-start" }} type="button" onClick={() => { onNavigate("Students"); setShowForm(true); }}>
               <Plus size={14} /> Add new student
             </button>
@@ -1524,6 +1626,17 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                     </button>
 
                     <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => promoteToTrainer(student)}
+                      title={`Promote ${student.full_name || student.email} to Trainer`}
+                    >
+                      <GraduationCap size={13} />
+                      <span>Make Trainer</span>
+                    </button>
+
+                    <button
                       className="button compact danger-icon"
                       type="button"
                       disabled={busy}
@@ -1540,6 +1653,200 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             );
           })}
           {!filteredStudents.length && <div className="card portal-empty"><Users size={22} /><strong>{students.length ? "No students match this filter" : "No student accounts yet"}</strong><span>{students.length ? "Change the search or approval filter." : "Add a student to send a secure sign-in invitation."}</span></div>}
+        </section>
+      </section>
+    </> : view === "Trainers" ? <>
+      <section className="student-admin-summary">
+        <article className="card summary-card summary-card-total">
+          <span>Total trainers</span>
+          <strong>{trainers.length}</strong>
+        </article>
+        <article className="card summary-card summary-card-approved">
+          <span>Active &amp; Approved</span>
+          <strong>{trainers.filter((t) => t.is_approved).length}</strong>
+        </article>
+        <article className="card summary-card summary-card-pending">
+          <span>Assigned Shifts</span>
+          <strong>{new Set(trainers.map((t) => t.timing).filter(Boolean)).size || (trainers.length > 0 ? 1 : 0)}</strong>
+        </article>
+      </section>
+
+      {/* Pre-configured Trainer Account Callout */}
+      <div
+        className="card"
+        style={{
+          background: "linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)",
+          border: "1px solid #bfdbfe",
+          borderRadius: "12px",
+          padding: "16px 20px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "14px",
+          marginBottom: "16px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div
+            style={{
+              width: "42px",
+              height: "42px",
+              borderRadius: "10px",
+              background: "#2563eb",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <GraduationCap size={22} />
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <strong style={{ fontSize: "15px", color: "#1e3a8a" }}>Lead Trainer Account Ready</strong>
+              <span className="badge green"><i />Pre-configured</span>
+            </div>
+            <div style={{ fontSize: "13px", color: "#3b82f6", marginTop: "2px" }}>
+              Email: <strong>trainer@learnforge.com</strong> | Password: <strong>Trainer@LearnForge2026!</strong>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            type="button"
+            className="button compact"
+            onClick={() => {
+              navigator.clipboard.writeText("Email: trainer@learnforge.com\nPassword: Trainer@LearnForge2026!\nURL: " + window.location.origin);
+              onToast("Lead trainer credentials copied to clipboard!");
+            }}
+          >
+            <Copy size={13} /> Copy Credentials
+          </button>
+          <button
+            type="button"
+            className="button primary compact"
+            onClick={() => setShowTrainerModal(true)}
+          >
+            <Plus size={13} /> Create New Trainer
+          </button>
+        </div>
+      </div>
+
+      <section className="card student-admin-directory">
+        <div className="student-admin-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <div className="search-box" style={{ maxWidth: "340px", flex: 1 }}>
+            <Search size={15} />
+            <input
+              type="search"
+              placeholder="Search trainers by name, email, or timing..."
+              value={trainerSearch}
+              onChange={(e) => setTrainerSearch(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => setShowTrainerModal(true)}
+          >
+            <Plus size={14} /> Add Trainer Account
+          </button>
+        </div>
+
+        <section className="student-card-grid">
+          {trainers
+            .filter((t) => {
+              const q = trainerSearch.trim().toLowerCase();
+              if (!q) return true;
+              return [t.full_name, t.email, t.timing].some((v) => v && v.toLowerCase().includes(q));
+            })
+            .map((trainer) => (
+              <article className="card student-manage-card" key={trainer.id}>
+                <div className="student-card-top">
+                  <div className="student-card-profile">
+                    <span className="student-avatar" style={{ background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", color: "#ffffff" }}>
+                      {(trainer.full_name || trainer.email).slice(0, 1).toUpperCase()}
+                    </span>
+                    <div className="student-card-identity">
+                      <strong>{trainer.full_name || "Trainer"}</strong>
+                      <span className="student-card-email">{trainer.email}</span>
+                      <div style={{ marginTop: "4px", display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="badge blue" style={{ fontSize: "11px" }}>
+                          <GraduationCap size={11} style={{ marginRight: "3px" }} /> Trainer
+                        </span>
+                        {trainer.timing && (
+                          <span className="badge" style={{ fontSize: "11px", background: "#f1f5f9", color: "#475569" }}>
+                            <Clock3 size={11} style={{ marginRight: "3px" }} /> {trainer.timing}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`portal-status ${trainer.is_approved ? "submitted" : "pending"}`}>
+                    {trainer.is_approved ? "Active" : "Suspended"}
+                  </span>
+                </div>
+
+                <div className="student-card-bottom" style={{ borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" }}>
+                  <div className="student-actions-row-secondary" style={{ width: "100%", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        navigator.clipboard.writeText(`Trainer Account: ${trainer.email}\nPortal URL: ${window.location.origin}`);
+                        onToast(`Login details copied for ${trainer.email}`);
+                      }}
+                      title="Copy login info"
+                    >
+                      <Copy size={13} />
+                      <span>Copy Info</span>
+                    </button>
+
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => toggleTrainerStatus(trainer)}
+                      title={trainer.is_approved ? "Suspend trainer account" : "Activate trainer account"}
+                    >
+                      {trainer.is_approved ? "Suspend" : <><Check size={13} /> Activate</>}
+                    </button>
+
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => demoteToStudent(trainer)}
+                      title="Switch role from Trainer to Student"
+                    >
+                      <Users size={13} />
+                      <span>Make Student</span>
+                    </button>
+
+                    <button
+                      className="button compact danger-icon"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => deleteTrainer(trainer)}
+                      title="Delete trainer account"
+                      aria-label="Delete trainer account"
+                    >
+                      <Trash2 size={13} />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+
+          {trainers.length === 0 && (
+            <div className="card portal-empty">
+              <GraduationCap size={24} />
+              <strong>No trainer accounts yet</strong>
+              <span>Click "Add Trainer Account" to provision a login account for an instructor.</span>
+            </div>
+          )}
         </section>
       </section>
     </> : view === "Courses" ? <>
@@ -2163,6 +2470,14 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         onEnrollStudent={enrollStudentInCourse}
         onUnenrollStudent={unenrollStudentFromCourse}
         onPreviewDoc={(title, subtitle, url) => setViewingNoteDoc({ title, subtitle, url })}
+      />
+    )}
+    {showTrainerModal && (
+      <CreateTrainerModal
+        supabase={supabase}
+        onClose={() => setShowTrainerModal(false)}
+        onCreated={() => loadData()}
+        onToast={onToast}
       />
     )}
   </div>;

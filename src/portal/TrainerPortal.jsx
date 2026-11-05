@@ -2512,3 +2512,4 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
     </div>
   );
 }
+

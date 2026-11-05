@@ -41,6 +41,7 @@ const LEGACY_STORAGE_KEY = "northstar-institute-dashboard-v1";
 const NAV_ITEMS = [
   { label: "Overview", icon: LayoutDashboard },
   { label: "Students", icon: Users },
+  { label: "Trainers", icon: GraduationCap },
   { label: "Courses", icon: BookOpen },
   { label: "Drive & Files", icon: HardDrive },
   { label: "Attendance", icon: ClipboardCheck },
@@ -418,8 +419,10 @@ function App({ user, profile, supabase, onSignOut }) {
   const searchLabel = {
     Overview: "Search students...",
     Students: "Search students...",
+    Trainers: "Search trainers...",
     Courses: "Search courses...",
     Attendance: "Search students...",
+    Tasks: "Search tasks...",
     Notes: "Search notes...",
     Reports: "Search reports...",
     Assignments: "Search assignments...",
@@ -629,6 +632,7 @@ function App({ user, profile, supabase, onSignOut }) {
   const viewContent = {
     Overview: renderAdminManagementView,
     Students: renderAdminManagementView,
+    Trainers: renderAdminManagementView,
     Courses: renderAdminManagementView,
     "Drive & Files": renderAdminDriveView,
     Attendance: renderAdminManagementView,

@@ -245,6 +245,29 @@ export default function AuthGate() {
     return <StudentPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
   }
   if (profile.role === "trainer") {
+    if (!profile.is_approved) {
+      return (
+        <main className="auth-page">
+          <section className="auth-card">
+            <div className="auth-logo">
+              <span className="brand-mark"><GraduationCap size={22} /></span>
+              <span><strong>LearnForge</strong><small>Trainer portal</small></span>
+            </div>
+            <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Clock3 size={14} /> Account status
+            </div>
+            <h1>Trainer access paused</h1>
+            <p>Your trainer account is currently inactive or awaiting administrator approval. Please contact the campus administrator.</p>
+            <div style={{ marginTop: "24px", display: "flex", flexWrap: "wrap", gap: "10px" }}>
+              <button className="button primary" type="button" onClick={() => window.location.reload()}>
+                <RefreshCw size={14} /> Refresh status
+              </button>
+              <button className="button" type="button" onClick={signOut}>Sign out</button>
+            </div>
+          </section>
+        </main>
+      );
+    }
     return <TrainerPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
   }
   if (profile.role === "superuser" || profile.role === "admin") {

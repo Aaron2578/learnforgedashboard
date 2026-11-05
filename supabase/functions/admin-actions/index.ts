@@ -94,7 +94,7 @@ Deno.serve(async (request) => {
       .eq("id", payload.studentId)
       .single();
     if (studentError) return response({ error: `Could not find the student: ${studentError.message}` }, 404);
-    if (student.role !== "student") return response({ error: "Only student accounts can be deleted here." }, 403);
+    if (student.role !== "student" && student.role !== "trainer") return response({ error: "Only student and trainer accounts can be deleted here." }, 403);
     const filePaths: string[] = [];
     async function collectFiles(path: string) {
       const { data: entries, error: listError } = await adminClient.storage.from("assignment-files").list(path, { limit: 1000 });
@@ -289,6 +289,93 @@ Deno.serve(async (request) => {
       inAppSent: recipients.length,
       emailSent: hasSendGrid ? recipients.length : 0,
     });
+  }
+
+  if (payload.action === "create_trainer") {
+    const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+    const password = typeof payload.password === "string" ? payload.password : "";
+    const fullName = typeof payload.fullName === "string" ? payload.fullName.trim() : "";
+    const timing = typeof payload.timing === "string" ? payload.timing.trim() : "";
+
+    if (!email || !email.includes("@")) {
+      return response({ error: "A valid trainer email is required." }, 400);
+    }
+    if (!password || password.length < 8) {
+      return response({ error: "Password must be at least 8 characters long." }, 400);
+    }
+
+    let userId = "";
+
+    // 1. Try to create the user in Auth
+    const { data: userData, error: createError } = await adminClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName || "Trainer", role: "trainer" },
+    });
+
+    if (createError) {
+      // If user already registered, update their credentials and role
+      if (createError.code === "email_exists" || createError.message?.toLowerCase().includes("already been registered")) {
+        const { data: userList } = await adminClient.auth.admin.listUsers();
+        const existing = userList?.users?.find((u) => u.email?.toLowerCase() === email);
+        if (!existing) {
+          return response({ error: `Account exists in Auth, but user record could not be retrieved: ${createError.message}` }, 400);
+        }
+        userId = existing.id;
+        const { error: updateAuthErr } = await adminClient.auth.admin.updateUserById(userId, {
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: fullName || existing.user_metadata?.full_name || "Trainer", role: "trainer" },
+        });
+        if (updateAuthErr) {
+          return response({ error: `Failed to update credentials for existing user: ${updateAuthErr.message}` }, 400);
+        }
+      } else {
+        return response({ error: `Could not create trainer account: ${createError.message}` }, 400);
+      }
+    } else if (userData?.user) {
+      userId = userData.user.id;
+    }
+
+    // 2. Upsert profile with role = 'trainer' and is_approved = true
+    const { error: profileUpsertError } = await adminClient.from("profiles").upsert({
+      id: userId,
+      email,
+      full_name: fullName || "Trainer",
+      role: "trainer",
+      is_approved: true,
+      timing: timing || null,
+    }, { onConflict: "id" });
+
+    if (profileUpsertError) {
+      return response({ error: `User created, but profile update failed: ${profileUpsertError.message}` }, 500);
+    }
+
+    return response({
+      success: true,
+      trainer: {
+        id: userId,
+        email,
+        fullName: fullName || "Trainer",
+        role: "trainer",
+        is_approved: true,
+      },
+    });
+  }
+
+  if (payload.action === "update_user_role") {
+    const userId = typeof payload.userId === "string" ? payload.userId : "";
+    const newRole = typeof payload.role === "string" ? payload.role : "student";
+    if (!userId) return response({ error: "User ID required." }, 400);
+
+    const { error: updateErr } = await adminClient.from("profiles").update({
+      role: newRole,
+      is_approved: true,
+    }).eq("id", userId);
+
+    if (updateErr) return response({ error: updateErr.message }, 500);
+    return response({ success: true, userId, role: newRole });
   }
 
   return response({ error: "Unsupported admin action." }, 400);

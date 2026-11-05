@@ -92,7 +92,16 @@ begin
   end if;
 end $$;
 
--- 9. Grant RLS permissions for trainers on material_recipients
+-- 9. Ensure material_recipients table exists and grant permissions
+create table if not exists public.material_recipients (
+  material_id uuid not null references public.course_materials (id) on delete cascade,
+  student_id uuid not null references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (material_id, student_id)
+);
+alter table public.material_recipients enable row level security;
+grant all on public.material_recipients to authenticated;
+
 do $$
 begin
   if not exists (
@@ -105,3 +114,48 @@ begin
       with check ((select public.is_trainer()));
   end if;
 end $$;
+
+-- 10. Update handle_new_user to recognize trainer role and auto-approve
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  assigned_role text;
+  approved_status boolean;
+begin
+  assigned_role := coalesce(nullif(trim(new.raw_user_meta_data ->> 'role'), ''), 'student');
+  if assigned_role in ('trainer', 'superuser') then
+    approved_status := true;
+  else
+    approved_status := false;
+  end if;
+
+  insert into public.profiles (id, email, full_name, role, is_approved)
+  values (
+    new.id,
+    new.email,
+    coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), split_part(new.email, '@', 1)),
+    assigned_role,
+    approved_status
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        full_name = coalesce(nullif(trim(excluded.full_name), ''), public.profiles.full_name),
+        role = case when public.profiles.role = 'superuser' then 'superuser' else excluded.role end,
+        is_approved = case when excluded.role in ('trainer', 'superuser') then true else public.profiles.is_approved end;
+
+  return new;
+end;
+$$;
+
+-- 11. Update trainer@learnforge.com to trainer role if exists
+update public.profiles
+set role = 'trainer',
+    is_approved = true,
+    full_name = 'Lead Trainer Alex'
+where lower(email) = 'trainer@learnforge.com';
+
+
