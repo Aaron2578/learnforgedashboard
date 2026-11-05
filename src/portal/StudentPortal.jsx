@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -15,7 +15,7 @@ const STUDENT_NAV = [
   { label: "Assignments", icon: BookOpen },
   { label: "Tests", icon: ClipboardList },
   { label: "Courses", icon: GraduationCap },
-  { label: "Notes", icon: FileText },
+  { label: "Tasks", icon: CheckCircle2 },
   { label: "Attendance", icon: Clock3 },
   { label: "Updates", icon: Mail },
   { label: "Messages", icon: MessageSquare },
@@ -91,16 +91,26 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
     const noteQuery = supabase
       .from("student_notes")
-      .select("id, course_id, title, body, drive_url, material_id, created_at")
+      .select("id, course_id, title, body, status, category, due_at, drive_url, material_id, created_at")
       .eq("student_id", user.id)
       .order("created_at", { ascending: false })
       .then(async (res) => {
-        if (res.error && (res.error.message?.includes("drive_url") || res.error.message?.includes("material_id") || res.error.code === "PGRST204" || res.error.code === "42703")) {
+        if (res.error) {
           return supabase
             .from("student_notes")
-            .select("id, course_id, title, body, created_at")
+            .select("id, course_id, title, body, drive_url, material_id, created_at")
             .eq("student_id", user.id)
-            .order("created_at", { ascending: false });
+            .order("created_at", { ascending: false })
+            .then(async (fallbackRes) => {
+              if (fallbackRes.error) {
+                return supabase
+                  .from("student_notes")
+                  .select("id, course_id, title, body, created_at")
+                  .eq("student_id", user.id)
+                  .order("created_at", { ascending: false });
+              }
+              return fallbackRes;
+            });
         }
         return res;
       });
@@ -411,10 +421,33 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           }
         }
       } else if (material.drive_url) {
-        window.open(material.drive_url, "_blank");
+        const downloadUrl = getDriveDownloadExportUrl(material.drive_url);
+        window.open(downloadUrl, "_blank");
       }
     } catch (err) {
       setError(`Download error: ${err.message}`);
+    }
+  }
+
+  async function toggleTaskStatus(taskId, currentStatus) {
+    const nextStatus = currentStatus === "completed" ? "assigned" : "completed";
+    setBusy(true);
+    try {
+      const { error: updateErr } = await supabase
+        .from("student_notes")
+        .update({ status: nextStatus })
+        .eq("id", taskId);
+      if (updateErr) {
+        console.warn("Could not update task status:", updateErr.message);
+      }
+      setNotes((prev) =>
+        prev.map((n) => (n.id === taskId ? { ...n, status: nextStatus } : n))
+      );
+      setNotice(nextStatus === "completed" ? "Task marked as completed!" : "Task marked as assigned.");
+    } catch (err) {
+      console.warn(err);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -769,7 +802,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                   )}
                 </div>
 
-                <div className={`material-actions student-material-actions ${isDrive || isApproved || isPending ? "two-buttons" : "single-button"}`}>
+                <div className="material-actions student-material-actions two-buttons">
                   <button
                     className="button primary material-preview-btn"
                     type="button"
@@ -784,7 +817,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                     }
                   >
                     <Eye size={14} />
-                    <span>{isDrive ? "Open in App" : "Open in Dashboard"}</span>
+                    <span>Open in Dashboard</span>
                   </button>
 
                   {isApproved ? (
@@ -792,30 +825,20 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                       className="button material-student-action-btn material-btn-unlocked"
                       type="button"
                       onClick={() => downloadApprovedItem(item)}
-                      title="Download file approved by administrator"
+                      title="Download document (approved by administrator)"
                     >
                       <Download size={13} /> <span>Download</span>
                     </button>
                   ) : isPending ? (
-                    <button className="button disabled material-student-action-btn" type="button" disabled title="Waiting for admin approval">
+                    <button className="button disabled material-student-action-btn" type="button" disabled title="Waiting for instructor / admin approval">
                       <Clock3 size={13} /> <span>Pending</span>
                     </button>
-                  ) : isDrive ? (
-                    <a
-                      className="button material-student-action-btn material-open-link-btn"
-                      href={item.drive_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Open Google Drive document"
-                    >
-                      <ExternalLink size={13} /> <span>Open Drive</span>
-                    </a>
                   ) : (
                     <button
                       className="button material-student-action-btn material-btn-request"
                       type="button"
                       onClick={() => submitDownloadRequest(item.id, null)}
-                      title="Request administrator permission to download this file"
+                      title="Request permission to download this material"
                     >
                       <Lock size={13} /> <span>Request Download</span>
                     </button>
@@ -1019,9 +1042,13 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             const driveUrl = note.drive_url || extractDriveUrl(note.body);
             const cleanBody = cleanNoteBody(note.body, driveUrl);
             const docType = getDriveDocTypeLabel(driveUrl);
+            const isCompleted = note.status === "completed";
+            const dueFormatted = note.due_at
+              ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(note.due_at))
+              : null;
 
             return (
-              <article className="card portal-item note-portal-card" key={note.id}>
+              <article className={`card portal-item note-portal-card ${isCompleted ? "task-completed-card" : ""}`} key={note.id}>
                 <div className="portal-item-heading" style={{ alignItems: "flex-start" }}>
                   <span
                     className="portal-item-icon"
@@ -1029,43 +1056,63 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                       width: "40px",
                       height: "40px",
                       flexShrink: 0,
-                      background: driveUrl ? "#eef2ff" : "#f1f5f9",
-                      color: driveUrl ? "#4f46e5" : "#475569",
+                      background: isCompleted ? "#ecfdf5" : "#eef2ff",
+                      color: isCompleted ? "#059669" : "#4f46e5",
                     }}
                   >
-                    {driveUrl ? <HardDrive size={18} /> : <FileText size={18} />}
+                    {isCompleted ? <CheckCircle2 size={18} /> : <FileText size={18} />}
                   </span>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
-                      <strong style={{ fontSize: "16px", color: "var(--ink)" }}>{note.title}</strong>
+                      <strong style={{ fontSize: "16px", color: "var(--ink)", textDecoration: isCompleted ? "line-through" : "none" }}>
+                        {note.title}
+                      </strong>
                       {course && (
                         <span className="course-code-badge" style={{ fontSize: "11px" }}>
                           {course.code}
                         </span>
                       )}
-                      {driveUrl && (
-                        <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
-                          <HardDrive size={11} /> {docType}
+                      <span className="badge blue" style={{ fontSize: "11px", fontWeight: 650 }}>
+                        {note.category || "Task"}
+                      </span>
+                      {isCompleted ? (
+                        <span
+                          className="badge green"
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "3px",
+                          }}
+                        >
+                          <Check size={11} strokeWidth={3} /> Completed
+                        </span>
+                      ) : (
+                        <span
+                          className="badge amber"
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "3px",
+                          }}
+                        >
+                          <Clock3 size={11} /> To Do
                         </span>
                       )}
-                      <span
-                        className="badge green"
-                        style={{
-                          fontSize: "11px",
-                          fontWeight: 700,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "3px",
-                        }}
-                      >
-                        <Check size={11} strokeWidth={3} /> Status: Assigned
-                      </span>
                     </div>
 
-                    <small style={{ display: "block", marginTop: "3px", color: "var(--muted)" }}>
-                      {course ? `${course.name} · ` : ""}Added {dateLabel(note.created_at)}
-                    </small>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "4px", fontSize: "12px", color: "var(--muted)" }}>
+                      <span>{course ? `${course.name} · ` : ""}Assigned {dateLabel(note.created_at)}</span>
+                      {dueFormatted && (
+                        <span style={{ color: "#d97706", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
+                          <CalendarClock size={12} /> Due: {dueFormatted}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1075,101 +1122,45 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                   </p>
                 )}
 
-                {driveUrl && (
-                  <div
-                    className="note-drive-box"
-                    style={{
-                      marginTop: "14px",
-                      padding: "14px",
-                      background: "#f8fafc",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "10px",
-                      display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "12px",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
-                      <div
-                        style={{
-                          width: "36px",
-                          height: "36px",
-                          borderRadius: "8px",
-                          background: "#eef2ff",
-                          color: "#4f46e5",
-                          display: "grid",
-                          placeItems: "center",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <HardDrive size={18} />
-                      </div>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
-                          {docType} Attached
-                        </strong>
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            color: "var(--muted)",
-                            textOverflow: "ellipsis",
-                            overflow: "hidden",
-                            whiteSpace: "nowrap",
-                            display: "block",
-                          }}
-                        >
-                          {driveUrl}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="note-drive-actions" style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                <div style={{ marginTop: "14px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "10px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    {driveUrl && (
                       <button
                         type="button"
                         className="button primary compact"
                         onClick={() =>
                           openSecureViewer({
                             title: note.title,
-                            subtitle: course ? `${course.code} · ${course.name}` : "Lecture Notes",
+                            subtitle: course ? `${course.code} · ${course.name}` : "Task Attachment",
                             url: driveUrl,
                           })
                         }
                       >
-                        <Eye size={13} /> View Note Document
+                        <Eye size={13} /> View Attached Doc in Dashboard
                       </button>
-                      <button
-                        type="button"
-                        className="button compact"
-                        onClick={() => window.open(driveUrl, "_blank")}
-                        title="Open in Google Drive"
-                      >
-                        <ExternalLink size={13} /> Open Drive
-                      </button>
-                      <button
-                        type="button"
-                        className="button compact"
-                        onClick={() => {
-                          navigator.clipboard.writeText(driveUrl);
-                          setNotice("Drive link copied to clipboard.");
-                        }}
-                        title="Copy Drive link"
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
+                    )}
                   </div>
-                )}
+
+                  <button
+                    type="button"
+                    className={`button compact ${isCompleted ? "" : "primary"}`}
+                    onClick={() => toggleTaskStatus(note.id, note.status || "assigned")}
+                    disabled={busy}
+                    style={{ minHeight: "32px", fontSize: "12px" }}
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>{isCompleted ? "Mark as Incomplete" : "Mark as Completed"}</span>
+                  </button>
+                </div>
               </article>
             );
           })}
 
           {!filtered.length && !permittedLectureMaterials.length && (
             <div className="card portal-empty">
-              <FileText size={24} />
-              <strong>No notes permitted</strong>
-              <span>Course notes permitted by your instructor or notes assigned specifically to your account will appear here.</span>
+              <CheckCircle2 size={24} />
+              <strong>No tasks assigned</strong>
+              <span>Course tasks and practice assignments assigned specifically to your account will appear here.</span>
             </div>
           )}
         </section>
@@ -1228,15 +1219,6 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                       >
                         <Eye size={13} /> View Note Document
                       </button>
-                      {mat.drive_url && (
-                        <button
-                          type="button"
-                          className="button compact"
-                          onClick={() => window.open(mat.drive_url, "_blank")}
-                        >
-                          <ExternalLink size={13} /> Open Drive
-                        </button>
-                      )}
                     </div>
                   </article>
                 );
@@ -1334,12 +1316,13 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     Assignments: ["Coursework", "Assignments", "Read the instructions, then submit written work or an attachment."],
     Tests: ["Coursework", "Tests", "Complete your online tests and see your score immediately."],
     Courses: ["My campus", "Courses", "Courses your administrator has enrolled you in."],
-    Notes: ["My campus", "Notes", "Lecture notes, study guides, and notes from your instructor."],
+    Tasks: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
+    Notes: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
     Attendance: ["My campus", "Attendance", "Your recorded attendance."],
     Updates: ["My campus", "Updates", "Assignment and test notifications from your administrator."],
     Messages: ["Campus community", "Messages", "Send a private message to your institution’s support team."],
   };
-  const heading = pageTitles[activeView];
+  const heading = pageTitles[activeView] || pageTitles["My learning"];
   const unreadConversations = new Set(messages.filter((message) => message.sender_id !== user.id && !message.read_at).map((message) => message.conversation_id)).size;
 
   return <div className="app-shell student-app">
@@ -1360,7 +1343,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         <div className="page-heading"><div><div className="eyebrow">{heading[0]}</div><h1>{heading[1]}</h1><p>{heading[2]}</p></div>{activeView === "Messages" && <button className="button primary" onClick={() => { setSelectedConversation(""); setNewSubject(""); }}><Plus size={14} />New message</button>}</div>
         {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
         {notice && <div className="portal-alert success" role="status"><CheckCircle2 size={15} />{notice}<button type="button" onClick={() => setNotice("")}>Dismiss</button></div>}
-        {loading ? <div className="card portal-loading">Loading your secure coursework…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
+        {loading ? <div className="card portal-loading">Loading your secure coursework…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
       </div>
     </main>
 
@@ -1380,7 +1363,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           if (viewingDocument.directDownloadUrl) {
             window.open(viewingDocument.directDownloadUrl, "_blank");
           } else if (viewingDocument.url) {
-            window.open(viewingDocument.url, "_blank");
+            const dlUrl = getDriveDownloadExportUrl(viewingDocument.url);
+            window.open(dlUrl, "_blank");
           }
         }}
         onMarkCompleted={viewingDocument.testId ? () => markExternalTestCompleted(viewingDocument.testId) : null}

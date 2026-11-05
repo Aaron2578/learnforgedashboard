@@ -33,6 +33,7 @@ import {
 import AdminPortalView from "./portal/AdminPortalView.jsx";
 import AdminManagementView from "./portal/AdminManagementView.jsx";
 import AdminDriveView from "./portal/AdminDriveView.jsx";
+import TrainerPortal from "./portal/TrainerPortal.jsx";
 
 const STORAGE_KEY = "learnforge-dashboard-v1";
 const LEGACY_STORAGE_KEY = "northstar-institute-dashboard-v1";
@@ -43,10 +44,12 @@ const NAV_ITEMS = [
   { label: "Courses", icon: BookOpen },
   { label: "Drive & Files", icon: HardDrive },
   { label: "Attendance", icon: ClipboardCheck },
-  { label: "Notes", icon: FileText },
+  { label: "Tasks", icon: CheckCircle2 },
   { label: "Reports", icon: BarChart3 },
   { label: "Assignments", icon: FileSpreadsheet },
   { label: "Tests", icon: CheckCircle2 },
+  { group: "Instruction" },
+  { label: "Trainer Dashboard", icon: GraduationCap },
   { group: "Community" },
   { label: "Calendar", icon: CalendarDays },
   { label: "Messages", icon: MessageSquare },
@@ -619,6 +622,9 @@ function App({ user, profile, supabase, onSignOut }) {
   function renderAdminDriveView() {
     return <AdminDriveView key={activeView} supabase={supabase} user={user} query={query} onToast={setToast} />;
   }
+  function renderTrainerPortalView() {
+    return <TrainerPortal user={user} profile={profile} supabase={supabase} onSignOut={onSignOut} />;
+  }
 
   const viewContent = {
     Overview: renderAdminManagementView,
@@ -626,7 +632,9 @@ function App({ user, profile, supabase, onSignOut }) {
     Courses: renderAdminManagementView,
     "Drive & Files": renderAdminDriveView,
     Attendance: renderAdminManagementView,
+    Tasks: renderAdminManagementView,
     Notes: renderAdminManagementView,
+    "Trainer Dashboard": renderTrainerPortalView,
     Reports: renderReports,
     Calendar: renderCalendar,
     Assignments: renderAdminPortalView,

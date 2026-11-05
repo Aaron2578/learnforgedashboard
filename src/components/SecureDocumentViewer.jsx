@@ -83,6 +83,7 @@ export default function SecureDocumentViewer({
   directDownloadUrl,
   userEmail,
   isSuperuser = false,
+  isTrainer = false,
   downloadStatus = null, // 'pending' | 'approved' | 'rejected' | 'revoked' | null
   onRequestDownload,
   onDownload,
@@ -95,7 +96,7 @@ export default function SecureDocumentViewer({
 
   const embedUrl = getEmbedUrl(url);
   const isGoogleSource = /drive\.google\.com|docs\.google\.com|forms\.gle/i.test(url || "");
-  const canDownload = isSuperuser || downloadStatus === "approved";
+  const canDownload = isSuperuser || isTrainer || downloadStatus === "approved";
 
   async function handleSendRequest(e) {
     e.preventDefault();
@@ -198,14 +199,14 @@ export default function SecureDocumentViewer({
               </button>
             )}
 
-            {/* Optional Open in Clean Tab for Google sources */}
-            {isGoogleSource && (
+            {/* Admin/Trainer only: Open in new tab. Students must view inside the dashboard */}
+            {isGoogleSource && (isSuperuser || isTrainer) && (
               <a
                 className="button compact"
                 href={url || embedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="If Google asks you to sign in or shows a cookie error, open directly in a new Google tab"
+                title="Open directly in a new Google tab (Admin/Trainer)"
                 style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
               >
                 <ExternalLink size={13} />

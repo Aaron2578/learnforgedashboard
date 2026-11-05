@@ -18,7 +18,8 @@ const headings = {
   Students: ["People", "Students", "Approve access, invite students, and manage student accounts."],
   Courses: ["Academic programs", "Courses", "Create courses, manage schedules and instructors, and enroll students."],
   Attendance: ["Academic operations", "Attendance", "Record and review daily student attendance."],
-  Notes: ["Academic & Student support", "Notes", "Upload and share lecture notes, study materials, and student notes via Google Drive links or direct text."],
+  Tasks: ["Academic & Student support", "Tasks", "Assign tasks, homework, and practice milestones to students separately or in batches."],
+  Notes: ["Academic & Student support", "Tasks", "Assign tasks, homework, and practice milestones to students separately or in batches."],
 };
 
 function formatCourseDate(value) {
@@ -116,9 +117,14 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         supabase.from("assessments").select("id, title, description, course_id, due_at, published, created_at").order("created_at", { ascending: false }),
         supabase.from("assessment_recipients").select("assessment_id, student_id"),
         supabase.from("material_recipients").select("material_id, student_id").then((r) => r.error ? { data: [] } : r),
-        supabase.from("student_notes").select("id, student_id, course_id, title, body, drive_url, material_id, created_at").order("created_at", { ascending: false }).then(async (r) => {
-          if (r.error && (r.error.message?.includes("drive_url") || r.error.message?.includes("material_id") || r.error.code === "PGRST204" || r.error.code === "42703")) {
-            return supabase.from("student_notes").select("id, student_id, course_id, title, body, created_at").order("created_at", { ascending: false });
+        supabase.from("student_notes").select("id, student_id, course_id, title, body, status, category, due_at, drive_url, material_id, created_at").order("created_at", { ascending: false }).then(async (r) => {
+          if (r.error) {
+            return supabase.from("student_notes").select("id, student_id, course_id, title, body, drive_url, material_id, created_at").order("created_at", { ascending: false }).then(async (fallbackR) => {
+              if (fallbackR.error) {
+                return supabase.from("student_notes").select("id, student_id, course_id, title, body, created_at").order("created_at", { ascending: false });
+              }
+              return fallbackR;
+            });
           }
           return r;
         }),
@@ -152,7 +158,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           .order("attendance_date", { ascending: false });
         if (resultError) setError(resultError.message);
         else setRecords(data ?? []);
-      } else if (view === "Notes") {
+      } else if (view === "Notes" || view === "Tasks") {
         setRecords(loadedAllNotes);
       }
     } catch (err) {
@@ -419,17 +425,18 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       return;
     }
 
-    // view === "Notes" - multi-student checkbox access
+    // view === "Tasks" || view === "Notes" - multi-student checkbox task assignment
     const targetStudentIds = noteSelectedStudentIds.length > 0
       ? noteSelectedStudentIds
       : (values.get("student_id") || notePrefillStudentId ? [values.get("student_id") || notePrefillStudentId] : []);
     const courseId = noteFormCourseId || values.get("course_id") || null;
     const title = String(values.get("title") || "").trim();
-    const driveUrl = String(values.get("drive_url") || noteDriveUrl || "").trim();
+    const taskCategory = String(values.get("category") || "Task").trim();
+    const dueAt = values.get("due_at") ? new Date(values.get("due_at")).toISOString() : null;
     let body = String(values.get("body") || "").trim();
 
     if (!title) {
-      setError("Note title is required.");
+      setError("Task title is required.");
       setBusy(false);
       return;
     }
@@ -441,30 +448,29 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     }
 
     if (!body) {
-      body = driveUrl
-        ? `Study notes and learning materials via Google Drive.\n\nDrive Link: ${driveUrl}`
-        : "Class note";
+      body = "Task assigned by instructor.";
     }
 
-    const payloadsWithDrive = targetStudentIds.map((sid) => ({
+    const payloads = targetStudentIds.map((sid) => ({
       student_id: sid,
       course_id: courseId,
       title,
       body,
-      drive_url: driveUrl || null,
+      status: "assigned",
+      category: taskCategory,
+      due_at: dueAt,
       created_by: user.id,
     }));
 
-    let { error: insertError } = await supabase.from("student_notes").insert(payloadsWithDrive);
+    let { error: insertError } = await supabase.from("student_notes").insert(payloads);
 
-    // Fallback if drive_url column not in DB yet
-    if (insertError && (insertError.message?.includes("drive_url") || insertError.code === "PGRST204" || insertError.code === "42703")) {
-      const bodyWithDrive = driveUrl && !body.includes(driveUrl) ? `${body}\n\nDrive Link: ${driveUrl}` : body;
+    // Fallback if status, category, or due_at column not in DB yet
+    if (insertError) {
       const payloadsFallback = targetStudentIds.map((sid) => ({
         student_id: sid,
         course_id: courseId,
         title,
-        body: bodyWithDrive,
+        body,
         created_by: user.id,
       }));
       const retryResult = await supabase.from("student_notes").insert(payloadsFallback);
@@ -481,7 +487,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       const count = targetStudentIds.length;
       setNoteSelectedStudentIds([]);
       setNoteFormCourseId("");
-      onToast(`Note and Drive link saved and permitted for ${count} student${count === 1 ? "" : "s"}!`);
+      onToast(`Task assigned to ${count} student${count === 1 ? "" : "s"}!`);
       await loadData();
     }
     setBusy(false);
@@ -492,8 +498,30 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     const { error: deleteError } = await supabase.from(table).delete().eq("id", record.id);
     if (deleteError) setError(deleteError.message);
     else {
-      onToast(view === "Attendance" ? "Attendance record deleted." : "Note deleted.");
+      onToast(view === "Attendance" ? "Attendance record deleted." : "Task deleted.");
       await loadData();
+    }
+  }
+
+  async function toggleAdminTaskStatus(record) {
+    const nextStatus = record.status === "completed" ? "assigned" : "completed";
+    setBusy(true);
+    try {
+      const { error: updateErr } = await supabase
+        .from("student_notes")
+        .update({ status: nextStatus })
+        .eq("id", record.id);
+      if (updateErr) {
+        console.warn("Could not update task status:", updateErr.message);
+      }
+      setRecords((prev) =>
+        prev.map((r) => (r.id === record.id ? { ...r, status: nextStatus } : r))
+      );
+      onToast(nextStatus === "completed" ? "Task marked as completed!" : "Task marked as assigned.");
+    } catch (err) {
+      setError(err.message || "Failed to update task status.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -911,7 +939,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
   return <div className="admin-workspace">
     <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="heading-actions">
-      {["Students", "Courses", "Attendance", "Notes"].includes(view) && <button className="button primary" onClick={() => { setShowForm((current) => !current); setError(""); }}><Plus size={15} />{view === "Students" ? "Add student" : view === "Courses" ? "Add course" : view === "Attendance" ? "Record attendance" : "Add note"}</button>}
+      {["Students", "Courses", "Attendance", "Notes", "Tasks"].includes(view) && <button className="button primary" onClick={() => { setShowForm((current) => !current); setError(""); }}><Plus size={15} />{view === "Students" ? "Add student" : view === "Courses" ? "Add course" : view === "Attendance" ? "Record attendance" : "Assign task"}</button>}
       <button className="button" onClick={loadData}>Refresh</button>
     </div></div>
     {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
@@ -1007,27 +1035,27 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       </form>
     )}
 
-    {showForm && view === "Notes" && (
+    {showForm && (view === "Tasks" || view === "Notes") && (
       <form className="card admin-create-form" onSubmit={createRecord}>
         <div className="panel-heading">
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span className="portal-item-icon assignment" style={{ width: "34px", height: "34px", background: "#eef2ff", color: "#4f46e5" }}>
-                <HardDrive size={18} />
+                <CheckCircle2 size={18} />
               </span>
               <div>
-                <h2>Upload &amp; Share Notes</h2>
-                <p>Upload lecture notes, study materials, or feedback via Google Drive link or direct text.</p>
+                <h2>Assign Task to Students</h2>
+                <p>Assign practical tasks, coding challenges, project milestones, and homework to students separately.</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Individual Student Access Notice */}
+        {/* Individual Student Assignment Notice */}
         <div style={{ marginTop: "12px", padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", display: "flex", alignItems: "center", gap: "10px" }}>
           <ShieldCheck size={18} style={{ color: "#166534", flexShrink: 0 }} />
           <div style={{ fontSize: "12.5px", color: "#166534", lineHeight: 1.4 }}>
-            <strong>Individual Student Permission:</strong> Each note or Drive link is granted to each student separately. Even if other students are enrolled in the same course, they will <strong>not</strong> receive access unless you explicitly permit it for them.
+            <strong>Individual Student Assignment:</strong> Each task is assigned to each selected student separately. Students can view task instructions and mark their task as completed in their portal.
           </div>
         </div>
 
@@ -1049,7 +1077,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                 }
               }}
             >
-              <option value="">Campus-wide / General (All Courses)</option>
+              <option value="">General / Campus-wide (All Courses)</option>
               {courses.map((course) => (
                 <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
               ))}
@@ -1062,7 +1090,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
             <span style={{ fontWeight: 750, color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px", fontSize: "13.5px" }}>
               <Users size={16} style={{ color: "#4f46e5" }} />
-              <span>Select Students to Grant Note Access *</span>
+              <span>Select Students to Assign Task To *</span>
             </span>
             <span className="badge blue" style={{ fontSize: "11.5px", padding: "3px 8px" }}>
               {noteSelectedStudentIds.length} student{noteSelectedStudentIds.length === 1 ? "" : "s"} selected
@@ -1196,85 +1224,51 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             )}
           </div>
           <small className="muted" style={{ display: "block", marginTop: "6px", fontSize: "11.5px" }}>
-            Check the students who should receive access. You do not need to add the note multiple times.
+            Check each student who should receive this task assignment.
           </small>
         </div>
 
-        <label className="form-field" style={{ marginTop: "12px" }}>
-          <span>Note Title *</span>
-          <input name="title" required maxLength={150} placeholder="e.g. Chapter 4 Lecture Notes: Data Structures" />
-        </label>
+        <div className="form-grid-2" style={{ marginTop: "14px" }}>
+          <label className="form-field">
+            <span>Task Title *</span>
+            <input name="title" required maxLength={150} placeholder="e.g. Implement Binary Search Tree, Week 4 Homework" />
+          </label>
 
-        {/* Dedicated Google Drive Link Input Box */}
-        <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-          <label className="form-field" style={{ margin: 0 }}>
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", marginBottom: "6px" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, color: "var(--ink)" }}>
-                <HardDrive size={16} style={{ color: "#4f46e5" }} />
-                <span>Google Drive Link (Upload Notes via Drive Link)</span>
-              </span>
-              {noteDriveUrl.trim() && (
-                <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
-                  {getDriveDocTypeLabel(noteDriveUrl)}
-                </span>
-              )}
-            </span>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <input
-                name="drive_url"
-                type="url"
-                value={noteDriveUrl}
-                onChange={(e) => setNoteDriveUrl(e.target.value)}
-                placeholder="https://drive.google.com/file/d/... or https://docs.google.com/..."
-                style={{ flex: 1 }}
-              />
-              <button
-                type="button"
-                className="button compact"
-                onClick={async () => {
-                  try {
-                    const clip = await navigator.clipboard.readText();
-                    if (clip) setNoteDriveUrl(clip.trim());
-                  } catch {
-                    // clipboard fallback
-                  }
-                }}
-                title="Paste from clipboard"
-              >
-                <Copy size={13} /> Paste
-              </button>
-              {noteDriveUrl.trim() && (
-                <button
-                  type="button"
-                  className="button compact"
-                  onClick={() => setViewingNoteDoc({ title: "Google Drive Preview", subtitle: "Note Attachment", url: noteDriveUrl.trim() })}
-                  title="Preview document in secure viewer"
-                >
-                  <Eye size={13} /> Preview
-                </button>
-              )}
-            </div>
-            <small className="muted" style={{ display: "block", marginTop: "6px" }}>
-              Paste any Google Drive, Docs, Sheets, Slides, or PDF file link. Students will be able to securely preview or open it directly in their portal.
-            </small>
+          <label className="form-field">
+            <span>Task Category</span>
+            <select name="category" defaultValue="Task">
+              <option value="Task">Task</option>
+              <option value="Practice Data Sets">Practice Data Sets</option>
+              <option value="Projects">Projects</option>
+              <option value="Homework">Homework</option>
+              <option value="Class Notes">Class Notes Review</option>
+              <option value="Lab Exercise">Lab Exercise</option>
+              <option value="Other">Other</option>
+            </select>
           </label>
         </div>
 
+        <label className="form-field" style={{ marginTop: "12px" }}>
+          <span>Due Date / Deadline (Optional)</span>
+          <input name="due_at" type="datetime-local" />
+        </label>
+
         <label className="form-field" style={{ marginTop: "14px" }}>
-          <span>Note Details / Instructions / Summary (optional if Drive link is provided)</span>
+          <span>Task Instructions &amp; Requirements *</span>
           <textarea
             name="body"
             rows={4}
             maxLength={10000}
-            placeholder="Add lecture summary, reading assignments, key takeaways, or leave empty if sharing the document directly..."
+            required
+            placeholder="Explain the task objectives, requirements, submission format, or practice problem details..."
           />
         </label>
 
         <div className="form-actions" style={{ marginTop: "18px" }}>
-          <button className="button" type="button" onClick={() => { setShowForm(false); setNoteDriveUrl(""); setNotePrefillStudentId(""); }}>Cancel</button>
+          <button className="button" type="button" onClick={() => { setShowForm(false); setNotePrefillStudentId(""); setNoteSelectedStudentIds([]); }}>Cancel</button>
           <button className="button primary" disabled={busy}>
-            <Upload size={14} />
-            {busy ? "Publishing note…" : noteDriveUrl.trim() ? "Upload Note with Drive Link" : "Save Note"}
+            <Plus size={14} />
+            {busy ? "Assigning task…" : "Assign Task to Selected Students"}
           </button>
         </div>
       </form>
@@ -1681,14 +1675,21 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
               className={`button ${noteFilter === "all" ? "primary" : ""}`}
               onClick={() => setNoteFilter("all")}
             >
-              All Notes ({records.length})
+              All Tasks ({records.length})
             </button>
             <button
               type="button"
-              className={`button ${noteFilter === "drive" ? "primary" : ""}`}
-              onClick={() => setNoteFilter("drive")}
+              className={`button ${noteFilter === "assigned" ? "primary" : ""}`}
+              onClick={() => setNoteFilter("assigned")}
             >
-              <HardDrive size={13} /> Drive Links ({records.filter((r) => r.drive_url || extractDriveUrl(r.body)).length})
+              <Clock3 size={13} /> Assigned ({records.filter((r) => r.status !== "completed").length})
+            </button>
+            <button
+              type="button"
+              className={`button ${noteFilter === "completed" ? "primary" : ""}`}
+              onClick={() => setNoteFilter("completed")}
+            >
+              <Check size={13} /> Completed ({records.filter((r) => r.status === "completed").length})
             </button>
           </div>
 
@@ -1700,14 +1701,14 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
               onChange={(e) => setSelectedStudentFilter(e.target.value)}
               style={{ height: "34px", padding: "0 10px", borderRadius: "8px", border: "1px solid var(--line)", background: "#ffffff", fontSize: "12.5px" }}
             >
-              <option value="all">👥 All Students ({records.length} notes)</option>
+              <option value="all">👥 All Students ({records.length} tasks)</option>
               {students
                 .filter((s) => s.is_approved)
                 .map((s) => {
                   const count = records.filter((r) => r.student_id === s.id).length;
                   return (
                     <option key={s.id} value={s.id}>
-                      {s.full_name || s.email} ({count} note{count === 1 ? "" : "s"})
+                      {s.full_name || s.email} ({count} task{count === 1 ? "" : "s"})
                     </option>
                   );
                 })}
@@ -1722,7 +1723,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                 {(studentsById[selectedStudentFilter]?.full_name || "S").slice(0, 1).toUpperCase()}
               </span>
               <span style={{ fontSize: "13px", color: "#166534" }}>
-                Viewing notes specifically for <strong>{studentsById[selectedStudentFilter]?.full_name || studentsById[selectedStudentFilter]?.email}</strong>
+                Viewing tasks specifically for <strong>{studentsById[selectedStudentFilter]?.full_name || studentsById[selectedStudentFilter]?.email}</strong>
               </span>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
@@ -1735,7 +1736,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                   setShowForm(true);
                 }}
               >
-                <Plus size={12} /> Add Note for this Student
+                <Plus size={12} /> Assign Task for this Student
               </button>
               <button
                 type="button"
@@ -1754,11 +1755,11 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
               if (selectedStudentFilter !== "all" && record.student_id !== selectedStudentFilter) {
                 return false;
               }
-              const driveUrl = record.drive_url || extractDriveUrl(record.body);
-              if (noteFilter === "drive" && !driveUrl) return false;
+              if (noteFilter === "assigned" && record.status === "completed") return false;
+              if (noteFilter === "completed" && record.status !== "completed") return false;
               const student = studentsById[record.student_id];
               const course = coursesById[record.course_id];
-              const haystack = `${record.title} ${record.body} ${student?.full_name || ""} ${student?.email || ""} ${course?.name || ""} ${course?.code || ""}`.toLowerCase();
+              const haystack = `${record.title} ${record.body} ${record.category || ""} ${student?.full_name || ""} ${student?.email || ""} ${course?.name || ""} ${course?.code || ""}`.toLowerCase();
               return haystack.includes(query.trim().toLowerCase());
             })
             .map((record) => {
@@ -1772,45 +1773,60 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                 <article className="card admin-assignment-card note-card" key={record.id}>
                   <div className="panel-heading" style={{ alignItems: "flex-start" }}>
                     <div className="admin-assignment-title" style={{ flex: 1 }}>
-                      <span className="portal-item-icon assignment" style={{ width: "42px", height: "42px", flexShrink: 0, background: driveUrl ? "#eef2ff" : "#f1f5f9", color: driveUrl ? "#4f46e5" : "#475569" }}>
-                        {driveUrl ? <HardDrive size={18} /> : <FileText size={18} />}
+                      <span className="portal-item-icon assignment" style={{ width: "42px", height: "42px", flexShrink: 0, background: record.status === "completed" ? "#ecfdf5" : "#eef2ff", color: record.status === "completed" ? "#059669" : "#4f46e5" }}>
+                        <CheckCircle2 size={18} />
                       </span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
-                          <h2 style={{ fontSize: "16px", fontWeight: 700, margin: 0, color: "var(--ink)" }}>{record.title}</h2>
+                          <h2 style={{ fontSize: "16px", fontWeight: 700, margin: 0, color: "var(--ink)", textDecoration: record.status === "completed" ? "line-through" : "none" }}>{record.title}</h2>
                           {course && (
                             <span className="course-code-badge" style={{ fontSize: "11px" }}>
                               {course.code}
                             </span>
                           )}
-                          {driveUrl && (
-                            <span className="badge-view-only" style={{ background: "#eef2ff", color: "#4f46e5", fontSize: "11px" }}>
-                              <HardDrive size={11} /> {docType}
+                          <span className="badge blue" style={{ fontSize: "11px", fontWeight: 650 }}>
+                            {record.category || "Task"}
+                          </span>
+                          {record.status === "completed" ? (
+                            <span
+                              className="badge green"
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "3px",
+                              }}
+                            >
+                              <Check size={11} strokeWidth={3} /> Status: Completed
+                            </span>
+                          ) : (
+                            <span
+                              className="badge amber"
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "3px",
+                              }}
+                            >
+                              <Clock3 size={11} /> Status: Assigned
                             </span>
                           )}
                         </div>
 
                         <p style={{ margin: "4px 0 0", fontSize: "13px", color: "var(--muted)" }}>
                           Student: <strong>{student?.full_name || student?.email || "Student"}</strong>
-                          <span
-                            className="badge green"
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: 700,
-                              marginLeft: "8px",
-                              padding: "2px 7px",
-                              borderRadius: "10px",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "3px",
-                            }}
-                          >
-                            <Check size={11} strokeWidth={3} /> Status: Assigned
-                          </span>
                           {course ? ` · ${course.name}` : ""}
                           <span style={{ marginLeft: "10px", fontSize: "12px", opacity: 0.8 }}>
                             {formatCourseDate(record.created_at)}
                           </span>
+                          {record.due_at && (
+                            <span style={{ marginLeft: "10px", fontSize: "12px", color: "#d97706", fontWeight: 600 }}>
+                              Due: {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(record.due_at))}
+                            </span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -1819,13 +1835,21 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                       <button
                         className="button compact"
                         type="button"
+                        onClick={() => toggleAdminTaskStatus(record)}
+                        title="Toggle task completion status for this student"
+                      >
+                        <CheckCircle2 size={12} /> {record.status === "completed" ? "Mark Assigned" : "Mark Completed"}
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
                         onClick={() => {
                           setSharingNoteRecord(sharingNoteRecord?.id === record.id ? null : record);
                           setShareTargetStudentId("");
                         }}
-                        title="Give this note and Drive link to another student separately"
+                        title="Assign this task to another student separately"
                       >
-                        <Users size={12} /> Give to another student
+                        <Users size={12} /> Assign to another student
                       </button>
                       <button
                         className="button compact"
@@ -1835,14 +1859,14 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                           setNoteRecipientType("single");
                           setShowForm(true);
                         }}
-                        title={`Add another note specifically for ${student?.full_name || "this student"}`}
+                        title={`Assign another task specifically for ${student?.full_name || "this student"}`}
                       >
                         <Plus size={12} /> Add for this student
                       </button>
-                      <button className="button compact" type="button" onClick={() => setEditingRecord(record)} title="Edit note or Drive link">
+                      <button className="button compact" type="button" onClick={() => setEditingRecord(record)} title="Edit task details">
                         <Pencil size={13} /> Edit
                       </button>
-                      <button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete note">
+                      <button className="quiet-icon danger-icon" type="button" onClick={() => deleteRecord(record)} aria-label="Delete task">
                         <Trash2 size={15} />
                       </button>
                     </div>
@@ -2065,9 +2089,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
           {!records.length && (
             <div className="card portal-empty">
-              <HardDrive size={24} />
-              <strong>No notes records yet</strong>
-              <span>Use the "Add note" button above to upload notes with a Google Drive link.</span>
+              <CheckCircle2 size={24} />
+              <strong>No tasks assigned yet</strong>
+              <span>Use the "Assign task" button above to assign tasks, homework, or milestones to students.</span>
             </div>
           )}
         </section>

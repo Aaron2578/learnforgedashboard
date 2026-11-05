@@ -51,6 +51,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [editingMaterial, setEditingMaterial] = useState(null);
   const [assigningMaterial, setAssigningMaterial] = useState(null);
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState("all");
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState("all");
   const [requestFilter, setRequestFilter] = useState("all"); // 'all' | 'pending' | 'approved' | 'revoked'
 
   // Secure viewer state
@@ -60,7 +61,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   const [formSource, setFormSource] = useState("upload"); // 'upload' | 'drive'
   const [formTitle, setFormTitle] = useState("");
   const [formDescription, setFormDescription] = useState("");
-  const [formCategory, setFormCategory] = useState("PDF");
+  const [formCategory, setFormCategory] = useState("Class Notes");
   const [formCourseId, setFormCourseId] = useState("");
   const [formDriveUrl, setFormDriveUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
@@ -480,7 +481,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   function resetForm() {
     setFormTitle("");
     setFormDescription("");
-    setFormCategory("PDF");
+    setFormCategory("Class Notes");
     setFormCourseId("");
     setFormDriveUrl("");
     setSelectedFile(null);
@@ -631,6 +632,9 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
   // Filtered materials
   const term = query.trim().toLowerCase();
   const filteredMaterials = materials.filter((m) => {
+    if (selectedCategoryFilter !== "all" && m.category !== selectedCategoryFilter) {
+      return false;
+    }
     if (!term) return true;
     const course = courses.find((c) => c.id === m.course_id);
     return (
@@ -798,6 +802,39 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                 </span>
               </button>
             )}
+          </div>
+
+          {/* File Type / Category Filter Bar */}
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "18px", alignItems: "center" }}>
+            <span style={{ fontSize: "12px", fontWeight: 650, color: "var(--muted)", marginRight: "4px" }}>
+              <Filter size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: "4px" }} />
+              File Type:
+            </span>
+            {["all", "Class Notes", "Materials", "Practice Data Sets", "Projects", "Task", "Syllabus", "Study Guide", "Other"].map((cat) => {
+              const label = cat === "all" ? "All Types" : cat;
+              const count = cat === "all" ? materials.length : materials.filter((m) => m.category === cat).length;
+              if (cat !== "all" && count === 0) return null;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setSelectedCategoryFilter(cat)}
+                  style={{
+                    fontSize: "11.5px",
+                    fontWeight: selectedCategoryFilter === cat ? 700 : 500,
+                    padding: "3px 10px",
+                    borderRadius: "20px",
+                    border: selectedCategoryFilter === cat ? "1px solid #4f46e5" : "1px solid var(--line)",
+                    background: selectedCategoryFilter === cat ? "#eef2ff" : "#ffffff",
+                    color: selectedCategoryFilter === cat ? "#4f46e5" : "var(--ink)",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  {label} ({count})
+                </button>
+              );
+            })}
           </div>
 
           {displayedCourseGroups.length ? (
@@ -1434,10 +1471,12 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                     value={formCategory}
                     onChange={(e) => setFormCategory(e.target.value)}
                   >
-                    <option value="PDF">PDF</option>
-                    <option value="Document">Document</option>
-                    <option value="Test / Assessment">Test / Assessment</option>
-                    <option value="Lecture Notes">Lecture Notes</option>
+                    <option value="Class Notes">Class Notes</option>
+                    <option value="Materials">Materials</option>
+                    <option value="Practice Data Sets">Practice Data Sets</option>
+                    <option value="Projects">Projects</option>
+                    <option value="Task">Task</option>
+                    <option value="Syllabus">Syllabus</option>
                     <option value="Study Guide">Study Guide</option>
                     <option value="Other">Other</option>
                   </select>

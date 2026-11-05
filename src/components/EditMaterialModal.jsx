@@ -105,12 +105,14 @@ export default function EditMaterialModal({
                 onChange={(e) => setCategory(e.target.value)}
                 className="status-select"
               >
-                <option value="PDF">PDF Document</option>
-                <option value="Document">General Document</option>
-                <option value="Test / Assessment">Test / Assessment</option>
-                <option value="Lecture Notes">Lecture Notes</option>
+                <option value="Class Notes">Class Notes</option>
+                <option value="Materials">Materials</option>
+                <option value="Practice Data Sets">Practice Data Sets</option>
+                <option value="Projects">Projects</option>
+                <option value="Task">Task</option>
+                <option value="Syllabus">Syllabus</option>
                 <option value="Study Guide">Study Guide</option>
-                <option value="Other">Other Learning Resource</option>
+                <option value="Other">Other</option>
               </select>
             </label>
 

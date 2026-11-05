@@ -38,3 +38,26 @@ export function getDriveDocTypeLabel(url) {
   return "Google Drive Document";
 }
 
+export function getDriveDownloadExportUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+
+  // Google Doc -> PDF
+  const docMatch = trimmed.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/i);
+  if (docMatch) return `https://docs.google.com/document/d/${docMatch[1]}/export?format=pdf`;
+
+  // Google Spreadsheets -> PDF
+  const sheetMatch = trimmed.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/i);
+  if (sheetMatch) return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/export?format=pdf`;
+
+  // Google Presentation -> PDF
+  const presMatch = trimmed.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9_-]+)/i);
+  if (presMatch) return `https://docs.google.com/presentation/d/${presMatch[1]}/export/pdf`;
+
+  // Google Drive File ID -> direct download
+  const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (fileMatch) return `https://drive.google.com/uc?export=download&id=${fileMatch[1]}`;
+
+  return trimmed;
+}
+

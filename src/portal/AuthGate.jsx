@@ -3,6 +3,7 @@ import { ArrowRight, BookOpen, CheckCircle, Clock3, Database, GraduationCap, Ref
 import App from "../App.jsx";
 import { supabase } from "../lib/supabase.js";
 import StudentPortal from "./StudentPortal.jsx";
+import TrainerPortal from "./TrainerPortal.jsx";
 
 function AuthScreen() {
   const [mode, setMode] = useState("sign-in");
@@ -243,7 +244,10 @@ export default function AuthGate() {
     }
     return <StudentPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
   }
-  if (profile.role === "superuser") {
+  if (profile.role === "trainer") {
+    return <TrainerPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
+  }
+  if (profile.role === "superuser" || profile.role === "admin") {
     return <App user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
   }
   return <main className="auth-page"><section className="auth-card"><h1>Account access is not available</h1><p>Your account has no permitted portal role.</p><button className="button" onClick={signOut}>Sign out</button></section></main>;
