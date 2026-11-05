@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   CheckCircle2,
+  ClipboardList,
   Clock3,
   Copy,
   Download,
@@ -49,6 +50,7 @@ const TRAINER_NAV = [
   { label: "Syllabus", icon: BookOpen },
   { label: "Materials & Drive", icon: HardDrive },
   { label: "Attendance", icon: CalendarCheck },
+  { label: "Tests", icon: ClipboardList },
   { label: "Messages", icon: MessageSquare },
   { label: "Students", icon: Users },
 ];
@@ -84,20 +86,31 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [trainerStudents, setTrainerStudents] = useState([]);
   const [trainersList, setTrainersList] = useState([]);
   const [selectedTrainerId, setSelectedTrainerId] = useState("");
-  const [studentScopeFilter, setStudentScopeFilter] = useState("all");
+  const [studentScopeFilter, setStudentScopeFilter] = useState("assigned"); // Defaults to assigned students
   const [enrollments, setEnrollments] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [materials, setMaterials] = useState([]);
+  const [materialRecipients, setMaterialRecipients] = useState([]);
   const [downloadRequests, setDownloadRequests] = useState([]);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
+
+  // Tests & Assessments State
+  const [assessments, setAssessments] = useState([]);
+  const [assessmentRecipients, setAssessmentRecipients] = useState([]);
+  const [assessmentAttempts, setAssessmentAttempts] = useState([]);
+  const [showAssignTestModal, setShowAssignTestModal] = useState(false);
+  const [selectedTestToAssign, setSelectedTestToAssign] = useState(null);
+  const [testTargetStudentIds, setTestTargetStudentIds] = useState([]);
 
   // Attendance Tab State
   const [attendanceDate, setAttendanceDate] = useState(() => localDate());
   const [attendanceCourseId, setAttendanceCourseId] = useState("all");
+  const [attendanceScopeFilter, setAttendanceScopeFilter] = useState("assigned"); // "assigned" | "all"
   const [attendanceState, setAttendanceState] = useState({}); // { [studentId]: { status: 'Present'|'Late'|'Absent', note: '' } }
   const [savingAttendance, setSavingAttendance] = useState(false);
 
   // Tasks Tab State
+  const [taskScopeFilter, setTaskScopeFilter] = useState("assigned"); // "assigned" | "all"
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskCourseId, setTaskCourseId] = useState("");
   const [taskCategory, setTaskCategory] = useState("Task");
@@ -115,6 +128,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [syllabusDriveUrl, setSyllabusDriveUrl] = useState("");
   const [syllabusDescription, setSyllabusDescription] = useState("");
   const [syllabusFile, setSyllabusFile] = useState(null);
+  const [syllabusTargetMode, setSyllabusTargetMode] = useState("course"); // "course" | "assigned" | "custom"
+  const [syllabusSelectedStudents, setSyllabusSelectedStudents] = useState([]);
 
   // Materials & Drive Tab State
   const [showMaterialModal, setShowMaterialModal] = useState(false);
@@ -128,6 +143,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [matSelectedStudentIds, setMatSelectedStudentIds] = useState([]);
   const [materialActiveSubTab, setMaterialActiveSubTab] = useState("files"); // 'files' | 'requests'
   const [selectedMaterialCategoryFilter, setSelectedMaterialCategoryFilter] = useState("all");
+
+  // Student Detail Modal
+  const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
 
   // Messages Tab State
   const [conversations, setConversations] = useState([]);
@@ -160,6 +178,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         requestsRes,
         attendanceRes,
         convsRes,
+        assessmentsRes,
+        assessmentRecipientsRes,
+        materialRecipientsRes,
+        assessmentAttemptsRes,
       ] = await Promise.all([
         supabase.from("courses").select("*").order("created_at", { ascending: false }),
         supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }),
@@ -171,6 +193,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         supabase.from("download_requests").select("*").order("requested_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("attendance_records").select("*").order("attendance_date", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("conversations").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
+        supabase.from("assessments").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
+        supabase.from("assessment_recipients").select("assessment_id, student_id").then((r) => r.error ? { data: [] } : r),
+        supabase.from("material_recipients").select("material_id, student_id").then((r) => r.error ? { data: [] } : r),
+        supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").then((r) => r.error ? { data: [] } : r),
       ]);
 
       if (coursesRes.error) throw coursesRes.error;
@@ -188,6 +214,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setDownloadRequests(requestsRes.data || []);
       setAttendanceRecords(attendanceRes.data || []);
       setConversations(convsRes.data || []);
+      setAssessments(assessmentsRes.data || []);
+      setAssessmentRecipients(assessmentRecipientsRes.data || []);
+      setMaterialRecipients(materialRecipientsRes.data || []);
+      setAssessmentAttempts(assessmentAttemptsRes.data || []);
     } catch (err) {
       console.error("TrainerPortal load error:", err);
       setError(err.message || "Failed to load trainer records.");
@@ -200,22 +230,37 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     loadTrainerData(true);
   }, [loadTrainerData]);
 
-  // Real-time updates
+  // Debounced quiet reload to eliminate UI stutter and prevent server load spikes
+  const debounceTrainerTimerRef = useRef(null);
+  const debouncedTrainerReload = useCallback(() => {
+    if (debounceTrainerTimerRef.current) clearTimeout(debounceTrainerTimerRef.current);
+    debounceTrainerTimerRef.current = setTimeout(() => {
+      loadTrainerData(false);
+    }, 120);
+  }, [loadTrainerData]);
+
+  // Real-time updates with instantaneous debounced syncing
   useEffect(() => {
     if (!supabase) return;
     const channel = supabase
       .channel("trainer-portal-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, () => loadTrainerData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadTrainerData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadTrainerData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadTrainerData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => loadTrainerData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trainer_students" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, debouncedTrainerReload)
       .subscribe();
 
     return () => {
+      if (debounceTrainerTimerRef.current) clearTimeout(debounceTrainerTimerRef.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, loadTrainerData]);
+  }, [supabase, debouncedTrainerReload]);
 
   const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
 
@@ -282,12 +327,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const coursesById = useMemo(() => Object.fromEntries(courses.map((c) => [c.id, c])), [courses]);
   const studentsById = useMemo(() => Object.fromEntries(students.map((s) => [s.id, s])), [students]);
 
-  // Filtered Students for Attendance
+  const myAssignedStudents = useMemo(() => {
+    return students.filter((s) => myAssignedStudentIds.has(s.id));
+  }, [students, myAssignedStudentIds]);
+
+  // Filtered Students for Attendance (Defaults to trainer's assigned students)
   const attendanceStudents = useMemo(() => {
-    if (attendanceCourseId === "all") return students;
-    const enrolledIds = new Set(enrollments.filter((e) => e.course_id === attendanceCourseId).map((e) => e.student_id));
-    return students.filter((s) => enrolledIds.has(s.id));
-  }, [students, enrollments, attendanceCourseId]);
+    let pool = students;
+    if (attendanceScopeFilter === "assigned") {
+      pool = pool.filter((s) => myAssignedStudentIds.has(s.id));
+    }
+    if (attendanceCourseId !== "all") {
+      const enrolledIds = new Set(enrollments.filter((e) => e.course_id === attendanceCourseId).map((e) => e.student_id));
+      pool = pool.filter((s) => enrolledIds.has(s.id));
+    }
+    return pool;
+  }, [students, myAssignedStudentIds, attendanceScopeFilter, attendanceCourseId, enrollments]);
 
   // Sync attendance state when date or course changes
   useEffect(() => {
@@ -348,24 +403,34 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         return;
       }
 
-      for (const rec of recordsToUpsert) {
-        // Upsert by checking existing or delete + insert
-        const { error: upsertErr } = await supabase
-          .from("attendance_records")
-          .upsert(rec, { onConflict: "student_id,attendance_date" });
-        if (upsertErr) {
-          // If constraint is missing, try delete first
-          await supabase
-            .from("attendance_records")
-            .delete()
-            .eq("student_id", rec.student_id)
-            .eq("attendance_date", rec.attendance_date);
-          await supabase.from("attendance_records").insert(rec);
-        }
-      }
+      // Optimistic local update for instantaneous zero-latency feedback
+      const studentIdSet = new Set(recordsToUpsert.map((r) => r.student_id));
+      setAttendanceRecords((prev) => {
+        const remaining = prev.filter(
+          (r) => !(r.attendance_date === attendanceDate && studentIdSet.has(r.student_id))
+        );
+        return [
+          ...recordsToUpsert.map((r, i) => ({ id: `temp-${Date.now()}-${i}`, ...r })),
+          ...remaining,
+        ];
+      });
+
+      // Lightning-fast batch delete + batch insert in just 2 quick calls
+      const studentIds = recordsToUpsert.map((r) => r.student_id);
+      await supabase
+        .from("attendance_records")
+        .delete()
+        .in("student_id", studentIds)
+        .eq("attendance_date", attendanceDate);
+
+      const { error: insertErr } = await supabase
+        .from("attendance_records")
+        .insert(recordsToUpsert);
+
+      if (insertErr) throw insertErr;
 
       setToast(`Attendance saved successfully for ${recordsToUpsert.length} student(s)!`);
-      await loadTrainerData(false);
+      loadTrainerData(false);
     } catch (err) {
       console.error(err);
       setError("Failed to save attendance: " + err.message);
@@ -404,7 +469,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         created_by: user.id,
       }));
 
-      let { error: insertErr } = await supabase.from("student_notes").insert(payloads);
+      // Optimistic update
+      const tempTasks = payloads.map((p, idx) => ({
+        id: `temp-task-${Date.now()}-${idx}`,
+        ...p,
+        created_at: new Date().toISOString(),
+      }));
+      setTasks((prev) => [...tempTasks, ...prev]);
+
+      let { data: insertedData, error: insertErr } = await supabase
+        .from("student_notes")
+        .insert(payloads)
+        .select();
 
       if (insertErr) {
         // Fallback for older database schemas
@@ -415,11 +491,19 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           body: taskInstructions.trim() || "Complete the assigned task.",
           created_by: user.id,
         }));
-        const retry = await supabase.from("student_notes").insert(fallback);
+        const retry = await supabase.from("student_notes").insert(fallback).select();
         insertErr = retry.error;
+        insertedData = retry.data;
       }
 
       if (insertErr) throw insertErr;
+
+      if (insertedData) {
+        setTasks((prev) => [
+          ...insertedData,
+          ...prev.filter((t) => !String(t.id).startsWith("temp-task-")),
+        ]);
+      }
 
       setToast(`Task successfully assigned to ${taskSelectedStudents.length} student(s)!`);
       setShowTaskForm(false);
@@ -427,7 +511,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setTaskInstructions("");
       setTaskDueAt("");
       setTaskSelectedStudents([]);
-      await loadTrainerData(false);
+      loadTrainerData(false);
     } catch (err) {
       setError(err.message || "Failed to assign task.");
     } finally {
@@ -475,7 +559,6 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       let fileSize = 0;
 
       if (syllabusFile) {
-        const fileExt = syllabusFile.name.split(".").pop();
         const safeName = syllabusFile.name.replace(/[^a-zA-Z0-9.-]/g, "_");
         const uniquePath = `syllabus_${Date.now()}_${safeName}`;
 
@@ -504,26 +587,102 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
       if (insertError) throw insertError;
 
-      // Automatically permit all students enrolled in this course
-      if (syllabusCourseId && insertedMat) {
-        const enrolled = enrollments.filter((e) => e.course_id === syllabusCourseId).map((e) => e.student_id);
-        if (enrolled.length > 0) {
-          const perms = enrolled.map((sid) => ({ material_id: insertedMat.id, student_id: sid }));
-          await supabase.from("material_recipients").insert(perms).then(() => {});
+      // Determine recipient students based on target mode
+      let targetStudentIds = [];
+      if (syllabusTargetMode === "course" && syllabusCourseId) {
+        targetStudentIds = enrollments.filter((e) => e.course_id === syllabusCourseId).map((e) => e.student_id);
+      } else if (syllabusTargetMode === "assigned") {
+        targetStudentIds = Array.from(myAssignedStudentIds);
+      } else if (syllabusTargetMode === "custom") {
+        targetStudentIds = syllabusSelectedStudents;
+      } else {
+        if (syllabusCourseId) {
+          targetStudentIds = enrollments.filter((e) => e.course_id === syllabusCourseId).map((e) => e.student_id);
+        } else {
+          targetStudentIds = Array.from(myAssignedStudentIds);
         }
       }
 
-      setToast("Syllabus added and shared with enrolled students!");
+      if (targetStudentIds.length === 0 && myAssignedStudentIds.size > 0) {
+        targetStudentIds = Array.from(myAssignedStudentIds);
+      }
+
+      if (insertedMat && targetStudentIds.length > 0) {
+        const perms = targetStudentIds.map((sid) => ({ material_id: insertedMat.id, student_id: sid }));
+        await supabase.from("material_recipients").insert(perms);
+        setMaterialRecipients((prev) => [...prev, ...perms]);
+      }
+
+      // Optimistic local state update
+      if (insertedMat) {
+        setMaterials((prev) => [insertedMat, ...prev]);
+      }
+
+      setToast(`Syllabus added and shared with ${targetStudentIds.length} student(s)!`);
       setShowSyllabusModal(false);
       setSyllabusTitle("");
       setSyllabusDescription("");
       setSyllabusDriveUrl("");
       setSyllabusFile(null);
-      await loadTrainerData(false);
+      setSyllabusSelectedStudents([]);
+      loadTrainerData(false);
     } catch (err) {
       setError("Failed to save syllabus: " + err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ----------------------------------------------------
+  // Actions: Tests & Assessments
+  // ----------------------------------------------------
+  async function handleAssignTest(assessmentId, targetStudentIds) {
+    if (!targetStudentIds || targetStudentIds.length === 0) {
+      setError("Please select at least one student to assign the test to.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const records = targetStudentIds.map((sid) => ({ assessment_id: assessmentId, student_id: sid }));
+
+      // Optimistic update
+      setAssessmentRecipients((prev) => {
+        const existingSet = new Set(prev.map((r) => `${r.assessment_id}:${r.student_id}`));
+        const toAdd = records.filter((r) => !existingSet.has(`${r.assessment_id}:${r.student_id}`));
+        return [...prev, ...toAdd];
+      });
+
+      for (const rec of records) {
+        await supabase.from("assessment_recipients").insert(rec).then(() => {});
+      }
+
+      setToast(`Test successfully assigned to ${targetStudentIds.length} student(s)!`);
+      setShowAssignTestModal(false);
+      setSelectedTestToAssign(null);
+      setTestTargetStudentIds([]);
+      loadTrainerData(false);
+    } catch (err) {
+      setError("Failed to assign test: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRevokeTest(assessmentId, studentId) {
+    try {
+      setAssessmentRecipients((prev) =>
+        prev.filter((r) => !(r.assessment_id === assessmentId && r.student_id === studentId))
+      );
+      await supabase
+        .from("assessment_recipients")
+        .delete()
+        .eq("assessment_id", assessmentId)
+        .eq("student_id", studentId);
+      setToast("Test assignment revoked.");
+      loadTrainerData(false);
+    } catch (err) {
+      setError("Could not revoke test: " + err.message);
     }
   }
 
@@ -944,6 +1103,201 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
           </article>
         </div>
+
+        {/* My Assigned Students Section with Enrolled Courses */}
+        <section className="card panel" style={{ marginTop: "24px" }}>
+          <div className="panel-heading">
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h2>My Assigned Students</h2>
+                <span className="badge green" style={{ fontWeight: 700 }}>
+                  {myAssignedStudents.length} Active
+                </span>
+              </div>
+              <p>Students specifically assigned to your mentorship and training programs with live course enrollments.</p>
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                className="button compact"
+                type="button"
+                onClick={() => {
+                  setStudentScopeFilter("assigned");
+                  setActiveTab("Students");
+                }}
+              >
+                <Users size={14} /> Full Student Directory
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px" }}>
+            {myAssignedStudents.map((student) => {
+              const studentCourses = enrollments
+                .filter((e) => e.student_id === student.id)
+                .map((e) => coursesById[e.course_id])
+                .filter(Boolean);
+
+              const todayAtt = attendanceRecords.find(
+                (r) => r.student_id === student.id && r.attendance_date === todayStr
+              );
+
+              return (
+                <div
+                  key={student.id}
+                  className="card"
+                  style={{
+                    padding: "16px",
+                    background: "#ffffff",
+                    border: "1px solid var(--line)",
+                    borderRadius: "10px",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    gap: "12px",
+                  }}
+                >
+                  <div>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span
+                          className="student-avatar"
+                          style={{ width: "36px", height: "36px", background: "#16a34a", color: "#fff", fontSize: "14px", fontWeight: 700 }}
+                        >
+                          {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                        </span>
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <strong style={{ fontSize: "14px", color: "var(--ink)" }}>{student.full_name || "Student"}</strong>
+                            <span className="badge green" style={{ fontSize: "10px", padding: "1px 5px" }}>Assigned</span>
+                          </div>
+                          <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
+                        </div>
+                      </div>
+
+                      {todayAtt ? (
+                        <span
+                          className={`badge ${todayAtt.status === "Present" ? "green" : todayAtt.status === "Late" ? "amber" : "rose"}`}
+                          style={{ fontSize: "11px", fontWeight: 700 }}
+                        >
+                          Today: {todayAtt.status}
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ fontSize: "11px", color: "var(--muted)" }}>
+                          Unmarked
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Student ID & Timing */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", marginTop: "10px", fontSize: "12px" }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                        <span style={{ color: "var(--muted)" }}>ID:</span>
+                        <code style={{ fontSize: "11px", background: "#f1f5f9", padding: "2px 5px", borderRadius: "4px" }}>
+                          {student.id.slice(0, 8)}...
+                        </code>
+                        <button
+                          type="button"
+                          className="quiet-icon"
+                          style={{ padding: "2px" }}
+                          title={`Copy Student ID: ${student.id}`}
+                          onClick={() => {
+                            navigator.clipboard.writeText(student.id);
+                            setToast(`Copied Student ID: ${student.id}`);
+                          }}
+                        >
+                          <Copy size={11} />
+                        </button>
+                      </div>
+                      <span style={{ color: "var(--line)" }}>•</span>
+                      <span style={{ color: "var(--ink)", fontWeight: 500 }}>
+                        {student.timing || "Standard timing"}
+                      </span>
+                    </div>
+
+                    {/* Enrolled Courses */}
+                    <div style={{ marginTop: "10px" }}>
+                      <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--muted)", display: "block", marginBottom: "4px" }}>
+                        Enrolled Courses ({studentCourses.length})
+                      </span>
+                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                        {studentCourses.map((c) => (
+                          <span
+                            key={c.id}
+                            className="badge blue"
+                            style={{ fontSize: "11.5px", padding: "2px 7px" }}
+                            title={`${c.code} · ${c.name}`}
+                          >
+                            <strong>{c.code}</strong> · {c.name}
+                          </span>
+                        ))}
+                        {!studentCourses.length && (
+                          <span style={{ fontSize: "12px", color: "var(--muted)" }}>No enrolled courses</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Student Actions */}
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "10px" }}>
+                    <button
+                      className="button compact"
+                      type="button"
+                      style={{ flex: 1, fontSize: "11.5px" }}
+                      onClick={() => {
+                        setTaskSelectedStudents([student.id]);
+                        setShowTaskForm(true);
+                        setActiveTab("Tasks");
+                      }}
+                    >
+                      <CheckCircle2 size={12} /> Assign Task
+                    </button>
+                    <button
+                      className="button compact"
+                      type="button"
+                      style={{ flex: 1, fontSize: "11.5px" }}
+                      onClick={() => {
+                        setTestTargetStudentIds([student.id]);
+                        setShowAssignTestModal(true);
+                        setActiveTab("Tests");
+                      }}
+                    >
+                      <ClipboardList size={12} /> Assign Test
+                    </button>
+                    <button
+                      className="button compact"
+                      type="button"
+                      style={{ fontSize: "11.5px" }}
+                      onClick={() => {
+                        setNewMsgStudentId(student.id);
+                        setShowNewMsgModal(true);
+                        setActiveTab("Messages");
+                      }}
+                    >
+                      <Mail size={12} />
+                    </button>
+                    <button
+                      className="button compact"
+                      type="button"
+                      style={{ fontSize: "11.5px" }}
+                      onClick={() => setSelectedStudentDetail(student)}
+                      title="View Student Profile"
+                    >
+                      <Eye size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {!myAssignedStudents.length && (
+              <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
+                <Users size={24} />
+                <strong>No students currently assigned to you</strong>
+                <span>Contact your LearnForge administrator to assign students to your trainer profile.</span>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     );
   }
@@ -981,6 +1335,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         <div className="card" style={{ padding: "16px", marginBottom: "20px" }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "14px" }}>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px" }}>
+              {/* Scope Switcher: Assigned vs All */}
+              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className={`button compact ${attendanceScopeFilter === "assigned" ? "primary" : ""}`}
+                  onClick={() => setAttendanceScopeFilter("assigned")}
+                >
+                  <Users size={13} /> Only Assigned to Me ({myAssignedStudents.length})
+                </button>
+                <button
+                  type="button"
+                  className={`button compact ${attendanceScopeFilter === "all" ? "primary" : ""}`}
+                  onClick={() => setAttendanceScopeFilter("all")}
+                >
+                  All Campus Students ({students.length})
+                </button>
+              </div>
+
               <label className="form-field" style={{ margin: 0, minWidth: "160px" }}>
                 <span style={{ fontSize: "12px", fontWeight: 700 }}>Attendance Date</span>
                 <input
@@ -998,7 +1370,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   onChange={(e) => setAttendanceCourseId(e.target.value)}
                   style={{ height: "36px" }}
                 >
-                  <option value="all">All Enrolled Students ({students.length})</option>
+                  <option value="all">
+                    {attendanceScopeFilter === "assigned"
+                      ? `All My Assigned Students (${myAssignedStudents.length})`
+                      : `All Campus Students (${students.length})`}
+                  </option>
                   {courses.map((c) => (
                     <option key={c.id} value={c.id}>
                       [{c.code}] {c.name}
@@ -1046,7 +1422,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "12px 16px" }}>Student</th>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Timing / Program</th>
+                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Timing / Enrolled Courses</th>
                   <th style={{ textAlign: "center", padding: "12px 16px" }}>Attendance Status</th>
                   <th style={{ textAlign: "left", padding: "12px 16px" }}>Note (Optional)</th>
                 </tr>
@@ -1055,6 +1431,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 {attendanceStudents.map((student) => {
                   const status = attendanceState[student.id]?.status || null;
                   const note = attendanceState[student.id]?.note || "";
+                  const studentCourses = enrollments
+                    .filter((e) => e.student_id === student.id)
+                    .map((e) => coursesById[e.course_id])
+                    .filter(Boolean);
 
                   return (
                     <tr key={student.id} style={{ borderBottom: "1px solid var(--line)" }}>
@@ -1080,7 +1460,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       </td>
 
                       <td style={{ padding: "12px 16px", fontSize: "13px", color: "var(--ink)" }}>
-                        {student.timing || "Standard timing"}
+                        <div style={{ fontWeight: 500 }}>{student.timing || "Standard timing"}</div>
+                        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "4px" }}>
+                          {studentCourses.map((c) => (
+                            <span key={c.id} className="badge blue" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                              {c.code}
+                            </span>
+                          ))}
+                          {!studentCourses.length && (
+                            <span style={{ fontSize: "11px", color: "var(--muted)" }}>No enrolled courses</span>
+                          )}
+                        </div>
                       </td>
 
                       <td style={{ padding: "12px 16px", textAlign: "center" }}>
@@ -1163,8 +1553,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             {!attendanceStudents.length && (
               <div className="card portal-empty">
                 <Users size={22} />
-                <strong>No students in this course</strong>
-                <span>Try choosing another course or enroll students in this class.</span>
+                <strong>No students found in this selection</strong>
+                <span>Try choosing another course or toggle to All Campus Students.</span>
               </div>
             )}
           </div>
@@ -1178,6 +1568,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // ----------------------------------------------------
   function renderTasks() {
     const filteredTasks = tasks.filter((t) => {
+      if (taskScopeFilter === "assigned") {
+        const isAssigned = myAssignedStudentIds.has(t.student_id);
+        const isCreatedByMe = t.created_by === activeTrainerId;
+        if (!isAssigned && !isCreatedByMe) return false;
+      }
       if (taskStatusFilter === "assigned" && t.status === "completed") return false;
       if (taskStatusFilter === "completed" && t.status !== "completed") return false;
       if (!query.trim()) return true;
@@ -1192,6 +1587,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         course?.code?.toLowerCase().includes(q)
       );
     });
+
+    const myTasksCount = tasks.filter(
+      (t) => myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId
+    ).length;
 
     return (
       <div className="trainer-tasks-view">
@@ -1210,6 +1609,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <Plus size={15} /> {showTaskForm ? "Close Form" : "Assign New Task"}
             </button>
           </div>
+        </div>
+
+        {/* Scope Selector: Assigned vs All */}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "16px" }}>
+          <button
+            type="button"
+            className={`button ${taskScopeFilter === "assigned" ? "primary" : ""}`}
+            onClick={() => setTaskScopeFilter("assigned")}
+          >
+            <Users size={14} /> My Assigned Students ({myTasksCount})
+          </button>
+          <button
+            type="button"
+            className={`button ${taskScopeFilter === "all" ? "primary" : ""}`}
+            onClick={() => setTaskScopeFilter("all")}
+          >
+            All Campus Tasks ({tasks.length})
+          </button>
         </div>
 
         {/* Create Task Form */}
@@ -1287,13 +1704,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   <Users size={16} style={{ color: "#4f46e5" }} />
                   Select Students to Assign ({taskSelectedStudents.length} selected) *
                 </strong>
-                <div style={{ display: "flex", gap: "6px" }}>
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="button compact"
+                    style={{ background: "#e0e7ff", color: "#3730a3", fontWeight: 700 }}
+                    onClick={() => setTaskSelectedStudents(Array.from(myAssignedStudentIds))}
+                  >
+                    Select My Assigned ({myAssignedStudents.length})
+                  </button>
                   <button
                     type="button"
                     className="button compact"
                     onClick={() => setTaskSelectedStudents(students.map((s) => s.id))}
                   >
-                    Select All ({students.length})
+                    Select All Campus ({students.length})
                   </button>
                   {taskSelectedStudents.length > 0 && (
                     <button
@@ -1324,12 +1749,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   })
                   .map((student) => {
                     const isChecked = taskSelectedStudents.includes(student.id);
+                    const isAssignedToMe = myAssignedStudentIds.has(student.id);
                     return (
                       <label
                         key={student.id}
                         style={{
                           display: "flex",
                           alignItems: "center",
+                          justifyContent: "space-between",
                           gap: "8px",
                           padding: "6px 8px",
                           borderRadius: "4px",
@@ -1338,19 +1765,26 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           fontSize: "12.5px",
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setTaskSelectedStudents((prev) => [...prev, student.id]);
-                            } else {
-                              setTaskSelectedStudents((prev) => prev.filter((id) => id !== student.id));
-                            }
-                          }}
-                        />
-                        <span style={{ fontWeight: 600, color: "var(--ink)" }}>{student.full_name || student.email}</span>
-                        <small style={{ color: "var(--muted)" }}>{student.email}</small>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setTaskSelectedStudents((prev) => [...prev, student.id]);
+                              } else {
+                                setTaskSelectedStudents((prev) => prev.filter((id) => id !== student.id));
+                              }
+                            }}
+                          />
+                          <div>
+                            <span style={{ fontWeight: 600, color: "var(--ink)" }}>{student.full_name || student.email}</span>
+                            <small style={{ color: "var(--muted)", display: "block" }}>{student.email}</small>
+                          </div>
+                        </div>
+                        {isAssignedToMe && (
+                          <span className="badge green" style={{ fontSize: "10px" }}>Assigned to You</span>
+                        )}
                       </label>
                     );
                   })}
@@ -2007,6 +2441,38 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   />
                 </label>
 
+                {/* Target Students Selection */}
+                <div style={{ marginTop: "12px", padding: "10px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)" }}>
+                      Grant Access to Students ({matSelectedStudentIds.length} selected)
+                    </span>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px" }}
+                      onClick={() => setMatSelectedStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select My Assigned ({myAssignedStudents.length})
+                    </button>
+                  </div>
+                  <div style={{ maxHeight: "130px", overflowY: "auto" }}>
+                    {myAssignedStudents.map((s) => (
+                      <label key={s.id} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", padding: "3px 0", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={matSelectedStudentIds.includes(s.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) setMatSelectedStudentIds((prev) => [...prev, s.id]);
+                            else setMatSelectedStudentIds((prev) => prev.filter((id) => id !== s.id));
+                          }}
+                        />
+                        <span>{s.full_name || s.email}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="form-actions" style={{ marginTop: "18px" }}>
                   <button className="button" type="button" onClick={() => setShowMaterialModal(false)}>Cancel</button>
                   <button className="button primary" disabled={busy}>
@@ -2017,6 +2483,202 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // ----------------------------------------------------
+  // Tab 5: Tests & Assessments
+  // ----------------------------------------------------
+  function renderTests() {
+    const filteredTests = assessments.filter((a) => {
+      if (!query.trim()) return true;
+      const q = query.trim().toLowerCase();
+      const course = coursesById[a.course_id];
+      return (
+        a.title?.toLowerCase().includes(q) ||
+        a.description?.toLowerCase().includes(q) ||
+        course?.name?.toLowerCase().includes(q) ||
+        course?.code?.toLowerCase().includes(q)
+      );
+    });
+
+    const myAttempts = assessmentAttempts.filter((att) => myAssignedStudentIds.has(att.student_id));
+
+    return (
+      <div className="trainer-tests-view">
+        <div className="page-heading">
+          <div>
+            <div className="eyebrow">Assessments &amp; Evaluations</div>
+            <h1>Tests &amp; Quizzes</h1>
+            <p>
+              Assign tests, exam portals, and quizzes to your assigned students. Changes replicate to student profiles in real time.
+            </p>
+          </div>
+          <div className="heading-actions">
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => {
+                setSelectedTestToAssign(assessments[0] || null);
+                setTestTargetStudentIds(Array.from(myAssignedStudentIds));
+                setShowAssignTestModal(true);
+              }}
+            >
+              <Plus size={15} /> Assign Test to Students
+            </button>
+          </div>
+        </div>
+
+        {/* Metric Summary */}
+        <section className="metrics student-metrics" style={{ marginBottom: "20px" }}>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Available Tests</span>
+              <span className="metric-icon blue"><ClipboardList size={17} /></span>
+            </div>
+            <strong>{assessments.length}</strong>
+            <small>Active exams in campus catalog</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>My Assigned Students</span>
+              <span className="metric-icon green"><Users size={17} /></span>
+            </div>
+            <strong>{myAssignedStudents.length}</strong>
+            <small>Eligible for test targeting</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Completed Attempts</span>
+              <span className="metric-icon purple"><CheckCircle2 size={17} /></span>
+            </div>
+            <strong>{myAttempts.length}</strong>
+            <small>Evaluations from your students</small>
+          </article>
+        </section>
+
+        {/* Tests Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "18px" }}>
+          {filteredTests.map((test) => {
+            const course = coursesById[test.course_id];
+            const testRecipients = assessmentRecipients.filter((r) => r.assessment_id === test.id);
+            const myAssignedCount = myAssignedStudents.filter((s) =>
+              testRecipients.some((r) => r.student_id === s.id)
+            ).length;
+
+            const testAttemptsForMyStudents = assessmentAttempts.filter(
+              (att) => att.assessment_id === test.id && myAssignedStudentIds.has(att.student_id)
+            );
+
+            return (
+              <article
+                className="card panel"
+                key={test.id}
+                style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+                    <span className="badge blue" style={{ fontSize: "11px", fontWeight: 700 }}>
+                      {course ? course.code : "General"}
+                    </span>
+                    <span className="badge green" style={{ fontSize: "11px", fontWeight: 600 }}>
+                      {myAssignedCount} of {myAssignedStudents.length} Assigned
+                    </span>
+                  </div>
+
+                  <h3 style={{ fontSize: "16px", margin: "0 0 6px", color: "var(--ink)", fontWeight: 700 }}>
+                    {test.title}
+                  </h3>
+
+                  {test.description && (
+                    <p style={{ fontSize: "13px", color: "var(--muted)", margin: "0 0 12px", lineHeight: 1.4 }}>
+                      {test.description}
+                    </p>
+                  )}
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", color: "var(--muted)", marginBottom: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <CalendarClock size={13} />
+                      <span>Due {test.due_at ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(test.due_at)) : "Open deadline"}</span>
+                    </div>
+                    {test.external_url && (
+                      <span className="badge" style={{ fontSize: "11px", background: "#fdf4ff", color: "#9333ea" }}>
+                        External Exam Link
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Student Submissions List for this test */}
+                  {testAttemptsForMyStudents.length > 0 && (
+                    <div style={{ marginTop: "10px", padding: "10px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                      <strong style={{ fontSize: "11.5px", color: "var(--muted)", textTransform: "uppercase", display: "block", marginBottom: "6px" }}>
+                        Recent Student Submissions ({testAttemptsForMyStudents.length})
+                      </strong>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        {testAttemptsForMyStudents.map((att) => {
+                          const s = studentsById[att.student_id];
+                          return (
+                            <div key={att.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
+                              <span style={{ fontWeight: 600, color: "var(--ink)" }}>{s?.full_name || s?.email || "Student"}</span>
+                              <span className="badge green" style={{ fontSize: "11px", padding: "1px 6px" }}>
+                                {att.score} / {att.max_score} pts ({Math.round((att.score / (att.max_score || 100)) * 100)}%)
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card-actions" style={{ display: "flex", gap: "8px", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    style={{ flex: 1 }}
+                    onClick={() => {
+                      setSelectedTestToAssign(test);
+                      const currentAssigned = testRecipients
+                        .filter((r) => myAssignedStudentIds.has(r.student_id))
+                        .map((r) => r.student_id);
+                      setTestTargetStudentIds(currentAssigned.length > 0 ? currentAssigned : Array.from(myAssignedStudentIds));
+                      setShowAssignTestModal(true);
+                    }}
+                  >
+                    <Users size={13} /> Manage / Assign Students
+                  </button>
+
+                  {test.external_url && (
+                    <button
+                      className="button compact"
+                      type="button"
+                      onClick={() =>
+                        setViewingDoc({
+                          title: test.title,
+                          subtitle: `Assessment · ${course?.name || "General"}`,
+                          url: test.external_url,
+                        })
+                      }
+                    >
+                      <Eye size={13} /> Preview
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+
+          {!filteredTests.length && (
+            <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
+              <ClipboardList size={26} />
+              <strong>No assessments found</strong>
+              <span>Tests created by administrators or curriculum coordinators will appear here for student targeting.</span>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -2389,7 +3051,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <td style={{ padding: "12px 16px" }}>
                         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                           {studentCourses.map((c) => (
-                            <span key={c.id} className="badge blue" style={{ fontSize: "11px" }}>{c.code}</span>
+                            <span
+                              key={c.id}
+                              className="badge blue"
+                              style={{ fontSize: "11px", padding: "2px 6px" }}
+                              title={`${c.code} · ${c.name} (${c.schedule || "Regular"})`}
+                            >
+                              <strong>{c.code}</strong> · {c.name}
+                            </span>
                           ))}
                           {!studentCourses.length && <span style={{ color: "var(--muted)", fontSize: "12px" }}>Not enrolled</span>}
                         </div>
@@ -2424,6 +3093,20 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           <button
                             className="button compact"
                             type="button"
+                            style={{ background: "#7c3aed", color: "#fff" }}
+                            onClick={() => {
+                              setSelectedTestToAssign(assessments[0] || null);
+                              setTestTargetStudentIds([student.id]);
+                              setShowAssignTestModal(true);
+                              setActiveTab("Tests");
+                            }}
+                            title="Assign test to this student"
+                          >
+                            <ClipboardList size={12} /> Assign Test
+                          </button>
+                          <button
+                            className="button compact"
+                            type="button"
                             onClick={() => {
                               setNewMsgStudentId(student.id);
                               setShowNewMsgModal(true);
@@ -2432,6 +3115,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                             title="Message student"
                           >
                             <Mail size={12} /> Message
+                          </button>
+                          <button
+                            className="button compact"
+                            type="button"
+                            onClick={() => setSelectedStudentDetail(student)}
+                            title="View student profile & stats"
+                          >
+                            <Eye size={12} /> Details
                           </button>
                         </div>
                       </td>
@@ -2676,6 +3367,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             renderSyllabus()
           ) : activeTab === "Materials & Drive" ? (
             renderMaterialsAndDrive()
+          ) : activeTab === "Tests" ? (
+            renderTests()
           ) : activeTab === "Messages" ? (
             renderMessages()
           ) : activeTab === "Students" ? (
@@ -2685,6 +3378,300 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           )}
         </div>
       </main>
+
+      {/* Assign Test Modal */}
+      {showAssignTestModal && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowAssignTestModal(false); }}>
+          <div className="modal" style={{ maxWidth: "540px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon test" style={{ width: "38px", height: "38px", background: "#f5f3ff", color: "#7c3aed" }}>
+                  <ClipboardList size={18} />
+                </span>
+                <div>
+                  <h2>Assign Test to Students</h2>
+                  <p>Select which students can access and take this test.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setShowAssignTestModal(false)}><X size={18} /></button>
+            </div>
+
+            <div style={{ marginTop: "16px" }}>
+              <label className="form-field">
+                <span>Select Test / Quiz *</span>
+                <select
+                  value={selectedTestToAssign?.id || ""}
+                  onChange={(e) => {
+                    const t = assessments.find((a) => a.id === e.target.value);
+                    setSelectedTestToAssign(t);
+                    if (t) {
+                      const currentRecs = assessmentRecipients
+                        .filter((r) => r.assessment_id === t.id && myAssignedStudentIds.has(r.student_id))
+                        .map((r) => r.student_id);
+                      setTestTargetStudentIds(currentRecs.length > 0 ? currentRecs : Array.from(myAssignedStudentIds));
+                    }
+                  }}
+                >
+                  {assessments.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.title} {coursesById[a.course_id] ? `(${coursesById[a.course_id].code})` : ""}
+                    </option>
+                  ))}
+                  {!assessments.length && <option value="">No tests available in catalog</option>}
+                </select>
+              </label>
+
+              {/* Student Selection Checkboxes */}
+              <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                  <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Users size={16} style={{ color: "#7c3aed" }} />
+                    Target Students ({testTargetStudentIds.length} selected) *
+                  </strong>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ background: "#ede9fe", color: "#5b21b6", fontWeight: 700 }}
+                      onClick={() => setTestTargetStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select My Assigned ({myAssignedStudents.length})
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => setTestTargetStudentIds([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: "200px", overflowY: "auto", border: "1px solid var(--line)", borderRadius: "6px", background: "#fff", padding: "4px" }}>
+                  {myAssignedStudents.map((student) => {
+                    const isChecked = testTargetStudentIds.includes(student.id);
+                    const isAlreadyAssigned = assessmentRecipients.some(
+                      (r) => r.assessment_id === selectedTestToAssign?.id && r.student_id === student.id
+                    );
+
+                    return (
+                      <label
+                        key={student.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "8px",
+                          padding: "6px 8px",
+                          borderRadius: "4px",
+                          background: isChecked ? "#f5f3ff" : "#fff",
+                          cursor: "pointer",
+                          fontSize: "12.5px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setTestTargetStudentIds((prev) => [...prev, student.id]);
+                              } else {
+                                setTestTargetStudentIds((prev) => prev.filter((id) => id !== student.id));
+                              }
+                            }}
+                          />
+                          <div>
+                            <span style={{ fontWeight: 600, color: "var(--ink)" }}>{student.full_name || student.email}</span>
+                            <small style={{ color: "var(--muted)", display: "block" }}>{student.email}</small>
+                          </div>
+                        </div>
+
+                        {isAlreadyAssigned && (
+                          <span className="badge green" style={{ fontSize: "10px" }}>Already Assigned</span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: "18px" }}>
+                <button className="button" type="button" onClick={() => setShowAssignTestModal(false)}>Cancel</button>
+                <button
+                  className="button primary"
+                  disabled={busy || !selectedTestToAssign}
+                  style={{ background: "#7c3aed" }}
+                  onClick={() => handleAssignTest(selectedTestToAssign.id, testTargetStudentIds)}
+                >
+                  <Check size={14} /> {busy ? "Assigning..." : `Save & Grant Test Access (${testTargetStudentIds.length})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student Details Modal */}
+      {selectedStudentDetail && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setSelectedStudentDetail(null); }}>
+          <div className="modal" style={{ maxWidth: "620px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="student-avatar" style={{ width: "42px", height: "42px", background: "#16a34a", color: "#fff", fontSize: "16px", fontWeight: 700 }}>
+                  {(selectedStudentDetail.full_name || selectedStudentDetail.email || "S").slice(0, 1).toUpperCase()}
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>{selectedStudentDetail.full_name || "Student Profile"}</h2>
+                  <p style={{ margin: 0 }}>{selectedStudentDetail.email} · {selectedStudentDetail.timing || "Standard Program"}</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setSelectedStudentDetail(null)}><X size={18} /></button>
+            </div>
+
+            <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* IDs and Metadata */}
+              <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", display: "flex", flexWrap: "wrap", gap: "14px" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Student ID</span>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "5px", marginTop: "2px" }}>
+                    <code style={{ fontSize: "11px", background: "#fff", padding: "2px 6px", borderRadius: "4px", border: "1px solid var(--line)" }}>
+                      {selectedStudentDetail.id}
+                    </code>
+                    <button
+                      type="button"
+                      className="quiet-icon"
+                      style={{ padding: "3px" }}
+                      title="Copy Student ID"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedStudentDetail.id);
+                        setToast(`Copied Student ID: ${selectedStudentDetail.id}`);
+                      }}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Program Timing</span>
+                  <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block", marginTop: "2px" }}>
+                    {selectedStudentDetail.timing || "Standard Program"}
+                  </strong>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Trainer Status</span>
+                  <span className="badge green" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px", marginTop: "2px" }}>
+                    <Check size={11} /> Assigned to You
+                  </span>
+                </div>
+              </div>
+
+              {/* Enrolled Courses */}
+              <div>
+                <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block", marginBottom: "8px" }}>
+                  Enrolled Courses
+                </strong>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  {enrollments
+                    .filter((e) => e.student_id === selectedStudentDetail.id)
+                    .map((e) => coursesById[e.course_id])
+                    .filter(Boolean)
+                    .map((c) => (
+                      <div key={c.id} style={{ padding: "8px 12px", background: "#f1f5f9", borderRadius: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <span className="badge blue" style={{ fontSize: "11px", marginRight: "6px" }}>{c.code}</span>
+                          <strong style={{ fontSize: "13px", color: "var(--ink)" }}>{c.name}</strong>
+                        </div>
+                        <small style={{ color: "var(--muted)" }}>{c.schedule || "Regular"}</small>
+                      </div>
+                    ))}
+                  {!enrollments.some((e) => e.student_id === selectedStudentDetail.id) && (
+                    <span style={{ fontSize: "13px", color: "var(--muted)" }}>Not enrolled in any courses yet.</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Attendance Summary */}
+              <div>
+                <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block", marginBottom: "8px" }}>
+                  Attendance Record Summary
+                </strong>
+                {(() => {
+                  const studentRecords = attendanceRecords.filter((r) => r.student_id === selectedStudentDetail.id);
+                  const p = studentRecords.filter((r) => r.status === "Present").length;
+                  const l = studentRecords.filter((r) => r.status === "Late").length;
+                  const a = studentRecords.filter((r) => r.status === "Absent").length;
+                  const total = studentRecords.length;
+                  const pct = total ? Math.round(((p + l * 0.5) / total) * 100) : 100;
+
+                  return (
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <span className="badge green">Present: {p}</span>
+                      <span className="badge amber">Late: {l}</span>
+                      <span className="badge rose">Absent: {a}</span>
+                      <span className="badge blue">Overall: {pct}% Rate ({total} total check-ins)</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Quick Actions */}
+              <div style={{ display: "flex", gap: "8px", borderTop: "1px solid var(--line)", paddingTop: "14px", marginTop: "4px" }}>
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => {
+                    setTaskSelectedStudents([selectedStudentDetail.id]);
+                    setShowTaskForm(true);
+                    setSelectedStudentDetail(null);
+                    setActiveTab("Tasks");
+                  }}
+                >
+                  <CheckCircle2 size={13} /> Assign Task
+                </button>
+
+                <button
+                  className="button primary"
+                  type="button"
+                  style={{ background: "#7c3aed" }}
+                  onClick={() => {
+                    setSelectedTestToAssign(assessments[0] || null);
+                    setTestTargetStudentIds([selectedStudentDetail.id]);
+                    setShowAssignTestModal(true);
+                    setSelectedStudentDetail(null);
+                    setActiveTab("Tests");
+                  }}
+                >
+                  <ClipboardList size={13} /> Assign Test
+                </button>
+
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => {
+                    setNewMsgStudentId(selectedStudentDetail.id);
+                    setShowNewMsgModal(true);
+                    setSelectedStudentDetail(null);
+                    setActiveTab("Messages");
+                  }}
+                >
+                  <Mail size={13} /> Message
+                </button>
+
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => setSelectedStudentDetail(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Document Viewer Modal */}
       {viewingDoc && (

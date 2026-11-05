@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
   Copy, Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
@@ -207,31 +207,89 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   useEffect(() => { loadPortal(true); }, [loadPortal]);
 
+  // Debounced quiet reload to eliminate lag and prevent duplicate cascading fetches
+  const debounceTimerRef = useRef(null);
+  const debouncedReload = useCallback(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      loadPortal(false);
+    }, 120);
+  }, [loadPortal]);
+
+  // Real-time synchronization with instant memory patching for zero-latency UI updates
   useEffect(() => {
     if (!supabase || !user?.id) return;
     const channel = supabase
       .channel(`student-portal-realtime-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, () => loadPortal())
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, () => loadPortal())
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, (payload) => {
+        // Instant optimistic patch for attendance
+        if (payload.new && payload.new.student_id === user.id) {
+          setAttendance((prev) => {
+            const next = prev.filter((r) => !(r.student_id === user.id && r.attendance_date === payload.new.attendance_date));
+            return [payload.new, ...next];
+          });
+        }
+        debouncedReload();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, (payload) => {
+        // Instant optimistic patch for notes / tasks
+        if (payload.new && payload.new.student_id === user.id) {
+          setNotes((prev) => {
+            const exists = prev.some((n) => n.id === payload.new.id);
+            if (exists) {
+              return prev.map((n) => (n.id === payload.new.id ? payload.new : n));
+            }
+            return [payload.new, ...prev];
+          });
+        } else if (payload.eventType === "DELETE" && payload.old) {
+          setNotes((prev) => prev.filter((n) => n.id !== payload.old.id));
+        }
+        debouncedReload();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, (payload) => {
+        // Instant patch for syllabus / material permission
+        if (payload.new && payload.new.student_id === user.id) {
+          setPermittedMaterialIds((prev) => new Set([...prev, payload.new.material_id]));
+        } else if (payload.eventType === "DELETE" && payload.old?.student_id === user.id) {
+          setPermittedMaterialIds((prev) => {
+            const next = new Set(prev);
+            next.delete(payload.old.material_id);
+            return next;
+          });
+        }
+        debouncedReload();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, (payload) => {
+        // Instant patch for test permission
+        if (payload.new && payload.new.student_id === user.id) {
+          setPermittedAssessmentIds((prev) => new Set([...prev, payload.new.assessment_id]));
+        } else if (payload.eventType === "DELETE" && payload.old?.student_id === user.id) {
+          setPermittedAssessmentIds((prev) => {
+            const next = new Set(prev);
+            next.delete(payload.old.assessment_id);
+            return next;
+          });
+        }
+        debouncedReload();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, debouncedReload)
       .subscribe();
 
     return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, user.id, loadPortal]);
+  }, [supabase, user.id, debouncedReload]);
 
   useEffect(() => {
     if (activeView !== "Messages" || !user.id) return;
