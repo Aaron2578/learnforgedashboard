@@ -362,3 +362,4 @@ export default function CreateTrainerModal({ onClose, onCreated, supabase, onToa
     </div>
   );
 }
+

@@ -2451,6 +2451,28 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut }) {
             <span className="top-avatar" title={user?.email}>
               {(profile?.full_name || "TR").slice(0, 2).toUpperCase()}
             </span>
+
+            {onSignOut && (
+              <button
+                className="button compact"
+                type="button"
+                onClick={onSignOut}
+                title="Sign out of Trainer Portal"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  borderColor: "rgba(239, 68, 68, 0.3)",
+                  color: "#dc2626",
+                  background: "#fef2f2",
+                  fontWeight: 500,
+                  fontSize: "12.5px",
+                }}
+              >
+                <LogOut size={13} />
+                <span>Sign out</span>
+              </button>
+            )}
           </div>
         </header>
 
