@@ -40,17 +40,21 @@ import {
   Upload,
   Users,
   X,
+  Award,
+  BarChart3,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
 
 const TRAINER_NAV = [
   { label: "Overview", icon: LayoutDashboard },
-  { label: "Tasks", icon: CheckCircle2 },
-  { label: "Syllabus", icon: BookOpen },
-  { label: "Materials & Drive", icon: HardDrive },
+  { label: "Notes", icon: FileText },
+  { label: "Assignments", icon: BookOpen },
   { label: "Attendance", icon: CalendarCheck },
   { label: "Tests", icon: ClipboardList },
+  { label: "Gradebook", icon: BarChart3 },
+  { label: "Syllabus", icon: GraduationCap },
+  { label: "Materials & Drive", icon: HardDrive },
   { label: "Messages", icon: MessageSquare },
   { label: "Students", icon: Users },
 ];
@@ -94,13 +98,46 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [downloadRequests, setDownloadRequests] = useState([]);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
 
+  // Assignments State
+  const [assignments, setAssignments] = useState([]);
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState([]);
+  const [assignmentRecipients, setAssignmentRecipients] = useState([]);
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState(null);
+  const [assignmentTitle, setAssignmentTitle] = useState("");
+  const [assignmentDesc, setAssignmentDesc] = useState("");
+  const [assignmentCourseId, setAssignmentCourseId] = useState("");
+  const [assignmentDueDate, setAssignmentDueDate] = useState("");
+  const [assignmentTotalMarks, setAssignmentTotalMarks] = useState(100);
+  const [assignmentTargetStudentIds, setAssignmentTargetStudentIds] = useState([]);
+  const [assignmentCourseFilter, setAssignmentCourseFilter] = useState("all");
+  const [showSubmissionsModal, setShowSubmissionsModal] = useState(false);
+  const [selectedAssignmentForSubmissions, setSelectedAssignmentForSubmissions] = useState(null);
+  const [gradingState, setGradingState] = useState({});
+  const [savingGradeId, setSavingGradeId] = useState(null);
+
+  // Notes Modal State
+  const [editingNote, setEditingNote] = useState(null);
+  const [noteDriveUrl, setNoteDriveUrl] = useState("");
+
   // Tests & Assessments State
   const [assessments, setAssessments] = useState([]);
   const [assessmentRecipients, setAssessmentRecipients] = useState([]);
   const [assessmentAttempts, setAssessmentAttempts] = useState([]);
   const [showAssignTestModal, setShowAssignTestModal] = useState(false);
+  const [showCreateTestModal, setShowCreateTestModal] = useState(false);
   const [selectedTestToAssign, setSelectedTestToAssign] = useState(null);
   const [testTargetStudentIds, setTestTargetStudentIds] = useState([]);
+  const [testTitle, setTestTitle] = useState("");
+  const [testDescription, setTestDescription] = useState("");
+  const [testCourseId, setTestCourseId] = useState("");
+  const [testTotalMarks, setTestTotalMarks] = useState(100);
+  const [testDuration, setTestDuration] = useState(60);
+  const [testExternalUrl, setTestExternalUrl] = useState("");
+
+  // Gradebook State
+  const [gradebookCourseFilter, setGradebookCourseFilter] = useState("all");
+  const [gradebookSearch, setGradebookSearch] = useState("");
 
   // Attendance Tab State
   const [attendanceDate, setAttendanceDate] = useState(() => localDate());
@@ -186,6 +223,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         assessmentRecipientsRes,
         materialRecipientsRes,
         assessmentAttemptsRes,
+        assignmentsRes,
+        assignmentSubmissionsRes,
+        assignmentRecipientsRes,
       ] = await Promise.all([
         supabase.from("courses").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }).then((r) => r.error ? { data: [] } : r),
@@ -201,6 +241,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         supabase.from("assessment_recipients").select("assessment_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("material_recipients").select("material_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").then((r) => r.error ? { data: [] } : r),
+        supabase.from("assignments").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
+        supabase.from("assignment_submissions").select("*").order("submitted_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
+        supabase.from("assignment_recipients").select("*").then((r) => r.error ? { data: [] } : r),
       ]);
 
       if (coursesRes.error) console.warn("TrainerPortal courses query warning:", coursesRes.error);
@@ -222,6 +265,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setAssessmentRecipients(assessmentRecipientsRes.data || []);
       setMaterialRecipients(materialRecipientsRes.data || []);
       setAssessmentAttempts(assessmentAttemptsRes.data || []);
+      setAssignments(assignmentsRes.data || []);
+      setAssignmentSubmissions(assignmentSubmissionsRes.data || []);
+      setAssignmentRecipients(assignmentRecipientsRes.data || []);
     } catch (err) {
       console.error("TrainerPortal load error:", err);
       setError(err.message || "Failed to load trainer records.");
@@ -255,6 +301,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       .on("postgres_changes", { event: "*", schema: "public", table: "assessments" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_recipients" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "trainer_students" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, debouncedTrainerReload)
@@ -421,6 +470,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     return assessments.filter((a) => myTrainerCourseIds.has(a.course_id) || a.created_by === activeTrainerId);
   }, [assessments, myTrainerCourseIds, activeTrainerId]);
 
+  // Assignments strictly for this trainer's courses or created by this trainer
+  const myTrainerAssignments = useMemo(() => {
+    return assignments.filter((a) =>
+      a.trainer_id === activeTrainerId ||
+      a.created_by === activeTrainerId ||
+      myTrainerCourseIds.has(a.course_id)
+    );
+  }, [assignments, activeTrainerId, myTrainerCourseIds]);
+
+  const myTrainerAssignmentIds = useMemo(() => new Set(myTrainerAssignments.map((a) => a.id)), [myTrainerAssignments]);
+
+  // Submissions for trainer's assignments or from assigned students
+  const myTrainerSubmissions = useMemo(() => {
+    return assignmentSubmissions.filter((s) =>
+      myTrainerAssignmentIds.has(s.assignment_id) || myAssignedStudentIds.has(s.student_id)
+    );
+  }, [assignmentSubmissions, myTrainerAssignmentIds, myAssignedStudentIds]);
+
   // Load chat messages when a conversation is selected
   useEffect(() => {
     if (!selectedConversationId || !supabase) return;
@@ -576,16 +643,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   }
 
   // ----------------------------------------------------
-  // Actions: Tasks
+  // Actions: Notes & Tasks
   // ----------------------------------------------------
   async function handleCreateTask(e) {
     e.preventDefault();
     if (!taskTitle.trim()) {
-      setError("Task title is required.");
+      setError("Note / task title is required.");
       return;
     }
     if (taskSelectedStudents.length === 0) {
-      setError("Select at least one student to assign this task.");
+      setError("Select at least one student to assign this note.");
       return;
     }
 
@@ -598,9 +665,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         student_id: sid,
         course_id: taskCourseId || null,
         title: taskTitle.trim(),
-        body: taskInstructions.trim() || "Complete the assigned task.",
+        body: taskInstructions.trim() || "Course notes and materials.",
+        drive_url: noteDriveUrl.trim() || null,
         status: "assigned",
-        category: taskCategory || "Task",
+        category: taskCategory || "Class Notes",
         due_at: dueIso,
         created_by: user.id,
       }));
@@ -624,7 +692,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           student_id: sid,
           course_id: taskCourseId || null,
           title: taskTitle.trim(),
-          body: taskInstructions.trim() || "Complete the assigned task.",
+          body: taskInstructions.trim() || "Course notes and materials.",
           created_by: user.id,
         }));
         const retry = await supabase.from("student_notes").insert(fallback).select();
@@ -648,11 +716,48 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setShowTaskForm(false);
       setTaskTitle("");
       setTaskInstructions("");
+      setNoteDriveUrl("");
       setTaskDueAt("");
       setTaskSelectedStudents([]);
       loadTrainerData(false);
     } catch (err) {
-      setError(err.message || "Failed to assign task.");
+      setError(err.message || "Failed to assign note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateNote(e) {
+    e.preventDefault();
+    if (!editingNote || !editingNote.title?.trim()) {
+      setError("Note title is required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const dueIso = editingNote.due_at ? new Date(editingNote.due_at).toISOString() : null;
+      const { error: updateErr } = await supabase
+        .from("student_notes")
+        .update({
+          title: editingNote.title.trim(),
+          body: editingNote.body?.trim() || "",
+          drive_url: editingNote.drive_url?.trim() || null,
+          category: editingNote.category || "Class Notes",
+          course_id: editingNote.course_id || null,
+          due_at: dueIso,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", editingNote.id);
+
+      if (updateErr) throw updateErr;
+
+      setTasks((prev) =>
+        prev.map((t) => (t.id === editingNote.id ? { ...t, ...editingNote, due_at: dueIso } : t))
+      );
+      setToast("Note updated successfully!");
+      setEditingNote(null);
+    } catch (err) {
+      setError("Failed to update note: " + err.message);
     } finally {
       setBusy(false);
     }
@@ -663,20 +768,244 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     try {
       await supabase.from("student_notes").update({ status: nextStatus }).eq("id", task.id);
       setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)));
-      setToast(nextStatus === "completed" ? "Task marked as completed!" : "Task marked as assigned.");
+      setToast(nextStatus === "completed" ? "Marked as completed!" : "Marked as assigned.");
     } catch (err) {
-      setError("Could not update task status: " + err.message);
+      setError("Could not update status: " + err.message);
     }
   }
 
   async function handleDeleteTask(taskId) {
-    if (!window.confirm("Delete this assigned task?")) return;
+    if (!window.confirm("Delete this note / task?")) return;
     try {
       await supabase.from("student_notes").delete().eq("id", taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      setToast("Task removed.");
+      setToast("Note removed.");
     } catch (err) {
       setError(err.message);
+    }
+  }
+  const handleDeleteNote = handleDeleteTask;
+
+  // ----------------------------------------------------
+  // Actions: Assignments & Submissions
+  // ----------------------------------------------------
+  async function handleSaveAssignment(e) {
+    e.preventDefault();
+    if (!assignmentTitle.trim()) {
+      setError("Assignment title is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+
+    try {
+      const dueIso = assignmentDueDate ? new Date(assignmentDueDate).toISOString() : null;
+      const targetStudents = assignmentTargetStudentIds.length > 0 
+        ? assignmentTargetStudentIds 
+        : Array.from(myAssignedStudentIds);
+
+      if (editingAssignment) {
+        const { error: updateErr } = await supabase
+          .from("assignments")
+          .update({
+            title: assignmentTitle.trim(),
+            description: assignmentDesc.trim(),
+            course_id: assignmentCourseId || null,
+            total_marks: Number(assignmentTotalMarks) || 100,
+            due_at: dueIso,
+          })
+          .eq("id", editingAssignment.id);
+
+        if (updateErr) throw updateErr;
+
+        if (targetStudents.length > 0) {
+          await supabase.from("assignment_recipients").delete().eq("assignment_id", editingAssignment.id);
+          await supabase.from("assignment_recipients").insert(
+            targetStudents.map((sid) => ({
+              assignment_id: editingAssignment.id,
+              student_id: sid,
+            }))
+          );
+        }
+
+        setToast("Assignment updated successfully!");
+      } else {
+        const { data: newAssign, error: insertErr } = await supabase
+          .from("assignments")
+          .insert({
+            title: assignmentTitle.trim(),
+            description: assignmentDesc.trim(),
+            course_id: assignmentCourseId || null,
+            trainer_id: activeTrainerId,
+            total_marks: Number(assignmentTotalMarks) || 100,
+            due_at: dueIso,
+            published: true,
+            created_by: user.id,
+          })
+          .select()
+          .single();
+
+        if (insertErr) throw insertErr;
+
+        if (newAssign && targetStudents.length > 0) {
+          await supabase.from("assignment_recipients").insert(
+            targetStudents.map((sid) => ({
+              assignment_id: newAssign.id,
+              student_id: sid,
+            }))
+          );
+        }
+
+        setToast(`Assignment "${assignmentTitle}" posted and assigned to ${targetStudents.length} student(s)!`);
+      }
+
+      setShowAssignmentModal(false);
+      setEditingAssignment(null);
+      setAssignmentTitle("");
+      setAssignmentDesc("");
+      setAssignmentCourseId("");
+      setAssignmentDueDate("");
+      setAssignmentTotalMarks(100);
+      setAssignmentTargetStudentIds([]);
+      loadTrainerData(false);
+    } catch (err) {
+      setError(err.message || "Failed to save assignment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteAssignment(assignmentId) {
+    if (!window.confirm("Delete this assignment? All student submissions for it will also be removed.")) return;
+    try {
+      await supabase.from("assignments").delete().eq("id", assignmentId);
+      setAssignments((prev) => prev.filter((a) => a.id !== assignmentId));
+      setToast("Assignment removed.");
+    } catch (err) {
+      setError("Could not delete assignment: " + err.message);
+    }
+  }
+
+  async function handleSaveGrade(submissionId, maxScore = 100) {
+    const cur = gradingState[submissionId] || {};
+    const gradeVal = cur.grade !== undefined && cur.grade !== "" ? Number(cur.grade) : null;
+    const feedbackVal = (cur.feedback || "").trim();
+
+    if (gradeVal !== null && (isNaN(gradeVal) || gradeVal < 0 || gradeVal > maxScore)) {
+      setError(`Grade must be between 0 and ${maxScore}.`);
+      return;
+    }
+
+    setSavingGradeId(submissionId);
+    setError("");
+    try {
+      const { error: gradeErr } = await supabase
+        .from("assignment_submissions")
+        .update({
+          grade: gradeVal,
+          feedback: feedbackVal,
+          graded_at: new Date().toISOString(),
+        })
+        .eq("id", submissionId);
+
+      if (gradeErr) throw gradeErr;
+
+      setAssignmentSubmissions((prev) =>
+        prev.map((s) => (s.id === submissionId ? { ...s, grade: gradeVal, feedback: feedbackVal, graded_at: new Date().toISOString() } : s))
+      );
+      setToast("Grade and feedback saved successfully!");
+    } catch (err) {
+      setError("Failed to save grade: " + err.message);
+    } finally {
+      setSavingGradeId(null);
+    }
+  }
+
+  async function handleDownloadSubmissionFile(filePath) {
+    try {
+      let cleanPath = filePath;
+      if (filePath.startsWith("assignment-files:")) {
+        cleanPath = filePath.replace("assignment-files:", "");
+      }
+      const { data, error } = await supabase.storage.from("assignment-files").createSignedUrl(cleanPath, 3600);
+      if (error) throw error;
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (err) {
+      setError("Could not open student submission file: " + err.message);
+    }
+  }
+
+  // ----------------------------------------------------
+  // Actions: Tests & Quizzes
+  // ----------------------------------------------------
+  async function handleCreateTest(e) {
+    e.preventDefault();
+    if (!testTitle.trim()) {
+      setError("Test title is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+
+    try {
+      const targetStudents = testTargetStudentIds.length > 0 
+        ? testTargetStudentIds 
+        : Array.from(myAssignedStudentIds);
+
+      const { data: newTest, error: testErr } = await supabase
+        .from("assessments")
+        .insert({
+          title: testTitle.trim(),
+          description: testDescription.trim(),
+          course_id: testCourseId || null,
+          trainer_id: activeTrainerId,
+          total_marks: Number(testTotalMarks) || 100,
+          duration_minutes: Number(testDuration) || 60,
+          external_url: testExternalUrl.trim() || null,
+          published: true,
+          created_by: user.id,
+        })
+        .select()
+        .single();
+
+      if (testErr) throw testErr;
+
+      if (newTest && targetStudents.length > 0) {
+        await supabase.from("assessment_recipients").insert(
+          targetStudents.map((sid) => ({
+            assessment_id: newTest.id,
+            student_id: sid,
+          }))
+        );
+      }
+
+      setToast(`Test "${testTitle}" created and assigned to ${targetStudents.length} student(s)!`);
+      setShowCreateTestModal(false);
+      setTestTitle("");
+      setTestDescription("");
+      setTestCourseId("");
+      setTestTotalMarks(100);
+      setTestDuration(60);
+      setTestExternalUrl("");
+      setTestTargetStudentIds([]);
+      loadTrainerData(false);
+    } catch (err) {
+      setError(err.message || "Failed to create test.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteTest(testId) {
+    if (!window.confirm("Delete this test? Any student attempts will also be removed.")) return;
+    try {
+      await supabase.from("assessments").delete().eq("id", testId);
+      setAssessments((prev) => prev.filter((a) => a.id !== testId));
+      setToast("Test deleted successfully.");
+    } catch (err) {
+      setError("Could not delete test: " + err.message);
     }
   }
 
@@ -987,8 +1316,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   function renderOverview() {
     const todayStr = localDate();
     const todayAttendanceCount = attendanceRecords.filter((r) => r.attendance_date === todayStr && myAssignedStudentIds.has(r.student_id)).length;
-    const pendingRequestsCount = downloadRequests.filter((r) => r.status === "pending" && myAssignedStudentIds.has(r.student_id)).length;
+    const allMyAtt = attendanceRecords.filter((r) => myAssignedStudentIds.has(r.student_id));
+    const attPresent = allMyAtt.filter((r) => r.status === "Present").length;
+    const attLate = allMyAtt.filter((r) => r.status === "Late").length;
+    const overallAttRate = allMyAtt.length > 0 ? Math.round(((attPresent + attLate * 0.5) / allMyAtt.length) * 100) : 100;
+
     const myTasks = tasks.filter((t) => myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId);
+    const activeAssignments = myTrainerAssignments;
+    const submissions = myTrainerSubmissions;
+    const pendingGrading = submissions.filter((s) => s.grade === null || s.grade === undefined);
+    const myAttempts = assessmentAttempts.filter((att) => myAssignedStudentIds.has(att.student_id));
+    const pendingRequestsCount = downloadRequests.filter((r) => r.status === "pending" && myAssignedStudentIds.has(r.student_id)).length;
 
     return (
       <div className="trainer-overview-view">
@@ -1013,7 +1351,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 Welcome back, {(isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "Trainer"}!
               </h1>
               <p style={{ margin: 0, color: "#c7d2fe", fontSize: "14px", maxWidth: "600px" }}>
-                Manage attendance check-ins, assign tasks, distribute course syllabus and practice sets, and communicate with students seamlessly.
+                Manage attendance check-ins, create coursework assignments, post learning notes, and monitor student evaluations in real time.
               </p>
             </div>
 
@@ -1031,65 +1369,80 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 style={{ background: "rgba(255, 255, 255, 0.15)", color: "#ffffff", border: "1px solid rgba(255, 255, 255, 0.25)" }}
                 type="button"
                 onClick={() => {
-                  setShowTaskForm(true);
-                  setActiveTab("Tasks");
+                  setEditingAssignment(null);
+                  setAssignmentTitle("");
+                  setAssignmentDesc("");
+                  setAssignmentCourseId(myTrainerCourses[0]?.id || "");
+                  setAssignmentDueDate("");
+                  setAssignmentTotalMarks(100);
+                  setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
+                  setShowAssignmentModal(true);
+                  setActiveTab("Assignments");
                 }}
               >
-                <Plus size={15} /> Assign Task
+                <BookOpen size={15} /> Create Assignment
+              </button>
+              <button
+                className="button"
+                style={{ background: "rgba(255, 255, 255, 0.15)", color: "#ffffff", border: "1px solid rgba(255, 255, 255, 0.25)" }}
+                type="button"
+                onClick={() => setActiveTab("Gradebook")}
+              >
+                <BarChart3 size={15} /> Gradebook
               </button>
             </div>
           </div>
         </section>
 
-        {/* Metric Cards */}
+        {/* Metric Cards - Role Specific Summary */}
         <section className="metrics student-metrics" style={{ marginBottom: "24px" }}>
-          <article className="card metric-card">
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => setActiveTab("Attendance")}>
             <div className="metric-top">
-              <span>Courses Taught</span>
-              <span className="metric-icon blue"><BookOpen size={17} /></span>
+              <span>Class Attendance</span>
+              <span className="metric-icon green"><CalendarCheck size={17} /></span>
             </div>
-            <strong>{myTrainerCourses.length}</strong>
-            <small>{myTrainerCourses.length === 1 ? "1 active curriculum" : `${myTrainerCourses.length} active curriculums`}</small>
+            <strong>{overallAttRate}%</strong>
+            <small>{todayAttendanceCount} check-in{todayAttendanceCount === 1 ? "" : "s"} today</small>
           </article>
 
-          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => { setActiveTab("Students"); }}>
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => setActiveTab("Assignments")}>
             <div className="metric-top">
-              <span>My Assigned Students</span>
+              <span>Active Assignments</span>
+              <span className="metric-icon blue"><BookOpen size={17} /></span>
+            </div>
+            <strong>{activeAssignments.length}</strong>
+            <small>{pendingGrading.length} pending review</small>
+          </article>
+
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => setActiveTab("Tests")}>
+            <div className="metric-top">
+              <span>Tests &amp; Evaluations</span>
+              <span className="metric-icon purple"><ClipboardList size={17} /></span>
+            </div>
+            <strong>{myTrainerAssessments.length}</strong>
+            <small>{myAttempts.length} completed attempts</small>
+          </article>
+
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => setActiveTab("Students")}>
+            <div className="metric-top">
+              <span>Assigned Students</span>
               <span className="metric-icon green"><Users size={17} /></span>
             </div>
             <strong>{myAssignedStudents.length}</strong>
-            <small>{myAssignedStudents.length === 1 ? "1 active assigned student" : `${myAssignedStudents.length} active assigned students`}</small>
+            <small>{myAssignedStudents.length === 1 ? "1 active mentee" : `${myAssignedStudents.length} active mentees`}</small>
           </article>
 
-          <article className="card metric-card">
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => setActiveTab("Notes")}>
             <div className="metric-top">
-              <span>Assigned Tasks</span>
-              <span className="metric-icon amber"><CheckCircle2 size={17} /></span>
+              <span>Course Notes</span>
+              <span className="metric-icon amber"><FileText size={17} /></span>
             </div>
             <strong>{myTasks.length}</strong>
-            <small>{myTasks.filter((t) => t.status === "completed").length} completed</small>
-          </article>
-
-          <article className="card metric-card">
-            <div className="metric-top">
-              <span>Today's Attendance</span>
-              <span className="metric-icon purple"><CalendarClock size={17} /></span>
-            </div>
-            <strong>{todayAttendanceCount}</strong>
-            <small>Check-ins for {todayStr}</small>
-          </article>
-
-          <article className="card metric-card">
-            <div className="metric-top">
-              <span>Download Requests</span>
-              <span className="metric-icon rose"><Download size={17} /></span>
-            </div>
-            <strong>{pendingRequestsCount}</strong>
-            <small>{pendingRequestsCount > 0 ? "Awaiting review" : "All reviewed"}</small>
+            <small>{myTasks.filter((t) => t.drive_url).length} with Google Drive links</small>
           </article>
         </section>
 
-        {/* Courses & Today's Schedule Grid */}
+        {/* Courses & Quick Actions Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
           <article className="card panel">
             <div className="panel-heading">
@@ -1163,15 +1516,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   <CalendarCheck size={18} />
                 </div>
                 <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Take Attendance</strong>
-                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Mark Present, Late, or Absent for today.</span>
+                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Mark Present, Late, or Absent.</span>
               </button>
 
               <button
                 className="card"
                 type="button"
                 onClick={() => {
-                  setShowTaskForm(true);
-                  setActiveTab("Tasks");
+                  setEditingAssignment(null);
+                  setAssignmentTitle("");
+                  setAssignmentDesc("");
+                  setAssignmentCourseId(myTrainerCourses[0]?.id || "");
+                  setAssignmentDueDate("");
+                  setAssignmentTotalMarks(100);
+                  setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
+                  setShowAssignmentModal(true);
+                  setActiveTab("Assignments");
                 }}
                 style={{
                   padding: "16px",
@@ -1185,18 +1545,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 }}
               >
                 <div style={{ width: "36px", height: "36px", borderRadius: "8px", background: "#f0fdf4", color: "#16a34a", display: "grid", placeItems: "center" }}>
-                  <CheckCircle2 size={18} />
+                  <BookOpen size={18} />
                 </div>
-                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Assign Task</strong>
-                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Give exercises or project tasks to students.</span>
+                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>New Assignment</strong>
+                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Create coursework with marks.</span>
               </button>
 
               <button
                 className="card"
                 type="button"
                 onClick={() => {
-                  setShowSyllabusModal(true);
-                  setActiveTab("Syllabus");
+                  setShowTaskForm(true);
+                  setActiveTab("Notes");
                 }}
                 style={{
                   padding: "16px",
@@ -1210,18 +1570,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 }}
               >
                 <div style={{ width: "36px", height: "36px", borderRadius: "8px", background: "#fffbeb", color: "#d97706", display: "grid", placeItems: "center" }}>
-                  <BookOpen size={18} />
+                  <FileText size={18} />
                 </div>
-                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Upload Syllabus</strong>
-                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Distribute curriculum and learning outlines.</span>
+                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Add Course Note</strong>
+                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Share notes &amp; Drive links.</span>
               </button>
 
               <button
                 className="card"
                 type="button"
                 onClick={() => {
-                  setShowNewMsgModal(true);
-                  setActiveTab("Messages");
+                  setShowCreateTestModal(true);
+                  setActiveTab("Tests");
                 }}
                 style={{
                   padding: "16px",
@@ -1234,15 +1594,100 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   gap: "8px",
                 }}
               >
-                <div style={{ width: "36px", height: "36px", borderRadius: "8px", background: "#fdf2f8", color: "#db2777", display: "grid", placeItems: "center" }}>
-                  <MessageSquare size={18} />
+                <div style={{ width: "36px", height: "36px", borderRadius: "8px", background: "#f5f3ff", color: "#7c3aed", display: "grid", placeItems: "center" }}>
+                  <ClipboardList size={18} />
                 </div>
-                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Message Student</strong>
-                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Direct communication with any student.</span>
+                <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Create Test</strong>
+                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Quizzes &amp; evaluations.</span>
               </button>
             </div>
           </article>
         </div>
+
+        {/* Recent Submissions & Reviews Section */}
+        {submissions.length > 0 && (
+          <section className="card panel" style={{ marginTop: "24px" }}>
+            <div className="panel-heading">
+              <div>
+                <h2>Recent Student Submissions</h2>
+                <p>Latest coursework submitted by your assigned students awaiting review or evaluation</p>
+              </div>
+              <button className="button compact" type="button" onClick={() => setActiveTab("Assignments")}>
+                View All Assignments
+              </button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {submissions.slice(0, 5).map((sub) => {
+                const student = studentsById[sub.student_id];
+                const assignment = assignments.find((a) => a.id === sub.assignment_id);
+                const isGraded = sub.grade !== null && sub.grade !== undefined;
+
+                return (
+                  <div
+                    key={sub.id}
+                    style={{
+                      padding: "12px 16px",
+                      background: "#f8fafc",
+                      borderRadius: "8px",
+                      border: "1px solid var(--line)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span className="badge green" style={{ fontSize: "11px", fontWeight: 700 }}>
+                          {sub.submission_type || "File"}
+                        </span>
+                        <strong style={{ fontSize: "14px", color: "var(--ink)" }}>
+                          {assignment?.title || "Coursework Assignment"}
+                        </strong>
+                      </div>
+                      <small style={{ color: "var(--muted)", display: "block", marginTop: "3px" }}>
+                        By <strong>{student?.full_name || student?.email || "Student"}</strong> · Submitted {new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(new Date(sub.submitted_at))}
+                      </small>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      {isGraded ? (
+                        <span className="badge purple" style={{ fontWeight: 700 }}>
+                          Score: {sub.grade} / {assignment?.total_marks || 100}
+                        </span>
+                      ) : (
+                        <span className="badge amber" style={{ fontWeight: 700 }}>
+                          Awaiting Grade
+                        </span>
+                      )}
+                      <button
+                        className="button primary compact"
+                        type="button"
+                        onClick={() => {
+                          if (assignment) {
+                            setSelectedAssignmentForSubmissions(assignment);
+                            const state = {};
+                            submissions.filter((s) => s.assignment_id === assignment.id).forEach((s) => {
+                              state[s.id] = { grade: s.grade ?? "", feedback: s.feedback ?? "" };
+                            });
+                            setGradingState(state);
+                            setShowSubmissionsModal(true);
+                          } else {
+                            setActiveTab("Assignments");
+                          }
+                        }}
+                      >
+                        {isGraded ? "Edit Grade" : "Review & Grade"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* My Assigned Students Section with Enrolled Courses */}
         <section className="card panel" style={{ marginTop: "24px" }}>
@@ -1691,11 +2136,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   }
 
   // ----------------------------------------------------
-  // Tab 3: Tasks Assignment & Management
+  // Tab 3: Notes & Learning Materials
   // ----------------------------------------------------
-  function renderTasks() {
+  function renderNotes() {
     const filteredTasks = tasks.filter((t) => {
-      // Strictly only tasks for trainer's assigned students or created by trainer
+      // Strictly only notes/tasks for trainer's assigned students or created by trainer
       const isAssigned = myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId;
       if (!isAssigned) return false;
 
@@ -1729,9 +2174,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       <div className="trainer-tasks-view">
         <div className="page-heading">
           <div>
-            <div className="eyebrow">Student Coursework &amp; Notes</div>
-            <h1>Tasks &amp; Notes</h1>
-            <p>Write notes once and assign separately to each student, or assign individual tasks.</p>
+            <div className="eyebrow">Learning Materials &amp; Guides</div>
+            <h1>Notes &amp; Tasks</h1>
+            <p>Publish formatted study notes, problem sets, and Google Drive resources for your assigned students.</p>
           </div>
           <div className="heading-actions">
             <button
@@ -1739,7 +2184,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               type="button"
               onClick={() => setShowTaskForm((prev) => !prev)}
             >
-              <Plus size={15} /> {showTaskForm ? "Close Form" : "Assign New Task / Note"}
+              <Plus size={15} /> {showTaskForm ? "Close Form" : "Add Note / Task"}
             </button>
           </div>
         </div>
@@ -1747,7 +2192,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         {/* Toolbar & Student/Category Filters */}
         <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", marginBottom: "16px" }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
-            <Users size={14} /> My Assigned Students ({myTasksCount} total tasks)
+            <Users size={14} /> My Assigned Students ({myTasksCount} total items)
           </div>
 
           <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
@@ -1774,8 +2219,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               style={{ height: "34px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
             >
               <option value="all">All Categories</option>
-              <option value="Task">Task</option>
               <option value="Class Notes">Class Notes</option>
+              <option value="Task">Task</option>
               <option value="Practice Data Sets">Practice Data Sets</option>
               <option value="Projects">Projects</option>
               <option value="Homework">Homework</option>
@@ -1785,12 +2230,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           </label>
         </div>
 
-        {/* Create Task Form */}
+        {/* Create Note / Task Form */}
         {showTaskForm && (
           <form className="card admin-create-form" onSubmit={handleCreateTask} style={{ marginBottom: "24px" }}>
             <div className="panel-heading">
               <div>
-                <h2>Assign Task / Add Notes</h2>
+                <h2>Create Note / Task</h2>
                 <p>Define note or exercise content once and distribute it separately to each selected student.</p>
               </div>
             </div>
@@ -1817,10 +2262,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
             <div className="form-grid-2">
               <label className="form-field">
-                <span>Task / Note Title *</span>
+                <span>Title *</span>
                 <input
                   required
-                  placeholder="e.g. React Props & State Notes, Python Loops Homework"
+                  placeholder="e.g. React Hooks Deep-Dive, SAP Configuration Steps"
                   value={taskTitle}
                   onChange={(e) => setTaskTitle(e.target.value)}
                 />
@@ -1855,8 +2300,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <label className="form-field">
                 <span>Category / Type</span>
                 <select value={taskCategory} onChange={(e) => setTaskCategory(e.target.value)}>
-                  <option value="Task">Task</option>
                   <option value="Class Notes">Class Notes</option>
+                  <option value="Task">Task</option>
                   <option value="Practice Data Sets">Practice Data Sets</option>
                   <option value="Projects">Projects</option>
                   <option value="Homework">Homework</option>
@@ -1874,6 +2319,19 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 />
               </label>
             </div>
+
+            <label className="form-field" style={{ marginTop: "12px" }}>
+              <span>Google Drive Resource Link (Optional)</span>
+              <input
+                type="url"
+                placeholder="https://drive.google.com/file/d/... or Google Drive folder"
+                value={noteDriveUrl}
+                onChange={(e) => setNoteDriveUrl(e.target.value)}
+              />
+              <small style={{ color: "var(--muted)", fontSize: "11.5px" }}>
+                Add direct Google Drive resource links. Students will have integrated preview and direct open access.
+              </small>
+            </label>
 
             {/* Student Selection Checkboxes (Only Assigned Students) */}
             <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
@@ -1965,11 +2423,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
 
             <label className="form-field" style={{ marginTop: "14px" }}>
-              <span>Note / Task Body &amp; Requirements *</span>
+              <span>Formatted Text Content &amp; Instructions *</span>
               <textarea
                 required
                 rows={4}
-                placeholder="Enter lecture summary, learning notes, task guidelines, or problem steps..."
+                placeholder="Enter lecture summary, core concepts, exercise guidelines, or references..."
                 value={taskInstructions}
                 onChange={(e) => setTaskInstructions(e.target.value)}
               />
@@ -1980,7 +2438,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 Cancel
               </button>
               <button className="button primary" disabled={busy || taskSelectedStudents.length === 0}>
-                <Plus size={14} /> {busy ? "Assigning..." : taskSelectedStudents.length === 1
+                <Plus size={14} /> {busy ? "Publishing..." : taskSelectedStudents.length === 1
                   ? `Assign Note to ${studentsById[taskSelectedStudents[0]]?.full_name || "Student"}`
                   : `Assign Separately to ${taskSelectedStudents.length} Students`}
               </button>
@@ -1995,7 +2453,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             type="button"
             onClick={() => setTaskStatusFilter("all")}
           >
-            All Tasks ({tasks.length})
+            All Notes ({tasks.length})
           </button>
           <button
             className={`button compact ${taskStatusFilter === "assigned" ? "primary" : ""}`}
@@ -2013,12 +2471,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           </button>
         </div>
 
-        {/* Task Cards */}
-        <div className="admin-work-list" style={{ display: "grid", gap: "12px" }}>
+        {/* Note Cards */}
+        <div className="admin-work-list" style={{ display: "grid", gap: "14px" }}>
           {filteredTasks.map((task) => {
             const student = studentsById[task.student_id];
             const course = coursesById[task.course_id];
             const isCompleted = task.status === "completed";
+            const driveUrl = task.drive_url || extractDriveUrl(task.body);
+            const cleanBody = cleanNoteBody(task.body, driveUrl);
+            const docType = getDriveDocTypeLabel(driveUrl);
 
             return (
               <article className={`card admin-assignment-card ${isCompleted ? "task-completed-card" : ""}`} key={task.id} style={{ padding: "16px" }}>
@@ -2043,7 +2504,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           {task.title}
                         </strong>
                         {course && <span className="course-code-badge" style={{ fontSize: "11px" }}>{course.code}</span>}
-                        <span className="badge blue" style={{ fontSize: "11px" }}>{task.category || "Task"}</span>
+                        <span className="badge blue" style={{ fontSize: "11px" }}>{task.category || "Class Notes"}</span>
                         {isCompleted ? (
                           <span className="badge green"><Check size={11} strokeWidth={3} /> Completed</span>
                         ) : (
@@ -2073,20 +2534,79 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <CheckCircle2 size={12} /> {isCompleted ? "Mark Assigned" : "Mark Completed"}
                     </button>
                     <button
+                      className="button compact"
+                      type="button"
+                      onClick={() => setEditingNote(task)}
+                      title="Edit note"
+                    >
+                      <Pencil size={12} /> Edit
+                    </button>
+                    <button
                       className="quiet-icon danger-icon"
                       type="button"
                       onClick={() => handleDeleteTask(task.id)}
-                      aria-label="Delete task"
+                      aria-label="Delete note"
                     >
                       <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
 
-                {task.body && (
-                  <p style={{ margin: "12px 0 0", fontSize: "13px", color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap", background: "#f8fafc", padding: "10px", borderRadius: "6px" }}>
-                    {task.body}
+                {/* Formatted Text Description */}
+                {cleanBody && (
+                  <p style={{ margin: "12px 0 0", fontSize: "13px", color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap", background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                    {cleanBody}
                   </p>
+                )}
+
+                {/* Google Drive Resource Link */}
+                {driveUrl && (
+                  <div
+                    style={{
+                      marginTop: "12px",
+                      padding: "10px 14px",
+                      background: "#eff6ff",
+                      borderRadius: "8px",
+                      border: "1px solid #bfdbfe",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <HardDrive size={16} style={{ color: "#2563eb" }} />
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "#1e40af" }}>
+                        Google Drive Resource ({docType})
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        className="button compact"
+                        type="button"
+                        style={{ fontSize: "11.5px", background: "#ffffff", borderColor: "#bfdbfe" }}
+                        onClick={() =>
+                          setViewingDoc({
+                            title: task.title,
+                            subtitle: course ? course.name : "Learning Material",
+                            url: driveUrl,
+                          })
+                        }
+                      >
+                        <Eye size={12} /> Preview
+                      </button>
+                      <a
+                        className="button compact"
+                        href={driveUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: "11.5px", background: "#2563eb", color: "#ffffff", borderColor: "#2563eb", textDecoration: "none" }}
+                      >
+                        <ExternalLink size={12} /> Open Drive Link
+                      </a>
+                    </div>
+                  </div>
                 )}
               </article>
             );
@@ -2094,11 +2614,526 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
           {!filteredTasks.length && (
             <div className="card portal-empty">
-              <CheckCircle2 size={24} />
-              <strong>No tasks found</strong>
-              <span>Use the Assign New Task button above to assign practical exercises to your students.</span>
+              <FileText size={24} />
+              <strong>No notes found</strong>
+              <span>Use the Add Note / Task button above to distribute study material and exercises.</span>
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  const renderTasks = renderNotes;
+
+  // ----------------------------------------------------
+  // Tab: Assignments & Submissions Management
+  // ----------------------------------------------------
+  function renderAssignments() {
+    const filteredAssignments = myTrainerAssignments.filter((a) => {
+      if (assignmentCourseFilter !== "all" && a.course_id !== assignmentCourseFilter) return false;
+      if (!query.trim()) return true;
+      const q = query.trim().toLowerCase();
+      const course = coursesById[a.course_id];
+      return (
+        a.title?.toLowerCase().includes(q) ||
+        a.description?.toLowerCase().includes(q) ||
+        course?.name?.toLowerCase().includes(q) ||
+        course?.code?.toLowerCase().includes(q)
+      );
+    });
+
+    const totalSubmissionsCount = myTrainerSubmissions.length;
+    const pendingGradingCount = myTrainerSubmissions.filter((s) => s.grade === null || s.grade === undefined).length;
+    const gradedCount = totalSubmissionsCount - pendingGradingCount;
+
+    return (
+      <div className="trainer-assignments-view">
+        <div className="page-heading">
+          <div>
+            <div className="eyebrow">Student Coursework &amp; Submissions</div>
+            <h1>Assignments</h1>
+            <p>
+              Create and post new assignments, set due dates and total marks, and evaluate student submissions.
+            </p>
+          </div>
+          <div className="heading-actions">
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => {
+                setEditingAssignment(null);
+                setAssignmentTitle("");
+                setAssignmentDesc("");
+                setAssignmentCourseId(myTrainerCourses[0]?.id || "");
+                setAssignmentDueDate("");
+                setAssignmentTotalMarks(100);
+                setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
+                setShowAssignmentModal(true);
+              }}
+            >
+              <Plus size={15} /> Create Assignment
+            </button>
+          </div>
+        </div>
+
+        {/* Metric Summary */}
+        <section className="metrics student-metrics" style={{ marginBottom: "20px" }}>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Active Assignments</span>
+              <span className="metric-icon blue"><BookOpen size={17} /></span>
+            </div>
+            <strong>{myTrainerAssignments.length}</strong>
+            <small>Total coursework items</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Total Submissions</span>
+              <span className="metric-icon green"><CheckCircle2 size={17} /></span>
+            </div>
+            <strong>{totalSubmissionsCount}</strong>
+            <small>Received from students</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Awaiting Grading</span>
+              <span className="metric-icon amber"><Clock3 size={17} /></span>
+            </div>
+            <strong>{pendingGradingCount}</strong>
+            <small>{pendingGradingCount > 0 ? "Pending review & scores" : "All graded"}</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Graded &amp; Scored</span>
+              <span className="metric-icon purple"><Award size={17} /></span>
+            </div>
+            <strong>{gradedCount}</strong>
+            <small>Evaluations recorded</small>
+          </article>
+        </section>
+
+        {/* Toolbar & Filter */}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", marginBottom: "16px" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
+            <Users size={14} /> My Assigned Students ({myAssignedStudents.length})
+          </div>
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Filter Course:</span>
+            <select
+              value={assignmentCourseFilter}
+              onChange={(e) => setAssignmentCourseFilter(e.target.value)}
+              style={{ height: "34px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
+            >
+              <option value="all">All Courses ({myTrainerCourses.length})</option>
+              {myTrainerCourses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  [{c.code}] {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {/* Assignments Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "18px" }}>
+          {filteredAssignments.map((assignment) => {
+            const course = coursesById[assignment.course_id];
+            const subs = assignmentSubmissions.filter((s) => s.assignment_id === assignment.id);
+            const recips = assignmentRecipients.filter((r) => r.assignment_id === assignment.id);
+            const targetCount = recips.length > 0 ? recips.length : myAssignedStudents.length;
+            const dueFormatted = assignment.due_at
+              ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(assignment.due_at))
+              : "Open deadline";
+
+            return (
+              <article
+                className="card panel"
+                key={assignment.id}
+                style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+                    <span className="badge blue" style={{ fontSize: "11px", fontWeight: 700 }}>
+                      {course ? course.code : "General"}
+                    </span>
+                    <span className="badge green" style={{ fontSize: "11px", fontWeight: 600 }}>
+                      {subs.length} of {targetCount} Submitted
+                    </span>
+                  </div>
+
+                  <h3 style={{ fontSize: "16px", margin: "0 0 6px", color: "var(--ink)", fontWeight: 700 }}>
+                    {assignment.title}
+                  </h3>
+
+                  {assignment.description && (
+                    <p style={{ fontSize: "13px", color: "var(--muted)", margin: "0 0 12px", lineHeight: 1.4 }}>
+                      {assignment.description}
+                    </p>
+                  )}
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "12px", color: "var(--muted)", marginBottom: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <CalendarClock size={13} />
+                      <span>Due {dueFormatted}</span>
+                    </div>
+                    <span className="badge" style={{ fontSize: "11px", background: "#f0fdf4", color: "#166534" }}>
+                      {assignment.total_marks || 100} Total Marks
+                    </span>
+                  </div>
+
+                  {subs.length > 0 && (
+                    <div style={{ marginTop: "8px", padding: "8px 12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "12px" }}>
+                      <strong style={{ color: "var(--ink)", display: "block", marginBottom: "4px" }}>
+                        Submissions: {subs.length} received ({subs.filter((s) => s.grade !== null).length} graded)
+                      </strong>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card-actions" style={{ display: "flex", gap: "8px", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    style={{ flex: 1 }}
+                    onClick={() => {
+                      setSelectedAssignmentForSubmissions(assignment);
+                      const state = {};
+                      subs.forEach((s) => {
+                        state[s.id] = { grade: s.grade ?? "", feedback: s.feedback ?? "" };
+                      });
+                      setGradingState(state);
+                      setShowSubmissionsModal(true);
+                    }}
+                  >
+                    <CheckCircle2 size={13} /> Review Submissions ({subs.length})
+                  </button>
+                  <button
+                    className="button compact"
+                    type="button"
+                    title="Edit assignment"
+                    onClick={() => {
+                      setEditingAssignment(assignment);
+                      setAssignmentTitle(assignment.title || "");
+                      setAssignmentDesc(assignment.description || "");
+                      setAssignmentCourseId(assignment.course_id || "");
+                      setAssignmentDueDate(assignment.due_at ? assignment.due_at.slice(0, 16) : "");
+                      setAssignmentTotalMarks(assignment.total_marks || 100);
+                      const currentRecips = recips.map((r) => r.student_id);
+                      setAssignmentTargetStudentIds(currentRecips.length > 0 ? currentRecips : Array.from(myAssignedStudentIds));
+                      setShowAssignmentModal(true);
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="button compact danger-outline"
+                    type="button"
+                    title="Delete assignment"
+                    onClick={() => handleDeleteAssignment(assignment.id)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+
+          {!filteredAssignments.length && (
+            <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
+              <BookOpen size={26} />
+              <strong>No assignments created yet</strong>
+              <span>Click "Create Assignment" to post new coursework for your students.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ----------------------------------------------------
+  // Tab: Trainer Profile / Gradebook Page
+  // ----------------------------------------------------
+  function renderGradebook() {
+    const filteredStudents = myAssignedStudents.filter((s) => {
+      if (gradebookCourseFilter !== "all") {
+        const inCourse = enrollments.some((e) => e.student_id === s.id && e.course_id === gradebookCourseFilter);
+        if (!inCourse) return false;
+      }
+      if (!gradebookSearch.trim()) return true;
+      const q = gradebookSearch.trim().toLowerCase();
+      return (s.full_name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
+    });
+
+    let totalAttSessions = 0;
+    let totalAttPresent = 0;
+    let totalAssignmentsAssigned = 0;
+    let totalAssignmentsSubmitted = 0;
+    let sumGrades = 0;
+    let countGrades = 0;
+    let sumTestPct = 0;
+    let countTestAttempts = 0;
+
+    myAssignedStudents.forEach((s) => {
+      const att = attendanceRecords.filter((r) => r.student_id === s.id);
+      totalAttSessions += att.length;
+      totalAttPresent += att.filter((r) => r.status === "Present").length + att.filter((r) => r.status === "Late").length * 0.5;
+
+      const subs = assignmentSubmissions.filter((sub) => sub.student_id === s.id && myTrainerAssignmentIds.has(sub.assignment_id));
+      totalAssignmentsSubmitted += subs.length;
+      totalAssignmentsAssigned += myTrainerAssignments.length;
+      subs.forEach((sub) => {
+        if (sub.grade !== null && sub.grade !== undefined) {
+          sumGrades += Number(sub.grade);
+          countGrades++;
+        }
+      });
+
+      const attempts = assessmentAttempts.filter((att) => att.student_id === s.id && myTrainerAssessments.some((a) => a.id === att.assessment_id));
+      attempts.forEach((att) => {
+        const pct = (att.score / (att.max_score || 100)) * 100;
+        sumTestPct += pct;
+        countTestAttempts++;
+      });
+    });
+
+    const classAvgAtt = totalAttSessions > 0 ? Math.round((totalAttPresent / totalAttSessions) * 100) : 100;
+    const classAvgGrade = countGrades > 0 ? Math.round(sumGrades / countGrades) : 0;
+    const classAvgTest = countTestAttempts > 0 ? Math.round(sumTestPct / countTestAttempts) : 0;
+    const classSubmissionRate = totalAssignmentsAssigned > 0 ? Math.round((totalAssignmentsSubmitted / totalAssignmentsAssigned) * 100) : 100;
+
+    return (
+      <div className="trainer-gradebook-view">
+        <div className="page-heading">
+          <div>
+            <div className="eyebrow">Academic Analytics &amp; Reports</div>
+            <h1>Trainer Gradebook</h1>
+            <p>
+              Centralized performance dashboard for tracking student attendance rates, assignment completion &amp; grades, and test scores.
+            </p>
+          </div>
+        </div>
+
+        {/* Summary Metrics */}
+        <section className="metrics student-metrics" style={{ marginBottom: "20px" }}>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Assigned Students</span>
+              <span className="metric-icon blue"><Users size={17} /></span>
+            </div>
+            <strong>{myAssignedStudents.length}</strong>
+            <small>Active in your cohorts</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Class Attendance</span>
+              <span className="metric-icon green"><CalendarCheck size={17} /></span>
+            </div>
+            <strong>{classAvgAtt}%</strong>
+            <small>Overall check-in rate</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Avg Assignment Score</span>
+              <span className="metric-icon purple"><Award size={17} /></span>
+            </div>
+            <strong>{countGrades > 0 ? `${classAvgGrade} pts` : "N/A"}</strong>
+            <small>{classSubmissionRate}% submission rate</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Avg Test Score</span>
+              <span className="metric-icon amber"><ClipboardList size={17} /></span>
+            </div>
+            <strong>{countTestAttempts > 0 ? `${classAvgTest}%` : "N/A"}</strong>
+            <small>{countTestAttempts} test evaluations</small>
+          </article>
+        </section>
+
+        {/* Toolbar */}
+        <div className="card" style={{ padding: "14px", marginBottom: "18px", display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
+              <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Filter by Course:</span>
+              <select
+                value={gradebookCourseFilter}
+                onChange={(e) => setGradebookCourseFilter(e.target.value)}
+                style={{ height: "34px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
+              >
+                <option value="all">All Courses ({myTrainerCourses.length})</option>
+                {myTrainerCourses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{c.code}] {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="search-box" style={{ width: "240px", margin: 0 }}>
+            <Search size={14} />
+            <input
+              type="search"
+              placeholder="Search student name or email…"
+              value={gradebookSearch}
+              onChange={(e) => setGradebookSearch(e.target.value)}
+              style={{ height: "34px", fontSize: "12px" }}
+            />
+          </label>
+        </div>
+
+        {/* Gradebook Table */}
+        <div className="card" style={{ padding: "6px" }}>
+          <div className="table-scroll" style={{ overflowX: "auto" }}>
+            <table className="admin-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "12px 14px" }}>Student</th>
+                  <th style={{ textAlign: "left", padding: "12px 14px" }}>Enrolled Courses</th>
+                  <th style={{ textAlign: "center", padding: "12px 14px" }}>Attendance Rate</th>
+                  <th style={{ textAlign: "center", padding: "12px 14px" }}>Assignments</th>
+                  <th style={{ textAlign: "center", padding: "12px 14px" }}>Tests Completed</th>
+                  <th style={{ textAlign: "center", padding: "12px 14px" }}>Overall Standing</th>
+                  <th style={{ textAlign: "right", padding: "12px 14px" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStudents.map((student) => {
+                  const studentCourses = enrollments
+                    .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
+                    .map((e) => coursesById[e.course_id])
+                    .filter(Boolean);
+
+                  const att = attendanceRecords.filter((r) => r.student_id === student.id);
+                  const pres = att.filter((r) => r.status === "Present").length;
+                  const late = att.filter((r) => r.status === "Late").length;
+                  const abs = att.filter((r) => r.status === "Absent").length;
+                  const attRate = att.length > 0 ? Math.round(((pres + late * 0.5) / att.length) * 100) : 100;
+
+                  const subs = assignmentSubmissions.filter((sub) => sub.student_id === student.id && myTrainerAssignmentIds.has(sub.assignment_id));
+                  const gradedSubs = subs.filter((sub) => sub.grade !== null && sub.grade !== undefined);
+                  const avgGrade = gradedSubs.length > 0 ? Math.round(gradedSubs.reduce((acc, c) => acc + Number(c.grade), 0) / gradedSubs.length) : null;
+
+                  const attempts = assessmentAttempts.filter((att) => att.student_id === student.id && myTrainerAssessments.some((a) => a.id === att.assessment_id));
+                  const avgTestScore = attempts.length > 0 ? Math.round(attempts.reduce((acc, c) => acc + (c.score / (c.max_score || 100)) * 100, 0) / attempts.length) : null;
+
+                  const standingScore = Math.round((attRate * 0.3) + ((avgGrade ?? 85) * 0.35) + ((avgTestScore ?? 85) * 0.35));
+                  const standingLabel = standingScore >= 85 ? "Excellent" : standingScore >= 70 ? "Good" : "Needs Attention";
+                  const standingBadgeClass = standingScore >= 85 ? "badge green" : standingScore >= 70 ? "badge blue" : "badge rose";
+
+                  return (
+                    <tr key={student.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                      <td style={{ padding: "12px 14px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <span className="student-avatar" style={{ width: "34px", height: "34px", fontSize: "13px" }}>
+                            {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                          </span>
+                          <div>
+                            <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
+                              {student.full_name || "Unnamed Student"}
+                            </strong>
+                            <small style={{ color: "var(--muted)", fontSize: "11.5px" }}>
+                              {student.email} · {student.timing || "Standard"}
+                            </small>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 14px" }}>
+                        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                          {studentCourses.map((c) => (
+                            <span key={c.id} className="course-code-badge" style={{ fontSize: "10.5px" }}>
+                              {c.code}
+                            </span>
+                          ))}
+                          {!studentCourses.length && <span style={{ color: "var(--muted)", fontSize: "12px" }}>None</span>}
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 14px", textAlign: "center" }}>
+                        <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
+                          <span className={`badge ${attRate >= 80 ? "green" : attRate >= 60 ? "amber" : "rose"}`} style={{ fontWeight: 700 }}>
+                            {attRate}%
+                          </span>
+                          <small style={{ color: "var(--muted)", fontSize: "11px", marginTop: "2px" }}>
+                            {pres}P / {late}L / {abs}A ({att.length} sessions)
+                          </small>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 14px", textAlign: "center" }}>
+                        <div>
+                          <strong style={{ fontSize: "13px", color: "var(--ink)" }}>
+                            {subs.length} / {myTrainerAssignments.length} submitted
+                          </strong>
+                          <div style={{ fontSize: "11.5px", color: "var(--muted)" }}>
+                            {avgGrade !== null ? `Avg: ${avgGrade} pts` : "No graded work"}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 14px", textAlign: "center" }}>
+                        <div>
+                          <strong style={{ fontSize: "13px", color: "var(--ink)" }}>
+                            {attempts.length} / {myTrainerAssessments.length} taken
+                          </strong>
+                          <div style={{ fontSize: "11.5px", color: "var(--muted)" }}>
+                            {avgTestScore !== null ? `Avg: ${avgTestScore}%` : "No tests completed"}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: "12px 14px", textAlign: "center" }}>
+                        <span className={standingBadgeClass} style={{ fontWeight: 700, fontSize: "11.5px" }}>
+                          {standingLabel} ({standingScore}%)
+                        </span>
+                      </td>
+
+                      <td style={{ padding: "12px 14px", textAlign: "right" }}>
+                        <div style={{ display: "inline-flex", gap: "6px" }}>
+                          <button
+                            className="button compact"
+                            type="button"
+                            title="View Student Profile"
+                            onClick={() => setSelectedStudentDetail(student)}
+                          >
+                            <Eye size={13} />
+                          </button>
+                          <button
+                            className="button compact"
+                            type="button"
+                            title="Message Student"
+                            onClick={() => {
+                              setNewMsgStudentId(student.id);
+                              setShowNewMsgModal(true);
+                              setActiveTab("Messages");
+                            }}
+                          >
+                            <MessageSquare size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {!filteredStudents.length && (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: "center", padding: "28px", color: "var(--muted)" }}>
+                      No students found matching your criteria.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -2696,9 +3731,25 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               Assign tests, exam portals, and quizzes to your assigned students. Changes replicate to student profiles in real time.
             </p>
           </div>
-          <div className="heading-actions">
+          <div className="heading-actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <button
               className="button primary"
+              type="button"
+              onClick={() => {
+                setTestTitle("");
+                setTestDescription("");
+                setTestCourseId(myTrainerCourses[0]?.id || "");
+                setTestTotalMarks(100);
+                setTestDuration(60);
+                setTestExternalUrl("");
+                setTestTargetStudentIds(Array.from(myAssignedStudentIds));
+                setShowCreateTestModal(true);
+              }}
+            >
+              <Plus size={15} /> Create New Test
+            </button>
+            <button
+              className="button"
               type="button"
               onClick={() => {
                 setSelectedTestToAssign(myTrainerAssessments[0] || null);
@@ -2706,7 +3757,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 setShowAssignTestModal(true);
               }}
             >
-              <Plus size={15} /> Assign Test to Students
+              <Users size={15} /> Assign Test to Students
             </button>
           </div>
         </div>
@@ -2847,6 +3898,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <Eye size={13} /> Preview
                     </button>
                   )}
+
+                  <button
+                    className="button compact danger-outline"
+                    type="button"
+                    title="Delete test"
+                    onClick={() => handleDeleteTest(test.id)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               </article>
             );
@@ -3530,8 +4590,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             <div className="card portal-loading">Loading trainer dashboard records…</div>
           ) : activeTab === "Attendance" ? (
             renderAttendance()
-          ) : activeTab === "Tasks" ? (
-            renderTasks()
+          ) : activeTab === "Notes" || activeTab === "Tasks" ? (
+            renderNotes()
+          ) : activeTab === "Assignments" ? (
+            renderAssignments()
+          ) : activeTab === "Gradebook" ? (
+            renderGradebook()
           ) : activeTab === "Syllabus" ? (
             renderSyllabus()
           ) : activeTab === "Materials & Drive" ? (
@@ -3882,6 +4946,549 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Note Modal */}
+      {editingNote && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setEditingNote(null); }}>
+          <div className="modal" style={{ maxWidth: "560px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon note" style={{ width: "38px", height: "38px", background: "#eef2ff", color: "#4f46e5" }}>
+                  <Pencil size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>Edit Note / Learning Material</h2>
+                  <p style={{ margin: 0 }}>Update note content, instructions, or Google Drive link.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setEditingNote(null)}><X size={18} /></button>
+            </div>
+
+            <form onSubmit={handleUpdateNote}>
+              <label className="form-field">
+                <span>Title *</span>
+                <input
+                  required
+                  value={editingNote.title || ""}
+                  onChange={(e) => setEditingNote((prev) => ({ ...prev, title: e.target.value }))}
+                />
+              </label>
+
+              <div className="form-grid-2" style={{ marginTop: "12px" }}>
+                <label className="form-field">
+                  <span>Category</span>
+                  <select
+                    value={editingNote.category || "Class Notes"}
+                    onChange={(e) => setEditingNote((prev) => ({ ...prev, category: e.target.value }))}
+                  >
+                    <option value="Class Notes">Class Notes</option>
+                    <option value="Task">Task</option>
+                    <option value="Practice Data Sets">Practice Data Sets</option>
+                    <option value="Projects">Projects</option>
+                    <option value="Homework">Homework</option>
+                    <option value="Lab Assignment">Lab Assignment</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+
+                <label className="form-field">
+                  <span>Course</span>
+                  <select
+                    value={editingNote.course_id || ""}
+                    onChange={(e) => setEditingNote((prev) => ({ ...prev, course_id: e.target.value || null }))}
+                  >
+                    <option value="">General</option>
+                    {myTrainerCourses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        [{c.code}] {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Google Drive Resource Link</span>
+                <input
+                  type="url"
+                  placeholder="https://drive.google.com/..."
+                  value={editingNote.drive_url || ""}
+                  onChange={(e) => setEditingNote((prev) => ({ ...prev, drive_url: e.target.value }))}
+                />
+              </label>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Note Content / Instructions</span>
+                <textarea
+                  rows={4}
+                  value={editingNote.body || ""}
+                  onChange={(e) => setEditingNote((prev) => ({ ...prev, body: e.target.value }))}
+                />
+              </label>
+
+              <div className="modal-actions" style={{ marginTop: "16px" }}>
+                <button className="button" type="button" onClick={() => setEditingNote(null)}>
+                  Cancel
+                </button>
+                <button className="button primary" disabled={busy}>
+                  {busy ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create / Edit Assignment Modal */}
+      {showAssignmentModal && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) { setShowAssignmentModal(false); setEditingAssignment(null); } }}>
+          <div className="modal" style={{ maxWidth: "600px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon assignment" style={{ width: "38px", height: "38px", background: "#f0fdf4", color: "#16a34a" }}>
+                  <BookOpen size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>{editingAssignment ? "Edit Assignment" : "Create New Assignment"}</h2>
+                  <p style={{ margin: 0 }}>Define tasks, due dates, and marks. Students can submit via File Upload or URL link.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => { setShowAssignmentModal(false); setEditingAssignment(null); }}><X size={18} /></button>
+            </div>
+
+            <form onSubmit={handleSaveAssignment}>
+              <label className="form-field">
+                <span>Assignment Title *</span>
+                <input
+                  required
+                  placeholder="e.g. Capstone Financial Statement Modeling, React Redux Dashboard"
+                  value={assignmentTitle}
+                  onChange={(e) => setAssignmentTitle(e.target.value)}
+                />
+              </label>
+
+              <div className="form-grid-2" style={{ marginTop: "12px" }}>
+                <label className="form-field">
+                  <span>Linked Course</span>
+                  <select
+                    value={assignmentCourseId}
+                    onChange={(e) => setAssignmentCourseId(e.target.value)}
+                  >
+                    <option value="">General / All Subjects</option>
+                    {myTrainerCourses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        [{c.code}] {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="form-field">
+                  <span>Total Marks</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={assignmentTotalMarks}
+                    onChange={(e) => setAssignmentTotalMarks(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Due Date &amp; Time (Optional)</span>
+                <input
+                  type="datetime-local"
+                  value={assignmentDueDate}
+                  onChange={(e) => setAssignmentDueDate(e.target.value)}
+                />
+              </label>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Assignment Description &amp; Instructions</span>
+                <textarea
+                  rows={4}
+                  placeholder="Provide instructions, required deliverable format (PDF, DOCX, ZIP, or Google Drive / GitHub link)..."
+                  value={assignmentDesc}
+                  onChange={(e) => setAssignmentDesc(e.target.value)}
+                />
+              </label>
+
+              {/* Target Students */}
+              <div style={{ marginTop: "14px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <strong style={{ fontSize: "12.5px", color: "var(--ink)" }}>
+                    Target Students ({assignmentTargetStudentIds.length} of {myAssignedStudents.length} selected)
+                  </strong>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px" }}
+                      onClick={() => setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px" }}
+                      onClick={() => setAssignmentTargetStudentIds([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: "140px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {myAssignedStudents.map((s) => {
+                    const isChecked = assignmentTargetStudentIds.includes(s.id);
+                    return (
+                      <label key={s.id} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer", padding: "3px 6px", borderRadius: "4px", background: isChecked ? "#eef2ff" : "#fff" }}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) setAssignmentTargetStudentIds((prev) => [...prev, s.id]);
+                            else setAssignmentTargetStudentIds((prev) => prev.filter((id) => id !== s.id));
+                          }}
+                        />
+                        <span>{s.full_name || s.email}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: "16px" }}>
+                <button className="button" type="button" onClick={() => { setShowAssignmentModal(false); setEditingAssignment(null); }}>
+                  Cancel
+                </button>
+                <button className="button primary" disabled={busy}>
+                  {busy ? "Saving..." : editingAssignment ? "Update Assignment" : "Publish Assignment"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Review Submissions & Grading Modal */}
+      {showSubmissionsModal && selectedAssignmentForSubmissions && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowSubmissionsModal(false); }}>
+          <div className="modal" style={{ maxWidth: "780px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon assignment" style={{ width: "38px", height: "38px", background: "#f0fdf4", color: "#16a34a" }}>
+                  <Award size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>Submissions: {selectedAssignmentForSubmissions.title}</h2>
+                  <p style={{ margin: 0 }}>
+                    Max score: <strong>{selectedAssignmentForSubmissions.total_marks || 100} pts</strong> · Total submissions received: <strong>{assignmentSubmissions.filter((s) => s.assignment_id === selectedAssignmentForSubmissions.id).length}</strong>
+                  </p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setShowSubmissionsModal(false)}><X size={18} /></button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px", maxHeight: "65vh", overflowY: "auto", paddingRight: "4px" }}>
+              {myAssignedStudents.map((student) => {
+                const sub = assignmentSubmissions.find((s) => s.assignment_id === selectedAssignmentForSubmissions.id && s.student_id === student.id);
+                const hasSubmission = Boolean(sub);
+                const currentGrading = sub ? gradingState[sub.id] || { grade: sub.grade ?? "", feedback: sub.feedback ?? "" } : null;
+
+                return (
+                  <div
+                    key={student.id}
+                    className="card"
+                    style={{
+                      padding: "16px",
+                      background: hasSubmission ? "#ffffff" : "#f8fafc",
+                      border: hasSubmission ? "1px solid var(--line)" : "1px dashed var(--line)",
+                      borderRadius: "10px",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "10px", marginBottom: "10px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span className="student-avatar" style={{ width: "32px", height: "32px", fontSize: "12px" }}>
+                          {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                        </span>
+                        <div>
+                          <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
+                            {student.full_name || "Unnamed Student"}
+                          </strong>
+                          <small style={{ color: "var(--muted)", fontSize: "11.5px" }}>{student.email}</small>
+                        </div>
+                      </div>
+
+                      {hasSubmission ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span className="badge green" style={{ fontWeight: 700, fontSize: "11px" }}>
+                            <Check size={11} strokeWidth={3} /> Completed
+                          </span>
+                          <span className="badge blue" style={{ fontSize: "11px" }}>
+                            {sub.submission_type || "File"}
+                          </span>
+                          <span style={{ fontSize: "11.5px", color: "var(--muted)" }}>
+                            {new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(new Date(sub.submitted_at))}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="badge amber" style={{ fontSize: "11px" }}>
+                          <Clock3 size={11} /> Pending Submission
+                        </span>
+                      )}
+                    </div>
+
+                    {hasSubmission && (
+                      <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid var(--line)" }}>
+                        {/* Submission Deliverables */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+                          {sub.file_path && (
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => handleDownloadSubmissionFile(sub.file_path)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" }}
+                            >
+                              <Download size={13} /> Download Submitted File
+                            </button>
+                          )}
+                          {(sub.submission_link || (sub.submission_type === "Link" && sub.answer_text)) && (
+                            <a
+                              className="button compact"
+                              href={sub.submission_link || sub.answer_text}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#eff6ff", borderColor: "#bfdbfe", color: "#1e40af", textDecoration: "none" }}
+                            >
+                              <ExternalLink size={13} /> Open Submission URL ({sub.submission_link || sub.answer_text})
+                            </a>
+                          )}
+                          {sub.answer_text && sub.submission_type !== "Link" && (
+                            <div style={{ width: "100%", fontSize: "12.5px", background: "#f8fafc", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--line)", marginTop: "4px" }}>
+                              <strong>Student Notes:</strong> {sub.answer_text}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Inline Grading Form */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", background: "#f8fafc", padding: "12px", borderRadius: "8px" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
+                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)" }}>Score:</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max={selectedAssignmentForSubmissions.total_marks || 100}
+                              placeholder="Marks"
+                              value={currentGrading?.grade ?? ""}
+                              onChange={(e) =>
+                                setGradingState((prev) => ({
+                                  ...prev,
+                                  [sub.id]: { ...(prev[sub.id] || {}), grade: e.target.value },
+                                }))
+                              }
+                              style={{ width: "70px", height: "32px", fontSize: "12px", padding: "0 6px" }}
+                            />
+                            <span style={{ fontSize: "12px", color: "var(--muted)" }}>/ {selectedAssignmentForSubmissions.total_marks || 100}</span>
+                          </label>
+
+                          <input
+                            placeholder="Feedback comments for student..."
+                            value={currentGrading?.feedback ?? ""}
+                            onChange={(e) =>
+                              setGradingState((prev) => ({
+                                ...prev,
+                                [sub.id]: { ...(prev[sub.id] || {}), feedback: e.target.value },
+                              }))
+                            }
+                            style={{ flex: 1, minWidth: "180px", height: "32px", fontSize: "12px", padding: "0 8px" }}
+                          />
+
+                          <button
+                            className="button primary compact"
+                            type="button"
+                            disabled={savingGradeId === sub.id}
+                            onClick={() => handleSaveGrade(sub.id, selectedAssignmentForSubmissions.total_marks || 100)}
+                          >
+                            <Check size={12} /> {savingGradeId === sub.id ? "Saving..." : "Save Grade"}
+                          </button>
+                        </div>
+
+                        {sub.graded_at && (
+                          <div style={{ marginTop: "6px", fontSize: "11px", color: "#15803d", display: "flex", alignItems: "center", gap: "4px" }}>
+                            <CheckCircle2 size={12} /> Graded: {sub.grade} / {selectedAssignmentForSubmissions.total_marks || 100} pts {sub.feedback ? `· "${sub.feedback}"` : ""}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {!myAssignedStudents.length && (
+                <div className="card portal-empty">
+                  <span>No students assigned to your profile yet.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: "16px" }}>
+              <button className="button" type="button" onClick={() => setShowSubmissionsModal(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Test Modal */}
+      {showCreateTestModal && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowCreateTestModal(false); }}>
+          <div className="modal" style={{ maxWidth: "580px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon test" style={{ width: "38px", height: "38px", background: "#f5f3ff", color: "#7c3aed" }}>
+                  <ClipboardList size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>Create New Assessment / Test</h2>
+                  <p style={{ margin: 0 }}>Set up quizzes, practical evaluations, and exams for your students.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setShowCreateTestModal(false)}><X size={18} /></button>
+            </div>
+
+            <form onSubmit={handleCreateTest}>
+              <label className="form-field">
+                <span>Test / Assessment Title *</span>
+                <input
+                  required
+                  placeholder="e.g. Midterm Evaluation, SAP FICO Final Exam"
+                  value={testTitle}
+                  onChange={(e) => setTestTitle(e.target.value)}
+                />
+              </label>
+
+              <div className="form-grid-2" style={{ marginTop: "12px" }}>
+                <label className="form-field">
+                  <span>Linked Course</span>
+                  <select
+                    value={testCourseId}
+                    onChange={(e) => setTestCourseId(e.target.value)}
+                  >
+                    <option value="">General Assessment</option>
+                    {myTrainerCourses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        [{c.code}] {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="form-field">
+                  <span>Total Marks</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={testTotalMarks}
+                    onChange={(e) => setTestTotalMarks(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <div className="form-grid-2" style={{ marginTop: "12px" }}>
+                <label className="form-field">
+                  <span>Duration (Minutes)</span>
+                  <input
+                    type="number"
+                    min="5"
+                    max="360"
+                    value={testDuration}
+                    onChange={(e) => setTestDuration(e.target.value)}
+                  />
+                </label>
+
+                <label className="form-field">
+                  <span>External Exam Link (Optional)</span>
+                  <input
+                    type="url"
+                    placeholder="https://forms.google.com/..."
+                    value={testExternalUrl}
+                    onChange={(e) => setTestExternalUrl(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="form-field" style={{ marginTop: "12px" }}>
+                <span>Test Description &amp; Instructions</span>
+                <textarea
+                  rows={3}
+                  placeholder="Enter assessment syllabus, rules, and evaluation guidelines..."
+                  value={testDescription}
+                  onChange={(e) => setTestDescription(e.target.value)}
+                />
+              </label>
+
+              <div style={{ marginTop: "14px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <strong style={{ fontSize: "12.5px", color: "var(--ink)" }}>
+                    Target Students ({testTargetStudentIds.length} of {myAssignedStudents.length} selected)
+                  </strong>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px" }}
+                      onClick={() => setTestTargetStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px" }}
+                      onClick={() => setTestTargetStudentIds([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: "140px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {myAssignedStudents.map((s) => {
+                    const isChecked = testTargetStudentIds.includes(s.id);
+                    return (
+                      <label key={s.id} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: "pointer", padding: "3px 6px", borderRadius: "4px", background: isChecked ? "#eef2ff" : "#fff" }}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) setTestTargetStudentIds((prev) => [...prev, s.id]);
+                            else setTestTargetStudentIds((prev) => prev.filter((id) => id !== s.id));
+                          }}
+                        />
+                        <span>{s.full_name || s.email}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: "16px" }}>
+                <button className="button" type="button" onClick={() => setShowCreateTestModal(false)}>
+                  Cancel
+                </button>
+                <button className="button primary" disabled={busy}>
+                  {busy ? "Creating..." : "Create & Publish Test"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

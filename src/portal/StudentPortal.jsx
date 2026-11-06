@@ -11,12 +11,12 @@ import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadE
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
-  { label: "Drive & Files", icon: HardDrive },
+  { label: "Notes", icon: FileText },
   { label: "Assignments", icon: BookOpen },
   { label: "Tests", icon: ClipboardList },
-  { label: "Courses", icon: GraduationCap },
-  { label: "Tasks", icon: CheckCircle2 },
   { label: "Attendance", icon: Clock3 },
+  { label: "Drive & Files", icon: HardDrive },
+  { label: "Courses", icon: GraduationCap },
   { label: "Updates", icon: Mail },
   { label: "Messages", icon: MessageSquare },
 ];
@@ -24,7 +24,10 @@ const ALLOWED_FILE_TYPES = new Set([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/zip",
+  "application/x-zip-compressed",
   "text/plain",
+  "text/csv",
 ]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -75,6 +78,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [selectedTest, setSelectedTest] = useState("");
   const [answers, setAnswers] = useState({});
   const [submissionDraft, setSubmissionDraft] = useState(null);
+  const [submissionModeByAssignment, setSubmissionModeByAssignment] = useState({});
   const [newSubject, setNewSubject] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -143,8 +147,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       assessmentRecipientsResult,
       enrollmentResult,
     ] = await Promise.all([
-      supabase.from("assignments").select("id, title, description, due_at, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
-      supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
+      supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
+      supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
       supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", user.id),
       supabase.from("conversations").select("id, subject, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
@@ -524,15 +528,22 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   async function submitAssignment(event, assignment) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    const subMode = formData.get("submission_type") || submissionModeByAssignment[assignment.id] || "file";
     const answerText = String(formData.get("answer_text") ?? "").trim();
+    const linkUrl = String(formData.get("submission_link") ?? "").trim();
     const file = formData.get("attachment");
     const actualFile = file instanceof File && file.size > 0 ? file : null;
-    if (!answerText && !actualFile) {
-      setError("Write a response or attach a file before submitting.");
+
+    if (subMode === "link" && !linkUrl) {
+      setError("Please provide a valid URL link (e.g. Google Drive, GitHub repo, or external URL).");
       return;
     }
-    if (actualFile && (!ALLOWED_FILE_TYPES.has(actualFile.type) || actualFile.size > MAX_FILE_SIZE)) {
-      setError("Upload a PDF, DOC, DOCX, or TXT file up to 10 MB.");
+    if (subMode === "file" && !actualFile && !submissionByAssignment.get(assignment.id)?.file_path && !answerText) {
+      setError("Please attach a document (PDF, DOCX, ZIP) or write a response.");
+      return;
+    }
+    if (actualFile && actualFile.size > MAX_FILE_SIZE) {
+      setError("File exceeds 10 MB limit.");
       return;
     }
 
@@ -542,18 +553,21 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     const previous = submissionByAssignment.get(assignment.id);
     let uploadedPath = null;
     try {
-      if (actualFile) {
+      if (actualFile && subMode === "file") {
         const safeName = actualFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         uploadedPath = `${user.id}/${assignment.id}/${crypto.randomUUID()}-${safeName}`;
-        const { error: uploadError } = await supabase.storage.from("assignment-files").upload(uploadedPath, actualFile, { contentType: actualFile.type, upsert: false });
+        const { error: uploadError } = await supabase.storage.from("assignment-files").upload(uploadedPath, actualFile, { contentType: actualFile.type || "application/octet-stream", upsert: false });
         if (uploadError) throw uploadError;
       }
 
       const { error: saveError } = await supabase.from("assignment_submissions").upsert({
         assignment_id: assignment.id,
         student_id: user.id,
-        answer_text: answerText,
-        file_path: uploadedPath || previous?.file_path || null,
+        answer_text: answerText || (subMode === "link" ? linkUrl : ""),
+        submission_type: subMode === "link" ? "Link" : "File",
+        submission_link: subMode === "link" ? linkUrl : (previous?.submission_link || null),
+        file_path: uploadedPath || (subMode === "file" ? previous?.file_path : null),
+        status: "Completed",
         submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
       if (saveError) {
@@ -561,12 +575,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         throw saveError;
       }
       if (uploadedPath && previous?.file_path) {
-        const { error: removeError } = await supabase.storage.from("assignment-files").remove([previous.file_path]);
-        if (removeError) setError(`Your new work was saved, but the previous attachment could not be removed: ${removeError.message}`);
+        await supabase.storage.from("assignment-files").remove([previous.file_path]).catch(() => {});
       }
       setSubmissionDraft(null);
       event.currentTarget.reset();
-      setNotice("Your assignment was submitted successfully.");
+      setNotice("Work submitted successfully! Assignment status automatically changed to Completed.");
       await loadPortal();
     } catch (requestError) {
       setError(requestError.message || "Your assignment could not be submitted.");
@@ -638,27 +651,208 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderAssignments() {
-    return <section className="portal-list">
-      {filteredAssignments.map((assignment) => {
-        const submission = submissionByAssignment.get(assignment.id);
-        const closed = isPast(assignment.due_at);
-        const editing = submissionDraft === assignment.id;
-        return <article className="card portal-item" key={assignment.id}>
-          <div className="portal-item-heading"><span className="portal-item-icon assignment"><BookOpen size={17} /></span><span className="portal-item-title"><strong>{assignment.title}</strong><small><CalendarClock size={12} />Due {dateLabel(assignment.due_at)}</small></span><span className={`portal-status ${submission ? "submitted" : closed ? "overdue" : "pending"}`}>{submission ? "Submitted" : closed ? "Past due" : "Not submitted"}</span></div>
-          {assignment.description && <p className="portal-description">{assignment.description}</p>}
-          {submission && <div className="submission-receipt"><CheckCircle2 size={15} /><span>Submitted {dateLabel(submission.submitted_at)}{submission.grade !== null ? ` · Grade ${submission.grade}/100` : ""}</span>{submission.file_path && <button className="text-link" type="button" onClick={() => openSubmissionFile(submission.file_path)}><Download size={13} />Download file</button>}</div>}
-          {submission?.feedback && <div className="feedback-box"><strong>Instructor feedback</strong><p>{submission.feedback}</p></div>}
-          {!closed && !submission?.graded_at && <button className="button" type="button" onClick={() => setSubmissionDraft(editing ? null : assignment.id)}>{submission ? "Update submission" : "Submit assignment"}<ArrowRight size={14} /></button>}
-          {editing && <form className="portal-form" onSubmit={(event) => submitAssignment(event, assignment)}>
-            <label className="form-field"><span>Your response</span><textarea name="answer_text" rows="5" maxLength="20000" defaultValue={submission?.answer_text ?? ""} placeholder="Write your assignment response here…" /></label>
-            <label className="file-drop"><Upload size={16} /><span>Attach a document <small>PDF, DOC, DOCX, or TXT · Up to 10 MB</small></span><input name="attachment" type="file" accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" /></label>
-            {submission?.file_path && <small className="file-hint"><Paperclip size={12} />Your existing attachment stays unless you upload a replacement.</small>}
-            <div className="form-actions"><button className="button" type="button" onClick={() => setSubmissionDraft(null)}>Cancel</button><button className="button primary" disabled={busy}><Send size={14} />{busy ? "Submitting…" : "Submit work"}</button></div>
-          </form>}
-        </article>;
-      })}
-      {!filteredAssignments.length && <div className="card portal-empty"><BookOpen size={22} /><strong>No assignments found</strong><span>New assignments from your institution will appear here.</span></div>}
-    </section>;
+    return (
+      <section className="portal-list">
+        {filteredAssignments.map((assignment) => {
+          const submission = submissionByAssignment.get(assignment.id);
+          const closed = isPast(assignment.due_at);
+          const editing = submissionDraft === assignment.id;
+          const isCompleted = !!submission || submission?.status === "Completed";
+          const currentMode = submissionModeByAssignment[assignment.id] || (submission?.submission_type === "Link" || submission?.submission_link ? "link" : "file");
+
+          return (
+            <article className="card portal-item" key={assignment.id}>
+              <div className="portal-item-heading">
+                <span className="portal-item-icon assignment"><BookOpen size={17} /></span>
+                <span className="portal-item-title">
+                  <strong>{assignment.title}</strong>
+                  <small><CalendarClock size={12} />Due {dateLabel(assignment.due_at)}</small>
+                </span>
+                <span
+                  className={`badge ${isCompleted ? "green" : closed ? "rose" : "amber"}`}
+                  style={{ fontWeight: 700, fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                >
+                  {isCompleted ? <CheckCircle2 size={12} /> : closed ? <Clock3 size={12} /> : <Clock3 size={12} />}
+                  {isCompleted ? "Completed" : closed ? "Past Due" : "Pending"}
+                </span>
+              </div>
+
+              {assignment.description && <p className="portal-description">{assignment.description}</p>}
+
+              {/* Submission Receipt */}
+              {submission && (
+                <div className="submission-receipt" style={{ marginTop: "12px", padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <CheckCircle2 size={16} style={{ color: "#16a34a" }} />
+                      <span style={{ fontSize: "13px", fontWeight: 700, color: "#166534" }}>
+                        Status: Completed · Submitted {dateLabel(submission.submitted_at)}
+                      </span>
+                      <span className="badge blue" style={{ fontSize: "10.5px" }}>
+                        {submission.submission_type || (submission.submission_link ? "URL Link" : "File Upload")}
+                      </span>
+                    </div>
+                    {submission.grade !== null && (
+                      <span className="badge green" style={{ fontSize: "12px", fontWeight: 800 }}>
+                        Grade: {submission.grade} / {assignment.total_marks || 100} pts
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "10px" }}>
+                    {submission.submission_link && (
+                      <a
+                        href={submission.submission_link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="button compact"
+                        style={{ background: "#ffffff", borderColor: "#93c5fd", color: "#1d4ed8", display: "inline-flex", alignItems: "center", gap: "5px", textDecoration: "none" }}
+                      >
+                        <ExternalLink size={13} /> Open Submitted URL ({submission.submission_link.slice(0, 32)}...)
+                      </a>
+                    )}
+                    {submission.file_path && (
+                      <button
+                        className="button compact"
+                        type="button"
+                        style={{ background: "#ffffff", borderColor: "#86efac", color: "#15803d", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                        onClick={() => openSubmissionFile(submission.file_path)}
+                      >
+                        <Download size={13} /> Download Submitted Document
+                      </button>
+                    )}
+                  </div>
+
+                  {submission.answer_text && submission.submission_type === "File" && (
+                    <p style={{ margin: "8px 0 0", fontSize: "12.5px", color: "#334155" }}>
+                      <strong>Note:</strong> {submission.answer_text}
+                    </p>
+                  )}
+
+                  {submission.feedback && (
+                    <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid #dcfce7", fontSize: "12.5px", color: "#14532d" }}>
+                      <strong>Instructor Feedback:</strong> {submission.feedback}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!closed && !submission?.graded_at && (
+                <div style={{ marginTop: "12px" }}>
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => setSubmissionDraft(editing ? null : assignment.id)}
+                  >
+                    {submission ? "Update submission" : "Submit assignment"}
+                    <ArrowRight size={14} />
+                  </button>
+                </div>
+              )}
+
+              {/* Submission Form with File Upload OR URL Link */}
+              {editing && (
+                <form
+                  className="portal-form"
+                  onSubmit={(event) => submitAssignment(event, assignment)}
+                  style={{ marginTop: "14px", padding: "16px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}
+                >
+                  <div style={{ marginBottom: "12px" }}>
+                    <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--ink)", display: "block", marginBottom: "6px" }}>
+                      Submission Method (Choose one):
+                    </span>
+                    <div style={{ display: "inline-flex", gap: "8px" }}>
+                      <button
+                        type="button"
+                        className="button compact"
+                        style={{
+                          background: currentMode === "file" ? "#4f46e5" : "#fff",
+                          color: currentMode === "file" ? "#fff" : "var(--ink)",
+                          borderColor: currentMode === "file" ? "#4f46e5" : "var(--line)",
+                          fontWeight: 700,
+                        }}
+                        onClick={() => setSubmissionModeByAssignment((prev) => ({ ...prev, [assignment.id]: "file" }))}
+                      >
+                        <Upload size={13} /> File Upload (PDF, DOCX, ZIP)
+                      </button>
+                      <button
+                        type="button"
+                        className="button compact"
+                        style={{
+                          background: currentMode === "link" ? "#4f46e5" : "#fff",
+                          color: currentMode === "link" ? "#fff" : "var(--ink)",
+                          borderColor: currentMode === "link" ? "#4f46e5" : "var(--line)",
+                          fontWeight: 700,
+                        }}
+                        onClick={() => setSubmissionModeByAssignment((prev) => ({ ...prev, [assignment.id]: "link" }))}
+                      >
+                        <ExternalLink size={13} /> Direct URL Link (Google Drive / GitHub)
+                      </button>
+                    </div>
+                    <input type="hidden" name="submission_type" value={currentMode} />
+                  </div>
+
+                  {currentMode === "link" ? (
+                    <label className="form-field">
+                      <span>Direct URL Link (Google Drive, GitHub repo, external URL) *</span>
+                      <input
+                        type="url"
+                        name="submission_link"
+                        required
+                        defaultValue={submission?.submission_link || ""}
+                        placeholder="https://drive.google.com/... or https://github.com/..."
+                        style={{ fontSize: "13px" }}
+                      />
+                    </label>
+                  ) : (
+                    <label className="file-drop">
+                      <Upload size={16} />
+                      <span>Attach completed document <small>PDF, DOC, DOCX, ZIP, or TXT · Up to 10 MB</small></span>
+                      <input
+                        name="attachment"
+                        type="file"
+                        accept=".pdf,.doc,.docx,.zip,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,text/plain"
+                      />
+                    </label>
+                  )}
+
+                  {submission?.file_path && currentMode === "file" && (
+                    <small className="file-hint">
+                      <Paperclip size={12} /> Your existing attachment stays unless you select a replacement file.
+                    </small>
+                  )}
+
+                  <label className="form-field" style={{ marginTop: "10px" }}>
+                    <span>Comments / Remarks (Optional)</span>
+                    <textarea
+                      name="answer_text"
+                      rows="3"
+                      maxLength="20000"
+                      defaultValue={submission?.answer_text ?? ""}
+                      placeholder="Add any notes for your instructor…"
+                    />
+                  </label>
+
+                  <div className="form-actions" style={{ marginTop: "14px" }}>
+                    <button className="button" type="button" onClick={() => setSubmissionDraft(null)}>Cancel</button>
+                    <button className="button primary" disabled={busy}>
+                      <CheckCircle2 size={14} /> {busy ? "Submitting…" : "Submit & Mark Completed"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </article>
+          );
+        })}
+        {!filteredAssignments.length && (
+          <div className="card portal-empty">
+            <BookOpen size={22} />
+            <strong>No assignments found</strong>
+            <span>New assignments from your instructor will appear here.</span>
+          </div>
+        )}
+      </section>
+    );
   }
 
   function renderTests() {
@@ -1289,12 +1483,55 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderAttendance() {
+    const totalDays = attendance.length;
+    const presentCount = attendance.filter((r) => r.status === "Present").length;
+    const lateCount = attendance.filter((r) => r.status === "Late").length;
+    const absentCount = attendance.filter((r) => r.status === "Absent").length;
+    const attendanceRate = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
+
     return (
-      <AttendanceCalendar
-        records={attendance}
-        courses={courses}
-        isAdmin={false}
-      />
+      <div className="student-attendance-view">
+        <section className="metrics student-metrics" style={{ marginBottom: "20px" }}>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Overall Attendance</span>
+              <span className="metric-icon green"><Clock3 size={17} /></span>
+            </div>
+            <div className="metric-value">{attendanceRate}%</div>
+            <div className="metric-foot">{presentCount} of {totalDays} sessions attended</div>
+          </article>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Present</span>
+              <span className="metric-icon green"><CheckCircle2 size={17} /></span>
+            </div>
+            <div className="metric-value">{presentCount}</div>
+            <div className="metric-foot">On-time check-ins</div>
+          </article>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Late</span>
+              <span className="metric-icon amber"><Clock3 size={17} /></span>
+            </div>
+            <div className="metric-value">{lateCount}</div>
+            <div className="metric-foot">Late arrivals</div>
+          </article>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Absent</span>
+              <span className="metric-icon rose"><X size={17} /></span>
+            </div>
+            <div className="metric-value">{absentCount}</div>
+            <div className="metric-foot">Recorded absences</div>
+          </article>
+        </section>
+
+        <AttendanceCalendar
+          records={attendance}
+          courses={courses}
+          isAdmin={false}
+        />
+      </div>
     );
   }
 
@@ -1334,7 +1571,19 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   function renderOverview() {
     const submittedCount = submissions.length;
     const completedTests = attempts.length;
-    const upcomingAssignments = assignments.filter((item) => !isPast(item.due_at)).length;
+    const upcomingAssignments = assignments.filter((item) => !isPast(item.due_at) && !submissionByAssignment.has(item.id)).length;
+    const pendingNotesCount = notes.filter((n) => n.status !== "completed").length;
+
+    // Overall Attendance Rate %
+    const totalDays = attendance.length;
+    const presentCount = attendance.filter((r) => r.status === "Present").length;
+    const lateCount = attendance.filter((r) => r.status === "Late").length;
+    const attendancePercentage = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
+
+    // Recent Test Marks
+    const recentAttempt = attempts[0];
+    const recentTest = recentAttempt ? tests.find((t) => t.id === recentAttempt.assessment_id) : null;
+
     return <>
       <div className="page-heading">
         <div>
@@ -1349,11 +1598,31 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         </div>
         <button className="button" onClick={loadPortal}>Refresh data</button>
       </div>
+
       <section className="metrics student-metrics">
-        <article className="card metric-card"><div className="metric-top"><span>Assignments due</span><span className="metric-icon blue"><BookOpen size={17} /></span></div><div className="metric-value">{upcomingAssignments}</div><div className="metric-foot">Published assignments</div></article>
-        <article className="card metric-card"><div className="metric-top"><span>Work submitted</span><span className="metric-icon green"><CheckCircle2 size={17} /></span></div><div className="metric-value">{submittedCount}</div><div className="metric-foot">Across your assignments</div></article>
-        <article className="card metric-card"><div className="metric-top"><span>Tests completed</span><span className="metric-icon amber"><ClipboardList size={17} /></span></div><div className="metric-value">{completedTests}</div><div className="metric-foot">Graded automatically</div></article>
-        <article className="card metric-card"><div className="metric-top"><span>Unread messages</span><span className="metric-icon rose"><MessageSquare size={17} /></span></div><div className="metric-value">{unreadMessages}</div><div className="metric-foot">From your institution</div></article>
+        <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Assignments")}>
+          <div className="metric-top"><span>Assignments Due</span><span className="metric-icon blue"><BookOpen size={17} /></span></div>
+          <div className="metric-value">{upcomingAssignments}</div>
+          <div className="metric-foot">{submittedCount} completed tasks</div>
+        </article>
+
+        <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Attendance")}>
+          <div className="metric-top"><span>Attendance Rate</span><span className="metric-icon green"><Clock3 size={17} /></span></div>
+          <div className="metric-value">{attendancePercentage}%</div>
+          <div className="metric-foot">{presentCount} present · {totalDays} recorded</div>
+        </article>
+
+        <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Tests")}>
+          <div className="metric-top"><span>Tests Completed</span><span className="metric-icon amber"><ClipboardList size={17} /></span></div>
+          <div className="metric-value">{completedTests}</div>
+          <div className="metric-foot">{recentAttempt ? `Latest: ${recentAttempt.score}/${recentAttempt.max_score} pts` : "Automatic evaluations"}</div>
+        </article>
+
+        <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Notes")}>
+          <div className="metric-top"><span>Learning Notes</span><span className="metric-icon purple"><FileText size={17} /></span></div>
+          <div className="metric-value">{notes.length}</div>
+          <div className="metric-foot">{pendingNotesCount > 0 ? `${pendingNotesCount} pending review` : "All reviewed"}</div>
+        </article>
       </section>
       <section className="student-overview-grid">
         <article className="card panel"><div className="panel-heading"><div><h2>Next assignments</h2><p>Keep an eye on upcoming deadlines</p></div><button className="text-link" onClick={() => navigate("Assignments")}>All assignments <ArrowRight size={13} /></button></div>

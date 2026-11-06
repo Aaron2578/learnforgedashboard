@@ -9,3 +9,4 @@ where student_id = '051e6aae-111b-4e30-a76e-30e060bfc865'
   and course_id = 'f6ea8aac-ac4c-43bc-a886-cf1564ed2822';
 
 commit;
+
