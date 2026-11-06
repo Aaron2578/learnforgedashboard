@@ -213,6 +213,16 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         if (assignResult?.length) {
           await supabase.from("assignment_recipients").upsert(assignResult.map((a) => ({ assignment_id: a.id, student_id: student.id })), { onConflict: "assignment_id,student_id" });
         }
+        // Auto-enroll if student is not enrolled in any course yet
+        const hasEnrollment = enrollments.some((e) => e.student_id === student.id);
+        if (!hasEnrollment && courses.length > 0) {
+          const defaultCourse = courses[0];
+          await supabase.from("course_enrollments").insert({
+            course_id: defaultCourse.id,
+            student_id: student.id,
+          });
+          setEnrollments((prev) => [...prev, { course_id: defaultCourse.id, student_id: student.id }]);
+        }
       }
       onToast(isApproved ? `${student.full_name || student.email} approved.` : "Student access suspended.");
       await loadData();
@@ -442,34 +452,42 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   }
 
   async function enrollStudentInCourse(courseId, studentId) {
-    if (!studentId) return;
+    if (!studentId || !courseId) return;
     setBusy(true);
     setError("");
+    // Optimistic local update for instant UI feedback
+    setEnrollments((prev) => [...prev, { course_id: courseId, student_id: studentId }]);
     const { error: enrollError } = await supabase.from("course_enrollments").insert({
       course_id: courseId,
       student_id: studentId,
     });
     if (enrollError) {
       setError(`Could not enroll student: ${enrollError.message}`);
+      setEnrollments((prev) => prev.filter((e) => !(e.course_id === courseId && e.student_id === studentId)));
+      await loadData();
     } else {
       onToast("Student enrolled in course.");
-      await loadData();
     }
     setBusy(false);
   }
 
   async function unenrollStudentFromCourse(courseId, studentId) {
+    if (!studentId || !courseId) return;
     setBusy(true);
     setError("");
+    const removed = enrollments.find((e) => e.course_id === courseId && e.student_id === studentId);
+    // Optimistic local update for instant UI feedback
+    setEnrollments((prev) => prev.filter((e) => !(e.course_id === courseId && e.student_id === studentId)));
     const { error: unenrollError } = await supabase.from("course_enrollments")
       .delete()
       .eq("course_id", courseId)
       .eq("student_id", studentId);
     if (unenrollError) {
       setError(`Could not remove student: ${unenrollError.message}`);
+      if (removed) setEnrollments((prev) => [...prev, removed]);
+      await loadData();
     } else {
       onToast("Student removed from course.");
-      await loadData();
     }
     setBusy(false);
   }
@@ -651,6 +669,17 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         }, { onConflict: "trainer_id,student_id" });
       } else if (updates.trainer_id === null) {
         await supabase.from("trainer_students").delete().eq("student_id", studentId);
+      }
+      if (updates.is_approved) {
+        const hasEnrollment = enrollments.some((e) => e.student_id === studentId);
+        if (!hasEnrollment && courses.length > 0) {
+          const defaultCourse = courses[0];
+          await supabase.from("course_enrollments").insert({
+            course_id: defaultCourse.id,
+            student_id: studentId,
+          });
+          setEnrollments((prev) => [...prev, { course_id: defaultCourse.id, student_id: studentId }]);
+        }
       }
       setEditingStudent(null);
       onToast("Student profile updated.");

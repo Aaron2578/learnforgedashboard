@@ -146,6 +146,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   // Student Detail Modal
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
+  const [enrollingCourseId, setEnrollingCourseId] = useState("");
+  const [enrollBusy, setEnrollBusy] = useState(false);
 
   // Messages Tab State
   const [conversations, setConversations] = useState([]);
@@ -183,11 +185,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         materialRecipientsRes,
         assessmentAttemptsRes,
       ] = await Promise.all([
-        supabase.from("courses").select("*").order("created_at", { ascending: false }),
-        supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }),
+        supabase.from("courses").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
+        supabase.from("profiles").select("*").eq("role", "student").eq("is_approved", true).order("full_name", { ascending: true }).then((r) => r.error ? { data: [] } : r),
         supabase.from("trainer_students").select("trainer_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("profiles").select("id, email, full_name, timing").eq("role", "trainer").order("full_name", { ascending: true }).then((r) => r.error ? { data: [] } : r),
-        supabase.from("course_enrollments").select("course_id, student_id"),
+        supabase.from("course_enrollments").select("course_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("student_notes").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("course_materials").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("download_requests").select("*").order("requested_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
@@ -199,7 +201,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").then((r) => r.error ? { data: [] } : r),
       ]);
 
-      if (coursesRes.error) throw coursesRes.error;
+      if (coursesRes.error) console.warn("TrainerPortal courses query warning:", coursesRes.error);
       setCourses(coursesRes.data || []);
       setStudents(studentsRes.data || []);
       setTrainerStudents(trainerStudentsRes.data || []);
@@ -252,6 +254,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "trainer_students" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, debouncedTrainerReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, debouncedTrainerReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, debouncedTrainerReload)
       .subscribe();
@@ -261,6 +266,48 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       supabase.removeChannel(channel);
     };
   }, [supabase, debouncedTrainerReload]);
+
+  // Trainer 1-click enroll & unenroll handlers with instant optimistic UI update
+  async function handleTrainerEnrollCourse(studentId, courseId) {
+    if (!studentId || !courseId) return;
+    setEnrollBusy(true);
+    // Optimistic update
+    setEnrollments((prev) => [...prev, { course_id: courseId, student_id: studentId }]);
+    const { error: enrollErr } = await supabase.from("course_enrollments").insert({
+      course_id: courseId,
+      student_id: studentId,
+    });
+    if (enrollErr) {
+      console.error("Trainer enroll error:", enrollErr);
+      setToast("Could not enroll student: " + enrollErr.message);
+      setEnrollments((prev) => prev.filter((e) => !(e.course_id === courseId && e.student_id === studentId)));
+    } else {
+      setToast("Student enrolled in course!");
+      setEnrollingCourseId("");
+    }
+    setEnrollBusy(false);
+  }
+
+  async function handleTrainerUnenrollCourse(studentId, courseId) {
+    if (!studentId || !courseId) return;
+    setEnrollBusy(true);
+    const removed = enrollments.find((e) => e.course_id === courseId && e.student_id === studentId);
+    // Optimistic update
+    setEnrollments((prev) => prev.filter((e) => !(e.course_id === courseId && e.student_id === studentId)));
+    const { error: unenrollErr } = await supabase
+      .from("course_enrollments")
+      .delete()
+      .eq("course_id", courseId)
+      .eq("student_id", studentId);
+    if (unenrollErr) {
+      console.error("Trainer unenroll error:", unenrollErr);
+      setToast("Could not remove enrollment: " + unenrollErr.message);
+      if (removed) setEnrollments((prev) => [...prev, removed]);
+    } else {
+      setToast("Course removed from student.");
+    }
+    setEnrollBusy(false);
+  }
 
   const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
 
@@ -1134,8 +1181,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             {myAssignedStudents.map((student) => {
               const studentCourses = enrollments
                 .filter((e) => e.student_id === student.id)
-                .map((e) => coursesById[e.course_id])
-                .filter(Boolean);
+                .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
               const todayAtt = attendanceRecords.find(
                 (r) => r.student_id === student.id && r.attendance_date === todayStr
@@ -1433,8 +1479,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   const note = attendanceState[student.id]?.note || "";
                   const studentCourses = enrollments
                     .filter((e) => e.student_id === student.id)
-                    .map((e) => coursesById[e.course_id])
-                    .filter(Boolean);
+                    .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
                   return (
                     <tr key={student.id} style={{ borderBottom: "1px solid var(--line)" }}>
@@ -2987,8 +3032,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 {filteredStudents.map((student) => {
                   const studentCourses = enrollments
                     .filter((e) => e.student_id === student.id)
-                    .map((e) => coursesById[e.course_id])
-                    .filter(Boolean);
+                    .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
                   const isAssigned = myAssignedStudentIds.has(student.id);
 
                   return (
@@ -3570,27 +3614,70 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
               {/* Enrolled Courses */}
               <div>
-                <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block", marginBottom: "8px" }}>
-                  Enrolled Courses
-                </strong>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <strong style={{ fontSize: "13px", color: "var(--ink)" }}>
+                    Enrolled Courses ({enrollments.filter((e) => e.student_id === selectedStudentDetail.id).length})
+                  </strong>
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   {enrollments
                     .filter((e) => e.student_id === selectedStudentDetail.id)
-                    .map((e) => coursesById[e.course_id])
-                    .filter(Boolean)
+                    .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" })
                     .map((c) => (
                       <div key={c.id} style={{ padding: "8px 12px", background: "#f1f5f9", borderRadius: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
                           <span className="badge blue" style={{ fontSize: "11px", marginRight: "6px" }}>{c.code}</span>
                           <strong style={{ fontSize: "13px", color: "var(--ink)" }}>{c.name}</strong>
                         </div>
-                        <small style={{ color: "var(--muted)" }}>{c.schedule || "Regular"}</small>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <small style={{ color: "var(--muted)" }}>{c.schedule || "Regular"}</small>
+                          <button
+                            type="button"
+                            className="button compact ghost"
+                            style={{ color: "#ef4444", padding: "2px 6px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}
+                            title="Remove student from this course"
+                            disabled={enrollBusy}
+                            onClick={() => handleTrainerUnenrollCourse(selectedStudentDetail.id, c.id)}
+                          >
+                            <X size={12} /> Remove
+                          </button>
+                        </div>
                       </div>
                     ))}
                   {!enrollments.some((e) => e.student_id === selectedStudentDetail.id) && (
                     <span style={{ fontSize: "13px", color: "var(--muted)" }}>Not enrolled in any courses yet.</span>
                   )}
                 </div>
+
+                {/* Quick Course Enrollment Selector for Trainers */}
+                {courses.filter((c) => !enrollments.some((e) => e.student_id === selectedStudentDetail.id && e.course_id === c.id)).length > 0 && (
+                  <div style={{ display: "flex", gap: "8px", marginTop: "10px", alignItems: "center" }}>
+                    <select
+                      className="form-input"
+                      style={{ fontSize: "12px", padding: "6px 10px", flex: 1 }}
+                      value={enrollingCourseId}
+                      onChange={(e) => setEnrollingCourseId(e.target.value)}
+                    >
+                      <option value="">Select a course to enroll...</option>
+                      {courses
+                        .filter((c) => !enrollments.some((e) => e.student_id === selectedStudentDetail.id && e.course_id === c.id))
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            [{c.code}] {c.name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="button compact primary"
+                      style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                      disabled={!enrollingCourseId || enrollBusy}
+                      onClick={() => handleTrainerEnrollCourse(selectedStudentDetail.id, enrollingCourseId)}
+                    >
+                      <Plus size={13} /> {enrollBusy ? "Enrolling..." : "Enroll"}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Attendance Summary */}
