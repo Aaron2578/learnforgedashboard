@@ -36,3 +36,4 @@ create policy "Students can view syllabus and permitted materials"
   );
 
 commit;
+
