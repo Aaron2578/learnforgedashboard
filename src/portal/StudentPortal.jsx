@@ -1480,9 +1480,9 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderAttendance() {
     const totalDays = attendance.length;
-    const presentCount = attendance.filter((r) => r.status === "Present").length;
-    const lateCount = attendance.filter((r) => r.status === "Late").length;
-    const absentCount = attendance.filter((r) => r.status === "Absent").length;
+    const presentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "present").length;
+    const lateCount = attendance.filter((r) => (r.status || "").toLowerCase() === "late").length;
+    const absentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "absent").length;
     const attendanceRate = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
 
     return (
@@ -1572,8 +1572,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
     // Overall Attendance Rate %
     const totalDays = attendance.length;
-    const presentCount = attendance.filter((r) => r.status === "Present").length;
-    const lateCount = attendance.filter((r) => r.status === "Late").length;
+    const presentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "present").length;
+    const lateCount = attendance.filter((r) => (r.status || "").toLowerCase() === "late").length;
     const attendancePercentage = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
 
     // Recent Test Marks

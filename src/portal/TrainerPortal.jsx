@@ -552,7 +552,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     const existing = attendanceRecords.filter((r) => r.attendance_date === attendanceDate);
     const stateMap = {};
     existing.forEach((r) => {
-      stateMap[r.student_id] = { status: r.status, note: r.note || "" };
+      const raw = (r.status || "").toLowerCase();
+      const norm = raw === "present" ? "Present" : raw === "late" ? "Late" : raw === "absent" ? "Absent" : r.status;
+      stateMap[r.student_id] = { status: norm, note: r.note || "" };
     });
     setAttendanceState(stateMap);
   }, [attendanceDate, attendanceRecords]);
@@ -595,7 +597,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             course_id: attendanceCourseId === "all" ? null : attendanceCourseId,
             attendance_date: attendanceDate,
             status: entry.status,
-            note: entry.note || null,
+            note: entry.note || "",
+            created_by: user.id,
           });
         }
       });
@@ -1899,9 +1902,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 2: Attendance Marking
   // ----------------------------------------------------
   function renderAttendance() {
-    const presentCount = attendanceStudents.filter((s) => attendanceState[s.id]?.status === "Present").length;
-    const lateCount = attendanceStudents.filter((s) => attendanceState[s.id]?.status === "Late").length;
-    const absentCount = attendanceStudents.filter((s) => attendanceState[s.id]?.status === "Absent").length;
+    const presentCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "present").length;
+    const lateCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "late").length;
+    const absentCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "absent").length;
     const unmarkedCount = attendanceStudents.length - (presentCount + lateCount + absentCount);
 
     return (
@@ -2054,58 +2057,65 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       </td>
 
                       <td style={{ padding: "12px 16px", textAlign: "center" }}>
-                        <div style={{ display: "inline-flex", gap: "6px", background: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
-                          <button
-                            type="button"
-                            className={`button compact ${status === "Present" ? "primary" : ""}`}
-                            style={{
-                              background: status === "Present" ? "#16a34a" : "transparent",
-                              color: status === "Present" ? "#fff" : "var(--ink)",
-                              border: "none",
-                              minHeight: "28px",
-                              padding: "2px 10px",
-                              fontSize: "12px",
-                              fontWeight: status === "Present" ? 700 : 500,
-                            }}
-                            onClick={() => setStudentAttendance(student.id, "Present")}
-                          >
-                            Present
-                          </button>
+                        {(() => {
+                          const isPresent = (status || "").toLowerCase() === "present";
+                          const isLate = (status || "").toLowerCase() === "late";
+                          const isAbsent = (status || "").toLowerCase() === "absent";
+                          return (
+                            <div style={{ display: "inline-flex", gap: "6px", background: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
+                              <button
+                                type="button"
+                                className={`button compact ${isPresent ? "primary" : ""}`}
+                                style={{
+                                  background: isPresent ? "#16a34a" : "transparent",
+                                  color: isPresent ? "#fff" : "var(--ink)",
+                                  border: "none",
+                                  minHeight: "28px",
+                                  padding: "2px 10px",
+                                  fontSize: "12px",
+                                  fontWeight: isPresent ? 700 : 500,
+                                }}
+                                onClick={() => setStudentAttendance(student.id, "Present")}
+                              >
+                                Present
+                              </button>
 
-                          <button
-                            type="button"
-                            className={`button compact ${status === "Late" ? "primary" : ""}`}
-                            style={{
-                              background: status === "Late" ? "#d97706" : "transparent",
-                              color: status === "Late" ? "#fff" : "var(--ink)",
-                              border: "none",
-                              minHeight: "28px",
-                              padding: "2px 10px",
-                              fontSize: "12px",
-                              fontWeight: status === "Late" ? 700 : 500,
-                            }}
-                            onClick={() => setStudentAttendance(student.id, "Late")}
-                          >
-                            Late
-                          </button>
+                              <button
+                                type="button"
+                                className={`button compact ${isLate ? "primary" : ""}`}
+                                style={{
+                                  background: isLate ? "#d97706" : "transparent",
+                                  color: isLate ? "#fff" : "var(--ink)",
+                                  border: "none",
+                                  minHeight: "28px",
+                                  padding: "2px 10px",
+                                  fontSize: "12px",
+                                  fontWeight: isLate ? 700 : 500,
+                                }}
+                                onClick={() => setStudentAttendance(student.id, "Late")}
+                              >
+                                Late
+                              </button>
 
-                          <button
-                            type="button"
-                            className={`button compact ${status === "Absent" ? "primary" : ""}`}
-                            style={{
-                              background: status === "Absent" ? "#dc2626" : "transparent",
-                              color: status === "Absent" ? "#fff" : "var(--ink)",
-                              border: "none",
-                              minHeight: "28px",
-                              padding: "2px 10px",
-                              fontSize: "12px",
-                              fontWeight: status === "Absent" ? 700 : 500,
-                            }}
-                            onClick={() => setStudentAttendance(student.id, "Absent")}
-                          >
-                            Absent
-                          </button>
-                        </div>
+                              <button
+                                type="button"
+                                className={`button compact ${isAbsent ? "primary" : ""}`}
+                                style={{
+                                  background: isAbsent ? "#dc2626" : "transparent",
+                                  color: isAbsent ? "#fff" : "var(--ink)",
+                                  border: "none",
+                                  minHeight: "28px",
+                                  padding: "2px 10px",
+                                  fontSize: "12px",
+                                  fontWeight: isAbsent ? 700 : 500,
+                                }}
+                                onClick={() => setStudentAttendance(student.id, "Absent")}
+                              >
+                                Absent
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       <td style={{ padding: "12px 16px" }}>
