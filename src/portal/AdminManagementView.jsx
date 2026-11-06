@@ -123,7 +123,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, trainer_id, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "trainer").order("created_at", { ascending: false }),
         supabase.from("trainer_students").select("trainer_id, student_id").then((r) => r.error ? { data: [] } : r),
-        supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room, created_at").order("created_at", { ascending: false }),
+        supabase.from("courses").select("id, name, code, description, department, instructor, trainer_id, schedule, room, created_at").order("created_at", { ascending: false }),
         supabase.from("course_enrollments").select("course_id, student_id"),
         supabase.rpc("get_database_storage_stats"),
         supabase.from("student_notes").select("id, student_id"),

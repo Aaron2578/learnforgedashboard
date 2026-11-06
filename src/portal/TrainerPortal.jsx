@@ -311,19 +311,76 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     setEnrollBusy(false);
   }
 
+  // Quick Mappings
+  const coursesById = useMemo(() => Object.fromEntries(courses.map((c) => [c.id, c])), [courses]);
+  const studentsById = useMemo(() => Object.fromEntries(students.map((s) => [s.id, s])), [students]);
+
   const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
 
+  const activeTrainer = useMemo(() => {
+    return (
+      trainersList.find((t) => t.id === activeTrainerId) ||
+      (user ? { id: user.id, email: user.email, full_name: user.user_metadata?.full_name } : null)
+    );
+  }, [trainersList, activeTrainerId, user]);
+
+  // Courses strictly taught by this trainer
+  const myTrainerCourses = useMemo(() => {
+    if (!activeTrainerId) return [];
+    const trainerName = (activeTrainer?.full_name || "").toLowerCase().trim();
+    const trainerEmail = (activeTrainer?.email || "").toLowerCase().trim();
+
+    return courses.filter((c) => {
+      if (c.trainer_id && c.trainer_id === activeTrainerId) return true;
+      const inst = (c.instructor || "").toLowerCase().trim();
+      if (inst && (inst === trainerName || inst === trainerEmail)) return true;
+      return false;
+    });
+  }, [courses, activeTrainerId, activeTrainer]);
+
+  const myTrainerCourseIds = useMemo(() => new Set(myTrainerCourses.map((c) => c.id)), [myTrainerCourses]);
+
+  // Students strictly assigned to this trainer (or in their courses, without conflicting trainer)
   const myAssignedStudentIds = useMemo(() => {
     const ids = new Set();
-    const targetId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
+    const targetId = activeTrainerId;
+    if (!targetId) return ids;
+
+    // 1. Explicit assignments in trainer_students
     for (const ts of trainerStudents) {
       if (ts.trainer_id === targetId) ids.add(ts.student_id);
     }
+    // 2. Explicit assignments in profiles.trainer_id
     for (const s of students) {
       if (s.trainer_id === targetId) ids.add(s.id);
     }
+    // 3. Students enrolled in courses taught by this trainer
+    for (const e of enrollments) {
+      if (myTrainerCourseIds.has(e.course_id)) {
+        const s = studentsById[e.student_id];
+        // Only include if student does not belong to another trainer
+        if (!s?.trainer_id || s.trainer_id === targetId) {
+          ids.add(e.student_id);
+        }
+      }
+    }
+    // Strictly exclude any student assigned to a different trainer
+    for (const s of students) {
+      if (s.trainer_id && s.trainer_id !== targetId) {
+        ids.delete(s.id);
+      }
+    }
     return ids;
-  }, [trainerStudents, students, user?.id, isAdminPreview, selectedTrainerId, trainersList]);
+  }, [trainerStudents, students, enrollments, myTrainerCourseIds, activeTrainerId, studentsById]);
+
+  const myAssignedStudents = useMemo(() => {
+    return students.filter((s) => myAssignedStudentIds.has(s.id));
+  }, [students, myAssignedStudentIds]);
+
+  // Assessments for this trainer's courses or created by this trainer
+  const myTrainerAssessments = useMemo(() => {
+    return assessments.filter((a) => myTrainerCourseIds.has(a.course_id) || a.created_by === activeTrainerId);
+  }, [assessments, myTrainerCourseIds, activeTrainerId]);
 
   // Load chat messages when a conversation is selected
   useEffect(() => {
@@ -372,13 +429,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     };
   }, [selectedConversationId, supabase]);
 
-  // Quick Mappings
-  const coursesById = useMemo(() => Object.fromEntries(courses.map((c) => [c.id, c])), [courses]);
-  const studentsById = useMemo(() => Object.fromEntries(students.map((s) => [s.id, s])), [students]);
 
-  const myAssignedStudents = useMemo(() => {
-    return students.filter((s) => myAssignedStudentIds.has(s.id));
-  }, [students, myAssignedStudentIds]);
 
   // Filtered Students for Attendance (strictly trainer's assigned students)
   const attendanceStudents = useMemo(() => {
@@ -896,8 +947,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   function renderOverview() {
     const todayStr = localDate();
-    const todayAttendanceCount = attendanceRecords.filter((r) => r.attendance_date === todayStr).length;
-    const pendingRequestsCount = downloadRequests.filter((r) => r.status === "pending").length;
+    const todayAttendanceCount = attendanceRecords.filter((r) => r.attendance_date === todayStr && myAssignedStudentIds.has(r.student_id)).length;
+    const pendingRequestsCount = downloadRequests.filter((r) => r.status === "pending" && myAssignedStudentIds.has(r.student_id)).length;
+    const myTasks = tasks.filter((t) => myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId);
 
     return (
       <div className="trainer-overview-view">
@@ -919,7 +971,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 <Sparkles size={16} /> LearnForge Trainer Workspace
               </div>
               <h1 style={{ fontSize: "24px", fontWeight: 800, margin: "0 0 6px", color: "#ffffff" }}>
-                Welcome back, {profile?.full_name || "Trainer"}!
+                Welcome back, {(isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "Trainer"}!
               </h1>
               <p style={{ margin: 0, color: "#c7d2fe", fontSize: "14px", maxWidth: "600px" }}>
                 Manage attendance check-ins, assign tasks, distribute course syllabus and practice sets, and communicate with students seamlessly.
@@ -957,8 +1009,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <span>Courses Taught</span>
               <span className="metric-icon blue"><BookOpen size={17} /></span>
             </div>
-            <strong>{courses.length}</strong>
-            <small>Active curriculums</small>
+            <strong>{myTrainerCourses.length}</strong>
+            <small>{myTrainerCourses.length === 1 ? "1 active curriculum" : `${myTrainerCourses.length} active curriculums`}</small>
           </article>
 
           <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => { setActiveTab("Students"); }}>
@@ -975,8 +1027,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <span>Assigned Tasks</span>
               <span className="metric-icon amber"><CheckCircle2 size={17} /></span>
             </div>
-            <strong>{tasks.length}</strong>
-            <small>{tasks.filter((t) => t.status === "completed").length} completed</small>
+            <strong>{myTasks.length}</strong>
+            <small>{myTasks.filter((t) => t.status === "completed").length} completed</small>
           </article>
 
           <article className="card metric-card">
@@ -1012,8 +1064,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {courses.slice(0, 5).map((course) => {
-                const enrolledCount = enrollments.filter((e) => e.course_id === course.id).length;
+              {myTrainerCourses.slice(0, 5).map((course) => {
+                const enrolledCount = enrollments.filter((e) => e.course_id === course.id && myAssignedStudentIds.has(e.student_id)).length;
                 return (
                   <div
                     key={course.id}
@@ -1040,7 +1092,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   </div>
                 );
               })}
-              {!courses.length && <div className="portal-empty compact"><span>No courses assigned yet.</span></div>}
+              {!myTrainerCourses.length && <div className="portal-empty compact"><span>No courses assigned to you yet.</span></div>}
             </div>
           </article>
 
@@ -1182,7 +1234,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px" }}>
             {myAssignedStudents.map((student) => {
               const studentCourses = enrollments
-                .filter((e) => e.student_id === student.id)
+                .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
                 .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
               const todayAtt = attendanceRecords.find(
@@ -1409,7 +1461,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   <option value="all">
                     All My Assigned Students ({myAssignedStudents.length})
                   </option>
-                  {courses.map((c) => {
+                  {myTrainerCourses.map((c) => {
                     const inCourse = myAssignedStudents.filter((s) => enrollments.some((e) => e.student_id === s.id && e.course_id === c.id)).length;
                     return (
                       <option key={c.id} value={c.id}>
@@ -1469,7 +1521,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   const status = attendanceState[student.id]?.status || null;
                   const note = attendanceState[student.id]?.note || "";
                   const studentCourses = enrollments
-                    .filter((e) => e.student_id === student.id)
+                    .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
                   return (
@@ -1751,7 +1803,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   }}
                 >
                   <option value="">General / All Subjects</option>
-                  {courses.map((c) => (
+                  {myTrainerCourses.map((c) => (
                     <option key={c.id} value={c.id}>
                       [{c.code}] {c.name}
                     </option>
@@ -2017,7 +2069,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 4: Syllabus Management
   // ----------------------------------------------------
   function renderSyllabus() {
-    const syllabi = materials.filter((m) => m.category === "Syllabus");
+    const syllabi = materials.filter(
+      (m) => m.category === "Syllabus" && (myTrainerCourseIds.has(m.course_id) || m.uploaded_by === activeTrainerId)
+    );
 
     return (
       <div className="trainer-syllabus-view">
@@ -2064,7 +2118,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     onChange={(e) => setSyllabusCourseId(e.target.value)}
                   >
                     <option value="">Select Course...</option>
-                    {courses.map((c) => (
+                    {myTrainerCourses.map((c) => (
                       <option key={c.id} value={c.id}>
                         [{c.code}] {c.name}
                       </option>
@@ -2191,8 +2245,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 5: Materials & Drive Files
   // ----------------------------------------------------
   function renderMaterialsAndDrive() {
-    const pendingRequests = downloadRequests.filter((r) => r.status === "pending");
-    const filteredMaterials = materials.filter((m) => {
+    const myMaterials = materials.filter(
+      (m) => myTrainerCourseIds.has(m.course_id) || m.uploaded_by === activeTrainerId
+    );
+    const myDownloadRequests = downloadRequests.filter((r) => myAssignedStudentIds.has(r.student_id));
+    const pendingRequests = myDownloadRequests.filter((r) => r.status === "pending");
+    const filteredMaterials = myMaterials.filter((m) => {
       if (selectedMaterialCategoryFilter !== "all" && m.category !== selectedMaterialCategoryFilter) {
         return false;
       }
@@ -2234,7 +2292,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             onClick={() => setMaterialActiveSubTab("files")}
           >
             <HardDrive size={15} />
-            <span>Materials ({materials.length})</span>
+            <span>Materials ({myMaterials.length})</span>
           </button>
           <button
             className={`portal-tab ${materialActiveSubTab === "requests" ? "active" : ""}`}
@@ -2253,7 +2311,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           /* Download Requests Management */
           <div className="card" style={{ padding: "16px" }}>
             <h2 style={{ fontSize: "16px", fontWeight: 700, margin: "0 0 12px" }}>
-              Student Download Requests ({downloadRequests.length})
+              Student Download Requests ({myDownloadRequests.length})
             </h2>
 
             <div style={{ overflowX: "auto" }}>
@@ -2268,7 +2326,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   </tr>
                 </thead>
                 <tbody>
-                  {downloadRequests.map((req) => {
+                  {myDownloadRequests.map((req) => {
                     const student = studentsById[req.student_id];
                     const mat = materials.find((m) => m.id === req.material_id);
                     const isPending = req.status === "pending";
@@ -2318,7 +2376,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   })}
                 </tbody>
               </table>
-              {!downloadRequests.length && (
+              {!myDownloadRequests.length && (
                 <div className="card portal-empty">
                   <Download size={22} />
                   <span>No download requests from students.</span>
@@ -2336,7 +2394,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               </span>
               {["all", ...MATERIAL_CATEGORIES].map((cat) => {
                 const label = cat === "all" ? "All Categories" : cat;
-                const count = cat === "all" ? materials.length : materials.filter((m) => m.category === cat).length;
+                const count = cat === "all" ? myMaterials.length : myMaterials.filter((m) => m.category === cat).length;
                 return (
                   <button
                     key={cat}
@@ -2483,7 +2541,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     <span>Subject / Course</span>
                     <select value={matCourseId} onChange={(e) => setMatCourseId(e.target.value)}>
                       <option value="">General / Campus-wide</option>
-                      {courses.map((c) => (
+                      {myTrainerCourses.map((c) => (
                         <option key={c.id} value={c.id}>
                           [{c.code}] {c.name}
                         </option>
@@ -2575,7 +2633,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 5: Tests & Assessments
   // ----------------------------------------------------
   function renderTests() {
-    const filteredTests = assessments.filter((a) => {
+    const filteredTests = myTrainerAssessments.filter((a) => {
       if (!query.trim()) return true;
       const q = query.trim().toLowerCase();
       const course = coursesById[a.course_id];
@@ -2604,7 +2662,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               className="button primary"
               type="button"
               onClick={() => {
-                setSelectedTestToAssign(assessments[0] || null);
+                setSelectedTestToAssign(myTrainerAssessments[0] || null);
                 setTestTargetStudentIds(Array.from(myAssignedStudentIds));
                 setShowAssignTestModal(true);
               }}
@@ -2621,8 +2679,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <span>Available Tests</span>
               <span className="metric-icon blue"><ClipboardList size={17} /></span>
             </div>
-            <strong>{assessments.length}</strong>
-            <small>Active exams in campus catalog</small>
+            <strong>{myTrainerAssessments.length}</strong>
+            <small>{myTrainerAssessments.length === 1 ? "1 active test in curriculum" : `${myTrainerAssessments.length} active tests in curriculum`}</small>
           </article>
 
           <article className="card metric-card">
@@ -2771,6 +2829,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 6: Messages & Chat
   // ----------------------------------------------------
   function renderMessages() {
+    const myConversations = conversations.filter(
+      (c) => myAssignedStudentIds.has(c.student_id) || c.trainer_id === activeTrainerId
+    );
+
     return (
       <div className="trainer-messages-view">
         <div className="page-heading">
@@ -2796,11 +2858,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           <aside className="thread-list" style={{ borderRight: "1px solid var(--line)" }}>
             <div className="thread-list-heading" style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
               <strong>Student Threads</strong>
-              <span className="day-label">{conversations.length} total</span>
+              <span className="day-label">{myConversations.length} total</span>
             </div>
 
             <div style={{ overflowY: "auto", maxHeight: "480px" }}>
-              {conversations.map((thread) => {
+              {myConversations.map((thread) => {
                 const student = studentsById[thread.student_id];
                 const isSelected = thread.id === selectedConversationId;
 
@@ -2838,7 +2900,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 );
               })}
 
-              {!conversations.length && (
+              {!myConversations.length && (
                 <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--muted)", fontSize: "13px" }}>
                   No active student conversations. Start one using New Message.
                 </div>
@@ -3055,7 +3117,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <tbody>
                 {filteredStudents.map((student) => {
                   const studentCourses = enrollments
-                    .filter((e) => e.student_id === student.id)
+                    .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
                   const isAssigned = myAssignedStudentIds.has(student.id);
 
@@ -3257,8 +3319,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             >
               <item.icon className="nav-icon" size={18} />
               <span>{item.label}</span>
-              {item.label === "Materials & Drive" && downloadRequests.filter((r) => r.status === "pending").length > 0 && (
-                <span className="nav-count">{downloadRequests.filter((r) => r.status === "pending").length}</span>
+              {item.label === "Materials & Drive" && downloadRequests.filter((r) => r.status === "pending" && myAssignedStudentIds.has(r.student_id)).length > 0 && (
+                <span className="nav-count">{downloadRequests.filter((r) => r.status === "pending" && myAssignedStudentIds.has(r.student_id)).length}</span>
               )}
             </button>
           ))}
@@ -3276,11 +3338,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
         <div className="profile">
           <span className="profile-avatar">
-            {(profile?.full_name || "TR").slice(0, 2).toUpperCase()}
+            {((isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "TR").slice(0, 2).toUpperCase()}
           </span>
           <span className="profile-copy">
-            <strong>{profile?.full_name || user?.email || "Trainer"}</strong>
-            <small>Instructor</small>
+            <strong>{(isAdminPreview ? activeTrainer?.full_name : (profile?.full_name || user?.email)) || "Trainer"}</strong>
+            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor"}</small>
           </span>
         </div>
 
@@ -3470,7 +3532,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 <select
                   value={selectedTestToAssign?.id || ""}
                   onChange={(e) => {
-                    const t = assessments.find((a) => a.id === e.target.value);
+                    const t = myTrainerAssessments.find((a) => a.id === e.target.value);
                     setSelectedTestToAssign(t);
                     if (t) {
                       const currentRecs = assessmentRecipients
@@ -3480,12 +3542,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     }
                   }}
                 >
-                  {assessments.map((a) => (
+                  {myTrainerAssessments.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.title} {coursesById[a.course_id] ? `(${coursesById[a.course_id].code})` : ""}
                     </option>
                   ))}
-                  {!assessments.length && <option value="">No tests available in catalog</option>}
+                  {!myTrainerAssessments.length && <option value="">No tests available for your courses</option>}
                 </select>
               </label>
 
@@ -3640,12 +3702,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                   <strong style={{ fontSize: "13px", color: "var(--ink)" }}>
-                    Enrolled Courses ({enrollments.filter((e) => e.student_id === selectedStudentDetail.id).length})
+                    Enrolled Courses ({enrollments.filter((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id))).length})
                   </strong>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   {enrollments
-                    .filter((e) => e.student_id === selectedStudentDetail.id)
+                    .filter((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" })
                     .map((c) => (
                       <div key={c.id} style={{ padding: "8px 12px", background: "#f1f5f9", borderRadius: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -3668,13 +3730,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                         </div>
                       </div>
                     ))}
-                  {!enrollments.some((e) => e.student_id === selectedStudentDetail.id) && (
-                    <span style={{ fontSize: "13px", color: "var(--muted)" }}>Not enrolled in any courses yet.</span>
+                  {!enrollments.some((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id))) && (
+                    <span style={{ fontSize: "13px", color: "var(--muted)" }}>Not enrolled in any of your courses yet.</span>
                   )}
                 </div>
 
                 {/* Quick Course Enrollment Selector for Trainers */}
-                {courses.filter((c) => !enrollments.some((e) => e.student_id === selectedStudentDetail.id && e.course_id === c.id)).length > 0 && (
+                {myTrainerCourses.filter((c) => !enrollments.some((e) => e.student_id === selectedStudentDetail.id && e.course_id === c.id)).length > 0 && (
                   <div style={{ display: "flex", gap: "8px", marginTop: "10px", alignItems: "center" }}>
                     <select
                       className="form-input"
@@ -3683,7 +3745,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       onChange={(e) => setEnrollingCourseId(e.target.value)}
                     >
                       <option value="">Select a course to enroll...</option>
-                      {courses
+                      {myTrainerCourses
                         .filter((c) => !enrollments.some((e) => e.student_id === selectedStudentDetail.id && e.course_id === c.id))
                         .map((c) => (
                           <option key={c.id} value={c.id}>
