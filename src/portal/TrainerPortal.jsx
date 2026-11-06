@@ -120,6 +120,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [taskSelectedStudents, setTaskSelectedStudents] = useState([]);
   const [taskStudentSearch, setTaskStudentSearch] = useState("");
   const [taskStatusFilter, setTaskStatusFilter] = useState("all");
+  const [taskStudentFilter, setTaskStudentFilter] = useState("all");
+  const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
 
   // Syllabus Tab State
   const [showSyllabusModal, setShowSyllabusModal] = useState(false);
@@ -378,18 +380,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     return students.filter((s) => myAssignedStudentIds.has(s.id));
   }, [students, myAssignedStudentIds]);
 
-  // Filtered Students for Attendance (Defaults to trainer's assigned students)
+  // Filtered Students for Attendance (strictly trainer's assigned students)
   const attendanceStudents = useMemo(() => {
-    let pool = students;
-    if (attendanceScopeFilter === "assigned") {
-      pool = pool.filter((s) => myAssignedStudentIds.has(s.id));
-    }
+    let pool = myAssignedStudents;
     if (attendanceCourseId !== "all") {
       const enrolledIds = new Set(enrollments.filter((e) => e.course_id === attendanceCourseId).map((e) => e.student_id));
       pool = pool.filter((s) => enrolledIds.has(s.id));
     }
     return pool;
-  }, [students, myAssignedStudentIds, attendanceScopeFilter, attendanceCourseId, enrollments]);
+  }, [myAssignedStudents, attendanceCourseId, enrollments]);
 
   // Sync attendance state when date or course changes
   useEffect(() => {
@@ -552,7 +551,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         ]);
       }
 
-      setToast(`Task successfully assigned to ${taskSelectedStudents.length} student(s)!`);
+      const targetName = taskSelectedStudents.length === 1 
+        ? (studentsById[taskSelectedStudents[0]]?.full_name || "student") 
+        : `${taskSelectedStudents.length} students`;
+      setToast(`Note / task successfully assigned separately to ${targetName}!`);
       setShowTaskForm(false);
       setTaskTitle("");
       setTaskInstructions("");
@@ -959,13 +961,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             <small>Active curriculums</small>
           </article>
 
-          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => { setStudentScopeFilter("assigned"); setActiveTab("Students"); }}>
+          <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => { setActiveTab("Students"); }}>
             <div className="metric-top">
               <span>My Assigned Students</span>
               <span className="metric-icon green"><Users size={17} /></span>
             </div>
-            <strong>{students.filter((s) => myAssignedStudentIds.has(s.id)).length}</strong>
-            <small>{students.length} total across campus</small>
+            <strong>{myAssignedStudents.length}</strong>
+            <small>{myAssignedStudents.length === 1 ? "1 active assigned student" : `${myAssignedStudents.length} active assigned students`}</small>
           </article>
 
           <article className="card metric-card">
@@ -1294,8 +1296,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                         setShowTaskForm(true);
                         setActiveTab("Tasks");
                       }}
+                      title={`Add note or task individually to ${student.full_name || "student"}`}
                     >
-                      <CheckCircle2 size={12} /> Assign Task
+                      <CheckCircle2 size={12} /> Add Note / Task
                     </button>
                     <button
                       className="button compact"
@@ -1381,22 +1384,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         <div className="card" style={{ padding: "16px", marginBottom: "20px" }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "14px" }}>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px" }}>
-              {/* Scope Switcher: Assigned vs All */}
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <button
-                  type="button"
-                  className={`button compact ${attendanceScopeFilter === "assigned" ? "primary" : ""}`}
-                  onClick={() => setAttendanceScopeFilter("assigned")}
-                >
-                  <Users size={13} /> Only Assigned to Me ({myAssignedStudents.length})
-                </button>
-                <button
-                  type="button"
-                  className={`button compact ${attendanceScopeFilter === "all" ? "primary" : ""}`}
-                  onClick={() => setAttendanceScopeFilter("all")}
-                >
-                  All Campus Students ({students.length})
-                </button>
+              {/* Scope Badge: Strictly Assigned Students */}
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
+                <Users size={14} /> My Assigned Students ({myAssignedStudents.length})
               </div>
 
               <label className="form-field" style={{ margin: 0, minWidth: "160px" }}>
@@ -1417,15 +1407,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   style={{ height: "36px" }}
                 >
                   <option value="all">
-                    {attendanceScopeFilter === "assigned"
-                      ? `All My Assigned Students (${myAssignedStudents.length})`
-                      : `All Campus Students (${students.length})`}
+                    All My Assigned Students ({myAssignedStudents.length})
                   </option>
-                  {courses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      [{c.code}] {c.name}
-                    </option>
-                  ))}
+                  {courses.map((c) => {
+                    const inCourse = myAssignedStudents.filter((s) => enrollments.some((e) => e.student_id === s.id && e.course_id === c.id)).length;
+                    return (
+                      <option key={c.id} value={c.id}>
+                        [{c.code}] {c.name} ({inCourse} assigned)
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
             </div>
@@ -1598,8 +1589,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             {!attendanceStudents.length && (
               <div className="card portal-empty">
                 <Users size={22} />
-                <strong>No students found in this selection</strong>
-                <span>Try choosing another course or toggle to All Campus Students.</span>
+                <strong>No assigned students found</strong>
+                <span>Only students assigned to your profile appear for attendance tracking.</span>
               </div>
             )}
           </div>
@@ -1613,13 +1604,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // ----------------------------------------------------
   function renderTasks() {
     const filteredTasks = tasks.filter((t) => {
-      if (taskScopeFilter === "assigned") {
-        const isAssigned = myAssignedStudentIds.has(t.student_id);
-        const isCreatedByMe = t.created_by === activeTrainerId;
-        if (!isAssigned && !isCreatedByMe) return false;
-      }
+      // Strictly only tasks for trainer's assigned students or created by trainer
+      const isAssigned = myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId;
+      if (!isAssigned) return false;
+
+      // Filter by individual student
+      if (taskStudentFilter !== "all" && t.student_id !== taskStudentFilter) return false;
+      // Filter by category
+      if (taskCategoryFilter !== "all" && t.category !== taskCategoryFilter) return false;
+      // Filter by completion status
       if (taskStatusFilter === "assigned" && t.status === "completed") return false;
       if (taskStatusFilter === "completed" && t.status !== "completed") return false;
+
       if (!query.trim()) return true;
       const q = query.trim().toLowerCase();
       const student = studentsById[t.student_id];
@@ -1627,6 +1623,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       return (
         t.title?.toLowerCase().includes(q) ||
         t.body?.toLowerCase().includes(q) ||
+        t.category?.toLowerCase().includes(q) ||
         student?.full_name?.toLowerCase().includes(q) ||
         student?.email?.toLowerCase().includes(q) ||
         course?.code?.toLowerCase().includes(q)
@@ -1641,9 +1638,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       <div className="trainer-tasks-view">
         <div className="page-heading">
           <div>
-            <div className="eyebrow">Student Assignments</div>
-            <h1>Tasks &amp; Homework</h1>
-            <p>Assign tasks, coding challenges, and homework to students separately or by course.</p>
+            <div className="eyebrow">Student Coursework &amp; Notes</div>
+            <h1>Tasks &amp; Notes</h1>
+            <p>Write notes once and assign separately to each student, or assign individual tasks.</p>
           </div>
           <div className="heading-actions">
             <button
@@ -1651,27 +1648,50 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               type="button"
               onClick={() => setShowTaskForm((prev) => !prev)}
             >
-              <Plus size={15} /> {showTaskForm ? "Close Form" : "Assign New Task"}
+              <Plus size={15} /> {showTaskForm ? "Close Form" : "Assign New Task / Note"}
             </button>
           </div>
         </div>
 
-        {/* Scope Selector: Assigned vs All */}
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "16px" }}>
-          <button
-            type="button"
-            className={`button ${taskScopeFilter === "assigned" ? "primary" : ""}`}
-            onClick={() => setTaskScopeFilter("assigned")}
-          >
-            <Users size={14} /> My Assigned Students ({myTasksCount})
-          </button>
-          <button
-            type="button"
-            className={`button ${taskScopeFilter === "all" ? "primary" : ""}`}
-            onClick={() => setTaskScopeFilter("all")}
-          >
-            All Campus Tasks ({tasks.length})
-          </button>
+        {/* Toolbar & Student/Category Filters */}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", marginBottom: "16px" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
+            <Users size={14} /> My Assigned Students ({myTasksCount} total tasks)
+          </div>
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Student:</span>
+            <select
+              value={taskStudentFilter}
+              onChange={(e) => setTaskStudentFilter(e.target.value)}
+              style={{ height: "34px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
+            >
+              <option value="all">All Assigned Students ({myAssignedStudents.length})</option>
+              {myAssignedStudents.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.full_name || s.email}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Category:</span>
+            <select
+              value={taskCategoryFilter}
+              onChange={(e) => setTaskCategoryFilter(e.target.value)}
+              style={{ height: "34px", fontSize: "12px", padding: "0 8px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
+            >
+              <option value="all">All Categories</option>
+              <option value="Task">Task</option>
+              <option value="Class Notes">Class Notes</option>
+              <option value="Practice Data Sets">Practice Data Sets</option>
+              <option value="Projects">Projects</option>
+              <option value="Homework">Homework</option>
+              <option value="Lab Assignment">Lab Assignment</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
         </div>
 
         {/* Create Task Form */}
@@ -1679,36 +1699,58 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           <form className="card admin-create-form" onSubmit={handleCreateTask} style={{ marginBottom: "24px" }}>
             <div className="panel-heading">
               <div>
-                <h2>Assign Task to Students</h2>
-                <p>Select which students receive this task and define instructions and deadlines.</p>
+                <h2>Assign Task / Add Notes</h2>
+                <p>Define note or exercise content once and distribute it separately to each selected student.</p>
               </div>
             </div>
 
+            {/* Individual Student Pre-selection Notice */}
+            {taskSelectedStudents.length === 1 && (
+              <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <CheckCircle2 size={16} style={{ color: "#16a34a" }} />
+                  <span style={{ fontSize: "13px", color: "#166534" }}>
+                    Assigning note individually to: <strong>{studentsById[taskSelectedStudents[0]]?.full_name || studentsById[taskSelectedStudents[0]]?.email || "Student"}</strong>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="button compact"
+                  style={{ fontSize: "11.5px", padding: "2px 8px" }}
+                  onClick={() => setTaskSelectedStudents([])}
+                >
+                  Change / Select Multiple
+                </button>
+              </div>
+            )}
+
             <div className="form-grid-2">
               <label className="form-field">
-                <span>Task Title *</span>
+                <span>Task / Note Title *</span>
                 <input
                   required
-                  placeholder="e.g. Implement Dijkstra Algorithm, Homework 3"
+                  placeholder="e.g. React Props & State Notes, Python Loops Homework"
                   value={taskTitle}
                   onChange={(e) => setTaskTitle(e.target.value)}
                 />
               </label>
 
               <label className="form-field">
-                <span>Linked Course</span>
+                <span>Linked Course (Optional)</span>
                 <select
                   value={taskCourseId}
                   onChange={(e) => {
                     const cid = e.target.value;
                     setTaskCourseId(cid);
                     if (cid) {
-                      const enrolled = enrollments.filter((en) => en.course_id === cid).map((en) => en.student_id);
+                      const enrolled = enrollments
+                        .filter((en) => en.course_id === cid && myAssignedStudentIds.has(en.student_id))
+                        .map((en) => en.student_id);
                       setTaskSelectedStudents(enrolled);
                     }
                   }}
                 >
-                  <option value="">Campus-wide / All Courses</option>
+                  <option value="">General / All Subjects</option>
                   {courses.map((c) => (
                     <option key={c.id} value={c.id}>
                       [{c.code}] {c.name}
@@ -1720,13 +1762,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
             <div className="form-grid-2" style={{ marginTop: "12px" }}>
               <label className="form-field">
-                <span>Task Category / Type</span>
+                <span>Category / Type</span>
                 <select value={taskCategory} onChange={(e) => setTaskCategory(e.target.value)}>
                   <option value="Task">Task</option>
+                  <option value="Class Notes">Class Notes</option>
                   <option value="Practice Data Sets">Practice Data Sets</option>
                   <option value="Projects">Projects</option>
                   <option value="Homework">Homework</option>
-                  <option value="Class Notes">Class Notes Review</option>
                   <option value="Lab Assignment">Lab Assignment</option>
                   <option value="Other">Other</option>
                 </select>
@@ -1742,12 +1784,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               </label>
             </div>
 
-            {/* Student Selection Checkboxes */}
+            {/* Student Selection Checkboxes (Only Assigned Students) */}
             <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
                 <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
                   <Users size={16} style={{ color: "#4f46e5" }} />
-                  Select Students to Assign ({taskSelectedStudents.length} selected) *
+                  Select Students to Assign ({taskSelectedStudents.length} of {myAssignedStudents.length} selected) *
                 </strong>
                 <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                   <button
@@ -1756,14 +1798,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     style={{ background: "#e0e7ff", color: "#3730a3", fontWeight: 700 }}
                     onClick={() => setTaskSelectedStudents(Array.from(myAssignedStudentIds))}
                   >
-                    Select My Assigned ({myAssignedStudents.length})
-                  </button>
-                  <button
-                    type="button"
-                    className="button compact"
-                    onClick={() => setTaskSelectedStudents(students.map((s) => s.id))}
-                  >
-                    Select All Campus ({students.length})
+                    Select All My Students ({myAssignedStudents.length})
                   </button>
                   {taskSelectedStudents.length > 0 && (
                     <button
@@ -1771,7 +1806,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       className="button compact"
                       onClick={() => setTaskSelectedStudents([])}
                     >
-                      Clear
+                      Clear Selection
                     </button>
                   )}
                 </div>
@@ -1779,14 +1814,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
               <input
                 type="search"
-                placeholder="Search students by name or email…"
+                placeholder="Search assigned students by name or email…"
                 value={taskStudentSearch}
                 onChange={(e) => setTaskStudentSearch(e.target.value)}
                 style={{ height: "32px", width: "100%", fontSize: "12px", marginBottom: "8px", padding: "0 10px", borderRadius: "6px", border: "1px solid var(--line)", background: "#fff" }}
               />
 
               <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid var(--line)", borderRadius: "6px", background: "#fff", padding: "4px" }}>
-                {students
+                {myAssignedStudents
                   .filter((s) => {
                     if (!taskStudentSearch.trim()) return true;
                     const q = taskStudentSearch.trim().toLowerCase();
@@ -1794,7 +1829,6 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   })
                   .map((student) => {
                     const isChecked = taskSelectedStudents.includes(student.id);
-                    const isAssignedToMe = myAssignedStudentIds.has(student.id);
                     return (
                       <label
                         key={student.id}
@@ -1827,21 +1861,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                             <small style={{ color: "var(--muted)", display: "block" }}>{student.email}</small>
                           </div>
                         </div>
-                        {isAssignedToMe && (
-                          <span className="badge green" style={{ fontSize: "10px" }}>Assigned to You</span>
-                        )}
+                        <span className="badge green" style={{ fontSize: "10px" }}>Assigned to You</span>
                       </label>
                     );
                   })}
+                {!myAssignedStudents.length && (
+                  <div style={{ padding: "12px", textAlign: "center", color: "var(--muted)", fontSize: "12px" }}>
+                    No students assigned to your profile yet.
+                  </div>
+                )}
               </div>
             </div>
 
             <label className="form-field" style={{ marginTop: "14px" }}>
-              <span>Task Instructions &amp; Requirements *</span>
+              <span>Note / Task Body &amp; Requirements *</span>
               <textarea
                 required
                 rows={4}
-                placeholder="Specify the problem requirements, testing parameters, or guidelines..."
+                placeholder="Enter lecture summary, learning notes, task guidelines, or problem steps..."
                 value={taskInstructions}
                 onChange={(e) => setTaskInstructions(e.target.value)}
               />
@@ -1851,8 +1888,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <button className="button" type="button" onClick={() => setShowTaskForm(false)}>
                 Cancel
               </button>
-              <button className="button primary" disabled={busy}>
-                <Plus size={14} /> {busy ? "Assigning..." : "Assign Task"}
+              <button className="button primary" disabled={busy || taskSelectedStudents.length === 0}>
+                <Plus size={14} /> {busy ? "Assigning..." : taskSelectedStudents.length === 1
+                  ? `Assign Note to ${studentsById[taskSelectedStudents[0]]?.full_name || "Student"}`
+                  : `Assign Separately to ${taskSelectedStudents.length} Students`}
               </button>
             </div>
           </form>
@@ -2938,7 +2977,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     onChange={(e) => setNewMsgStudentId(e.target.value)}
                   >
                     <option value="">Choose student...</option>
-                    {students.map((s) => (
+                    {myAssignedStudents.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.full_name || s.email} ({s.email})
                       </option>
@@ -2974,9 +3013,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 7: Students Directory
   // ----------------------------------------------------
   function renderStudents() {
-    const listToFilter = studentScopeFilter === "assigned"
-      ? students.filter((s) => myAssignedStudentIds.has(s.id))
-      : students;
+    const listToFilter = myAssignedStudents;
 
     const filteredStudents = listToFilter.filter((s) => {
       if (!query.trim()) return true;
@@ -2988,31 +3025,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       <div className="trainer-students-view">
         <div className="page-heading">
           <div>
-            <div className="eyebrow">Student Directory</div>
-            <h1>Students &amp; Cohorts</h1>
+            <div className="eyebrow">Student Roster</div>
+            <h1>My Assigned Students</h1>
             <p>
-              {studentScopeFilter === "assigned"
-                ? `${students.filter((s) => myAssignedStudentIds.has(s.id)).length} students specifically assigned to you.`
-                : `${students.length} approved students active across your training programs.`}
+              {myAssignedStudents.length} student{myAssignedStudents.length === 1 ? "" : "s"} specifically assigned to your mentorship and training programs.
             </p>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "16px" }}>
-          <button
-            type="button"
-            className={`button ${studentScopeFilter === "assigned" ? "primary" : ""}`}
-            onClick={() => setStudentScopeFilter("assigned")}
-          >
-            <Users size={14} /> My Assigned Students ({students.filter((s) => myAssignedStudentIds.has(s.id)).length})
-          </button>
-          <button
-            type="button"
-            className={`button ${studentScopeFilter === "all" ? "primary" : ""}`}
-            onClick={() => setStudentScopeFilter("all")}
-          >
-            All Campus Students ({students.length})
-          </button>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
+            <Users size={14} /> My Assigned Students ({myAssignedStudents.length})
+          </div>
         </div>
 
         <div className="card" style={{ padding: "6px" }}>
@@ -3130,9 +3154,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                               setShowTaskForm(true);
                               setActiveTab("Tasks");
                             }}
-                            title="Assign task to this student"
+                            title={`Add note or task individually to ${student.full_name || "this student"}`}
                           >
-                            <CheckCircle2 size={12} /> Assign Task
+                            <CheckCircle2 size={12} /> Add Note / Task
                           </button>
                           <button
                             className="button compact"
@@ -3715,8 +3739,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     setSelectedStudentDetail(null);
                     setActiveTab("Tasks");
                   }}
+                  title="Add note or task individually to this student"
                 >
-                  <CheckCircle2 size={13} /> Assign Task
+                  <CheckCircle2 size={13} /> Add Note / Task
                 </button>
 
                 <button
