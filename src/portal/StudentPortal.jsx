@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
-  Copy, Download, ExternalLink, Eye, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
+  Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
 } from "lucide-react";
@@ -15,6 +15,7 @@ const STUDENT_NAV = [
   { label: "Assignments", icon: BookOpen },
   { label: "Tests", icon: ClipboardList },
   { label: "Attendance", icon: Clock3 },
+  { label: "Syllabus", icon: FileSpreadsheet },
   { label: "Drive & Files", icon: HardDrive },
   { label: "Courses", icon: GraduationCap },
   { label: "Updates", icon: Mail },
@@ -87,6 +88,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
   const [courseSessionFilter, setCourseSessionFilter] = useState("all");
+  const [syllabusCourseFilter, setSyllabusCourseFilter] = useState("all");
+  const [expandedCourseSyllabus, setExpandedCourseSyllabus] = useState(() => new Set());
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const loadPortal = useCallback(async (forceLoading = false) => {
@@ -190,6 +193,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     const permittedMatIds = new Set((materialRecipientsResult?.data ?? []).map((r) => r.material_id));
     for (const n of (noteResult.data ?? [])) {
       if (n.material_id) permittedMatIds.add(n.material_id);
+    }
+    for (const m of (materialResult.data ?? [])) {
+      if ((m.category || "").toLowerCase() === "syllabus" || (m.title || "").toLowerCase().includes("syllabus")) {
+        permittedMatIds.add(m.id);
+      }
     }
     setPermittedMaterialIds(permittedMatIds);
     setPermittedAssessmentIds(new Set((assessmentRecipientsResult?.data ?? []).map((r) => r.assessment_id)));
@@ -1170,6 +1178,20 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
               </span>
             )}
           </div>
+
+          <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="button compact"
+              onClick={() => {
+                setSyllabusCourseFilter(course.id);
+                navigate("Syllabus");
+              }}
+              title={`View syllabus and course roadmap for ${course.name}`}
+            >
+              <FileSpreadsheet size={13} /> View Syllabus
+            </button>
+          </div>
         </article>
       );
     }
@@ -1263,6 +1285,401 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             <GraduationCap size={22} />
             <strong>No courses found</strong>
             <span>Your enrolled courses will appear here.</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderSyllabus() {
+    // Only display courses the student is actually enrolled in (fallback to all if no enrollments recorded yet)
+    const activeCourses = enrolledCourseIds.size > 0
+      ? courses.filter((c) => enrolledCourseIds.has(c.id))
+      : courses;
+
+    const allSyllabusMaterials = materials.filter((m) => {
+      const cat = (m.category || "").toLowerCase();
+      const title = (m.title || "").toLowerCase();
+      return cat === "syllabus" || title.includes("syllabus");
+    });
+
+    const filtered = activeCourses.filter((course) => {
+      if (syllabusCourseFilter !== "all" && course.id !== syllabusCourseFilter) {
+        return false;
+      }
+      if (courseSessionFilter === "it") {
+        const isIt = (course.department || "").toUpperCase() === "IT" ||
+                     (course.code || "").toUpperCase().startsWith("TMIT") ||
+                     /JAVA|PYTHON|REACT|WEB|SQL|CLOUD|NODE|FULL STACK/i.test(course.name || "");
+        if (!isIt) return false;
+      } else if (courseSessionFilter === "sap") {
+        const isSap = (course.department || "").toUpperCase() === "SAP" ||
+                      (course.code || "").toUpperCase().startsWith("TMSAP") ||
+                      /SAP|FICO|MM|SD|ABAP|HANA/i.test(course.name || "");
+        if (!isSap) return false;
+      }
+
+      const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.description || ""}`.toLowerCase();
+      const queryMatch = search.includes(query.trim().toLowerCase());
+      const hasMatchingDoc = allSyllabusMaterials.some(
+        (m) => m.course_id === course.id && `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase())
+      );
+      return queryMatch || hasMatchingDoc;
+    });
+
+    const generalSyllabi = allSyllabusMaterials.filter((m) => {
+      if (m.course_id && coursesById[m.course_id]) return false;
+      if (!query.trim()) return true;
+      return `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+    });
+
+    function renderSyllabusCard(course) {
+      const courseSyllabi = allSyllabusMaterials.filter((m) => m.course_id === course.id);
+      const isExpanded = expandedCourseSyllabus.has(course.id);
+
+      return (
+        <article className="card interactive-course-card student-course-card" key={course.id} style={{ display: "flex", flexDirection: "column", gap: "14px", padding: "20px" }}>
+          <div className="course-card-top" style={{ marginBottom: 0 }}>
+            <div className="course-badges-group">
+              <span className="course-code-badge" style={{ fontWeight: 700 }}>{course.code}</span>
+              {course.department && <span className="course-dept-badge">{course.department}</span>}
+              <span className="badge-view-only" style={{ background: "#f0fdf4", color: "#166534", fontSize: "11px", fontWeight: 600 }}>
+                <FileSpreadsheet size={11} /> Syllabus
+              </span>
+            </div>
+            <span className="portal-status submitted" style={{ fontSize: "11px", padding: "3px 8px" }}>
+              Enrolled
+            </span>
+          </div>
+
+          <div>
+            <h3 className="course-card-title" style={{ fontSize: "18px", marginBottom: "6px" }}>{course.name}</h3>
+            <div className="course-meta-chips" style={{ marginTop: "4px" }}>
+              {course.instructor && (
+                <span className="course-meta-chip" title="Faculty Instructor">
+                  <GraduationCap size={13} /> {course.instructor}
+                </span>
+              )}
+              {course.schedule && (
+                <span className="course-meta-chip" title="Weekly Schedule">
+                  <Clock3 size={13} /> {course.schedule}
+                </span>
+              )}
+              {course.room && (
+                <span className="course-meta-chip" title="Classroom / Lab">
+                  <MapPin size={13} /> {course.room}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Curriculum Outline Box */}
+          <div style={{
+            background: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: "10px",
+            padding: "14px 16px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 700, fontSize: "13px", color: "var(--ink)" }}>
+                <BookOpen size={14} style={{ color: "var(--blue)" }} />
+                <span>Curriculum &amp; Course Roadmap</span>
+              </div>
+              {course.description && course.description.length > 250 && (
+                <button
+                  type="button"
+                  className="text-link"
+                  style={{ fontSize: "12px", cursor: "pointer", background: "none", border: "none", color: "var(--blue)" }}
+                  onClick={() => {
+                    setExpandedCourseSyllabus((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(course.id)) next.delete(course.id);
+                      else next.add(course.id);
+                      return next;
+                    });
+                  }}
+                >
+                  {isExpanded ? "Show Less" : "Expand Full Outline"}
+                </button>
+              )}
+            </div>
+
+            {course.description ? (
+              <div style={{
+                fontSize: "13px",
+                lineHeight: "1.6",
+                color: "#334155",
+                whiteSpace: "pre-line",
+                maxHeight: isExpanded ? "none" : "180px",
+                overflow: isExpanded ? "visible" : "hidden",
+                position: "relative"
+              }}>
+                {course.description}
+                {!isExpanded && course.description.length > 250 && (
+                  <div style={{
+                    position: "absolute",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: "40px",
+                    background: "linear-gradient(transparent, #f8fafc)",
+                    pointerEvents: "none"
+                  }} />
+                )}
+              </div>
+            ) : (
+              <p style={{ margin: 0, fontSize: "13px", color: "var(--muted)", fontStyle: "italic" }}>
+                Curriculum outline and topic schedule will be updated shortly by your instructor.
+              </p>
+            )}
+          </div>
+
+          {/* Attached Syllabus Documents */}
+          {courseSyllabi.length > 0 ? (
+            <div style={{ marginTop: "2px" }}>
+              <div style={{
+                fontSize: "11.5px",
+                fontWeight: 700,
+                color: "var(--muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+                marginBottom: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px"
+              }}>
+                <FileSpreadsheet size={13} /> Official Course Syllabi &amp; Handouts ({courseSyllabi.length})
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {courseSyllabi.map((mat) => (
+                  <div
+                    key={mat.id}
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                      padding: "12px 14px",
+                      background: "#f0fdf4",
+                      border: "1px solid #bbf7d0",
+                      borderRadius: "8px"
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: "200px" }}>
+                      <strong style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", color: "#166534" }}>
+                        <FileSpreadsheet size={15} />
+                        {mat.title}
+                      </strong>
+                      {mat.description && (
+                        <p style={{ margin: "3px 0 0", fontSize: "12px", color: "#15803d", lineHeight: "1.4" }}>
+                          {mat.description}
+                        </p>
+                      )}
+                      <small style={{ color: "#166534", opacity: 0.85, fontSize: "11px", display: "block", marginTop: "4px" }}>
+                        Uploaded {dateLabel(mat.created_at)} {mat.file_size ? `· ${(mat.file_size / 1024).toFixed(0)} KB` : ""}
+                      </small>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="button primary compact"
+                        style={{ background: "#16a34a", borderColor: "#15803d", minHeight: "32px", fontSize: "12px" }}
+                        onClick={() =>
+                          openSecureViewer({
+                            title: mat.title,
+                            subtitle: `${course.code} · Official Syllabus`,
+                            url: mat.drive_url,
+                            filePath: mat.file_path,
+                            materialId: mat.id,
+                          })
+                        }
+                      >
+                        <Eye size={13} /> View Syllabus
+                      </button>
+
+                      {mat.drive_url && (
+                        <a
+                          className="button compact"
+                          href={mat.drive_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open Google Drive document"
+                          style={{ borderColor: "#86efac", color: "#166534", minHeight: "32px", fontSize: "12px" }}
+                        >
+                          <ExternalLink size={13} /> Google Doc
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 12px",
+              background: "#fafafa",
+              border: "1px dashed #e2e8f0",
+              borderRadius: "6px",
+              fontSize: "12px",
+              color: "var(--muted)"
+            }}>
+              <CheckCircle2 size={13} style={{ color: "#16a34a", flexShrink: 0 }} />
+              <span>Syllabus curriculum verified. Attached document handouts will appear here when posted.</span>
+            </div>
+          )}
+        </article>
+      );
+    }
+
+    return (
+      <div className="course-sessions-container">
+        {/* Session Filter Tabs & Course Dropdown */}
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "16px" }}>
+          <div className="course-session-tabs" style={{ marginBottom: 0 }}>
+            <button
+              type="button"
+              className={`course-session-tab ${courseSessionFilter === "all" && syllabusCourseFilter === "all" ? "active" : ""}`}
+              onClick={() => {
+                setCourseSessionFilter("all");
+                setSyllabusCourseFilter("all");
+              }}
+            >
+              All Enrolled ({activeCourses.length})
+            </button>
+            <button
+              type="button"
+              className={`course-session-tab ${courseSessionFilter === "it" && syllabusCourseFilter === "all" ? "active" : ""}`}
+              onClick={() => {
+                setCourseSessionFilter("it");
+                setSyllabusCourseFilter("all");
+              }}
+            >
+              🖥️ IT Courses
+            </button>
+            <button
+              type="button"
+              className={`course-session-tab ${courseSessionFilter === "sap" && syllabusCourseFilter === "all" ? "active" : ""}`}
+              onClick={() => {
+                setCourseSessionFilter("sap");
+                setSyllabusCourseFilter("all");
+              }}
+            >
+              💼 SAP Modules
+            </button>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <label htmlFor="syllabus-course-select" style={{ fontSize: "12px", fontWeight: 600, color: "var(--muted)" }}>Filter Course:</label>
+            <select
+              id="syllabus-course-select"
+              className="input-select"
+              style={{ fontSize: "12px", padding: "6px 12px", borderRadius: "8px" }}
+              value={syllabusCourseFilter}
+              onChange={(e) => {
+                setSyllabusCourseFilter(e.target.value);
+                setCourseSessionFilter("all");
+              }}
+            >
+              <option value="all">All Enrolled Courses</option>
+              {activeCourses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} · {c.name}
+                </option>
+              ))}
+            </select>
+            {syllabusCourseFilter !== "all" && (
+              <button
+                type="button"
+                className="button compact"
+                style={{ fontSize: "11px", padding: "4px 8px" }}
+                onClick={() => setSyllabusCourseFilter("all")}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Syllabi Grid */}
+        {filtered.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {filtered.map(renderSyllabusCard)}
+          </div>
+        ) : (
+          <div className="card portal-empty">
+            <FileSpreadsheet size={24} />
+            <strong>No course syllabi found</strong>
+            <span>{query ? `No syllabi matched "${query}". Try searching a different keyword.` : "Your enrolled course syllabi will appear here once registered."}</span>
+          </div>
+        )}
+
+        {/* Campus-wide General Syllabi */}
+        {generalSyllabi.length > 0 && (
+          <div className="course-session-block" style={{ marginTop: "32px" }}>
+            <div className="course-session-heading">
+              <div className="course-session-title">
+                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <FileSpreadsheet size={16} /> Campus-Wide Academic Syllabi &amp; Calendars
+                </span>
+                <span className="course-session-pill">{generalSyllabi.length} Document{generalSyllabi.length > 1 ? "s" : ""}</span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px" }}>
+              {generalSyllabi.map((mat) => (
+                <article className="card panel" key={mat.id} style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+                      <span className="badge blue" style={{ fontSize: "11px", fontWeight: 700 }}>
+                        Campus-Wide
+                      </span>
+                      <span className="badge-view-only" style={{ background: "#f0fdf4", color: "#166534", fontSize: "11px" }}>
+                        Syllabus
+                      </span>
+                    </div>
+
+                    <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "0 0 6px", color: "var(--ink)" }}>{mat.title}</h3>
+                    <p style={{ fontSize: "13px", color: "var(--muted)", margin: "0 0 12px", lineHeight: 1.4 }}>
+                      {mat.description || "General campus academic syllabus and course schedule."}
+                    </p>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                    <button
+                      className="button primary compact"
+                      type="button"
+                      onClick={() =>
+                        openSecureViewer({
+                          title: mat.title,
+                          subtitle: "Campus-Wide Syllabus",
+                          url: mat.drive_url,
+                          filePath: mat.file_path,
+                          materialId: mat.id,
+                        })
+                      }
+                    >
+                      <Eye size={13} /> View Syllabus
+                    </button>
+                    {mat.drive_url && (
+                      <a
+                        className="button compact"
+                        href={mat.drive_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open in new Google tab"
+                      >
+                        <ExternalLink size={13} /> Google Doc
+                      </a>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -1625,9 +2042,15 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           {assignments.slice(0, 3).map((assignment) => <div className="overview-work-item" key={assignment.id}><span className="portal-item-icon assignment"><BookOpen size={15} /></span><span><strong>{assignment.title}</strong><small>Due {dateLabel(assignment.due_at)}</small></span><span className={`portal-status ${submissionByAssignment.has(assignment.id) ? "submitted" : isPast(assignment.due_at) ? "overdue" : "pending"}`}>{submissionByAssignment.has(assignment.id) ? "Submitted" : isPast(assignment.due_at) ? "Past due" : "To do"}</span></div>)}
           {!assignments.length && <div className="portal-empty compact"><BookOpen size={18} /><span>No assignments are published yet.</span></div>}
         </article>
-        <article className="card panel"><div className="panel-heading"><div><h2>Continue learning</h2><p>Pick up where you left off</p></div></div>
-          {allowedTests.slice(0, 2).map((test) => <div className="overview-test" key={test.id}><span className="portal-item-icon test"><ClipboardList size={15} /></span><span><strong>{test.title}</strong><small>{attemptByTest.has(test.id) ? (test.show_marks ? `Score ${attemptByTest.get(test.id).score}/${attemptByTest.get(test.id).max_score}` : "Completed") : `Due ${dateLabel(test.due_at)}`}</small></span><button className="quiet-icon" type="button" aria-label={`Open ${test.title}`} onClick={() => { setSelectedTest(test.id); navigate("Tests"); }}><ArrowRight size={15} /></button></div>)}
-          {!allowedTests.length && <div className="portal-empty compact"><ClipboardList size={18} /><span>No tests available yet.</span></div>}
+        <article className="card panel"><div className="panel-heading"><div><h2>Course Syllabus &amp; Roadmaps</h2><p>Access outlines and official syllabi</p></div><button className="text-link" onClick={() => navigate("Syllabus")}>All syllabi <ArrowRight size={13} /></button></div>
+          {(enrolledCourseIds.size > 0 ? courses.filter((c) => enrolledCourseIds.has(c.id)) : courses).slice(0, 3).map((course) => (
+            <div className="overview-work-item" key={course.id} style={{ cursor: "pointer" }} onClick={() => { setSyllabusCourseFilter(course.id); navigate("Syllabus"); }}>
+              <span className="portal-item-icon" style={{ background: "#f0fdf4", color: "#166534" }}><FileSpreadsheet size={15} /></span>
+              <span><strong>{course.code} · {course.name}</strong><small>{course.instructor ? `Faculty: ${course.instructor}` : "Syllabus available"}</small></span>
+              <button className="quiet-icon" type="button" aria-label={`Open syllabus for ${course.name}`}><ArrowRight size={15} /></button>
+            </div>
+          ))}
+          {!courses.length && <div className="portal-empty compact"><FileSpreadsheet size={18} /><span>No course syllabi available yet.</span></div>}
         </article>
       </section>
     </>;
@@ -1639,6 +2062,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     Assignments: ["Coursework", "Assignments", "Read the instructions, then submit written work or an attachment."],
     Tests: ["Coursework", "Tests", "Complete your online tests and see your score immediately."],
     Courses: ["My campus", "Courses", "Courses your administrator has enrolled you in."],
+    Syllabus: ["Academic syllabus", "Course Syllabus", "Access comprehensive course outlines, syllabus documents, and learning roadmaps."],
     Tasks: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
     Notes: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
     Attendance: ["My campus", "Attendance", "Your recorded attendance."],
@@ -1666,7 +2090,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         <div className="page-heading"><div><div className="eyebrow">{heading[0]}</div><h1>{heading[1]}</h1><p>{heading[2]}</p></div>{activeView === "Messages" && <button className="button primary" onClick={() => { setSelectedConversation(""); setNewSubject(""); }}><Plus size={14} />New message</button>}</div>
         {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
         {notice && <div className="portal-alert success" role="status"><CheckCircle2 size={15} />{notice}<button type="button" onClick={() => setNotice("")}>Dismiss</button></div>}
-        {loading ? <div className="card portal-loading">Loading your secure coursework…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
+        {loading ? <div className="card portal-loading">Loading your secure coursework…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Syllabus" ? renderSyllabus() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
       </div>
     </main>
 

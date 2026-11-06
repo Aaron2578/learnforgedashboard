@@ -71,3 +71,4 @@ create policy "Trainers manage attendance records"
 grant select, insert, update, delete on public.attendance_records to authenticated;
 
 commit;
+
