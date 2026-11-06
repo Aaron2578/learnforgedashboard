@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight, BookOpen, Check, Clock3, Copy, Database, ExternalLink, Eye,
+  ArrowRight, BookOpen, Check, CheckCircle2, Clock3, Copy, Database, ExternalLink, Eye,
   FileSpreadsheet, FileText, GraduationCap, HardDrive, KeyRound, Link2, Mail, MapPin,
   Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Users, X
 } from "lucide-react";
@@ -565,6 +565,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       status: "assigned",
       category: taskCategory,
       due_at: dueAt,
+      drive_url: noteDriveUrl ? noteDriveUrl.trim() : null,
       created_by: user.id,
     }));
 
@@ -577,6 +578,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         course_id: courseId,
         title,
         body,
+        drive_url: noteDriveUrl ? noteDriveUrl.trim() : null,
         created_by: user.id,
       }));
       const retryResult = await supabase.from("student_notes").insert(payloadsFallback);
@@ -1094,7 +1096,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       </article>
     );
   }
-  const [eyebrow, title, description] = headings[view];
+  const [eyebrow, title, description] = headings[view] || ["Workspace", view || "Management", "Manage campus records."];
 
   return <div className="admin-workspace">
     <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="heading-actions">
@@ -1535,6 +1537,16 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         <label className="form-field" style={{ marginTop: "12px" }}>
           <span>Due Date / Deadline (Optional)</span>
           <input name="due_at" type="datetime-local" />
+        </label>
+
+        <label className="form-field" style={{ marginTop: "12px" }}>
+          <span>Google Drive Resource Link (Optional)</span>
+          <input
+            type="url"
+            placeholder="https://drive.google.com/file/d/... or Google Drive folder"
+            value={noteDriveUrl}
+            onChange={(e) => setNoteDriveUrl(e.target.value)}
+          />
         </label>
 
         <label className="form-field" style={{ marginTop: "14px" }}>
