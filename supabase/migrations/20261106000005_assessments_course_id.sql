@@ -11,3 +11,4 @@ set course_id = '8b0a5f6b-7cea-4bc3-aebe-731324624a7f',
 where lower(title) like '%sap%';
 
 commit;
+

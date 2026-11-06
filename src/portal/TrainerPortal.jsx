@@ -1260,14 +1260,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
     setSendingMessage(true);
     try {
-      const { error: sendError } = await supabase.from("messages").insert({
+      const { data: sentMsg, error: sendError } = await supabase.from("messages").insert({
         conversation_id: selectedConversationId,
         sender_id: user.id,
         body: chatMessageText.trim(),
-      });
+      }).select().single();
 
       if (sendError) throw sendError;
+      if (sentMsg) {
+        setMessages((prev) => (prev.some((m) => m.id === sentMsg.id) ? prev : [...prev, sentMsg]));
+      }
       setChatMessageText("");
+      setTimeout(() => {
+        if (chatScrollRef.current) {
+          chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+        }
+      }, 50);
     } catch (err) {
       setError("Failed to send message: " + err.message);
     } finally {

@@ -164,9 +164,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     ]);
     const failed = [assignmentResult, submissionResult, testResult, attemptResult, conversationResult, courseResult, noteResult, attendanceResult, notificationResult, materialResult, requestResult].find((result) => result.error);
     if (failed) {
-      setError(failed.error.message);
-      setLoading(false);
-      return;
+      console.warn("Portal coursework query warning:", failed.error);
     }
 
     const loadedTests = testResult.data ?? [];
@@ -179,12 +177,6 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         ? supabase.from("messages").select("id, conversation_id, sender_id, body, read_at, created_at").in("conversation_id", loadedConversations.map((conversation) => conversation.id)).order("created_at")
         : Promise.resolve({ data: [], error: null }),
     ]);
-    const secondaryFailure = [questionResult, messageResult].find((result) => result.error);
-    if (secondaryFailure) {
-      setError(secondaryFailure.error.message);
-      setLoading(false);
-      return;
-    }
 
     setAssignments(assignmentResult.data ?? []);
     setSubmissions(submissionResult.data ?? []);
@@ -632,15 +624,19 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         return;
       }
       conversationId = conversation.id;
+      setConversations((prev) => [conversation, ...prev]);
     }
-    const { error: messageError } = await supabase.from("messages").insert({
+    const { data: sentMsg, error: messageError } = await supabase.from("messages").insert({
       conversation_id: conversationId,
       sender_id: user.id,
       body,
-    });
+    }).select("id, conversation_id, sender_id, body, read_at, created_at").single();
     if (messageError) {
       setError(messageError.message);
     } else {
+      if (sentMsg) {
+        setMessages((prev) => (prev.some((m) => m.id === sentMsg.id) ? prev : [...prev, sentMsg]));
+      }
       setMessageDraft("");
       setNewSubject("");
       setSelectedConversation(conversationId);

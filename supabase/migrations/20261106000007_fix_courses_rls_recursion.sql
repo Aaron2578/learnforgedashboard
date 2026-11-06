@@ -444,3 +444,4 @@ grant select on public.courses to anon;
 grant select on public.course_enrollments to anon;
 
 commit;
+

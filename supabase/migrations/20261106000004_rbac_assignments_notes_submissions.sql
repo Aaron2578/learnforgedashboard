@@ -233,3 +233,4 @@ create policy "Trainers update and delete student notes"
   );
 
 commit;
+
