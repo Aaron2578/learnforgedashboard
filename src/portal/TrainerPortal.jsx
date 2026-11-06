@@ -315,14 +315,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const coursesById = useMemo(() => Object.fromEntries(courses.map((c) => [c.id, c])), [courses]);
   const studentsById = useMemo(() => Object.fromEntries(students.map((s) => [s.id, s])), [students]);
 
-  const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : user?.id;
+  const activeTrainerId = isAdminPreview ? (selectedTrainerId || trainersList[0]?.id || user?.id) : (user?.id || profile?.id);
 
   const activeTrainer = useMemo(() => {
+    if (isAdminPreview) {
+      return (
+        trainersList.find((t) => t.id === activeTrainerId) ||
+        (trainersList.length > 0 ? trainersList[0] : null)
+      );
+    }
     return (
+      (profile && profile.id === activeTrainerId ? profile : null) ||
       trainersList.find((t) => t.id === activeTrainerId) ||
+      profile ||
       (user ? { id: user.id, email: user.email, full_name: user.user_metadata?.full_name } : null)
     );
-  }, [trainersList, activeTrainerId, user]);
+  }, [isAdminPreview, trainersList, activeTrainerId, profile, user]);
 
   // Courses strictly taught by this trainer
   const myTrainerCourses = useMemo(() => {
@@ -331,14 +339,45 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     const trainerEmail = (activeTrainer?.email || "").toLowerCase().trim();
 
     return courses.filter((c) => {
-      if (c.trainer_id && c.trainer_id === activeTrainerId) return true;
+      // 1. Explicit trainer_id match
+      if (c.trainer_id) {
+        return c.trainer_id === activeTrainerId;
+      }
+      // 2. Instructor text match
       const inst = (c.instructor || "").toLowerCase().trim();
-      if (inst && (inst === trainerName || inst === trainerEmail)) return true;
+      if (!inst) return false;
+      if (trainerName && (inst === trainerName || inst.includes(trainerName) || trainerName.includes(inst))) return true;
+      if (trainerEmail && (inst === trainerEmail || inst.includes(trainerEmail))) return true;
       return false;
     });
   }, [courses, activeTrainerId, activeTrainer]);
 
   const myTrainerCourseIds = useMemo(() => new Set(myTrainerCourses.map((c) => c.id)), [myTrainerCourses]);
+
+  // Synchronize course dropdown selections when active trainer changes
+  useEffect(() => {
+    if (attendanceCourseId !== "all" && !myTrainerCourseIds.has(attendanceCourseId)) {
+      setAttendanceCourseId("all");
+    }
+  }, [attendanceCourseId, myTrainerCourseIds]);
+
+  useEffect(() => {
+    if (taskCourseId && !myTrainerCourseIds.has(taskCourseId)) {
+      setTaskCourseId("");
+    }
+  }, [taskCourseId, myTrainerCourseIds]);
+
+  useEffect(() => {
+    if (syllabusCourseId && !myTrainerCourseIds.has(syllabusCourseId)) {
+      setSyllabusCourseId(myTrainerCourses[0]?.id || "");
+    }
+  }, [syllabusCourseId, myTrainerCourseIds, myTrainerCourses]);
+
+  useEffect(() => {
+    if (matCourseId && !myTrainerCourseIds.has(matCourseId)) {
+      setMatCourseId("");
+    }
+  }, [matCourseId, myTrainerCourseIds]);
 
   // Students strictly assigned to this trainer (or in their courses, without conflicting trainer)
   const myAssignedStudentIds = useMemo(() => {
@@ -1064,7 +1103,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {myTrainerCourses.slice(0, 5).map((course) => {
+              {myTrainerCourses.map((course) => {
                 const enrolledCount = enrollments.filter((e) => e.course_id === course.id && myAssignedStudentIds.has(e.student_id)).length;
                 return (
                   <div
@@ -1234,7 +1273,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px" }}>
             {myAssignedStudents.map((student) => {
               const studentCourses = enrollments
-                .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
+                .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
                 .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
               const todayAtt = attendanceRecords.find(
@@ -1521,7 +1560,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   const status = attendanceState[student.id]?.status || null;
                   const note = attendanceState[student.id]?.note || "";
                   const studentCourses = enrollments
-                    .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
+                    .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
 
                   return (
@@ -3117,7 +3156,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <tbody>
                 {filteredStudents.map((student) => {
                   const studentCourses = enrollments
-                    .filter((e) => e.student_id === student.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
+                    .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
                   const isAssigned = myAssignedStudentIds.has(student.id);
 
@@ -3702,12 +3741,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                   <strong style={{ fontSize: "13px", color: "var(--ink)" }}>
-                    Enrolled Courses ({enrollments.filter((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id))).length})
+                    Enrolled Courses ({enrollments.filter((e) => e.student_id === selectedStudentDetail.id && myTrainerCourseIds.has(e.course_id)).length})
                   </strong>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   {enrollments
-                    .filter((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id)))
+                    .filter((e) => e.student_id === selectedStudentDetail.id && myTrainerCourseIds.has(e.course_id))
                     .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" })
                     .map((c) => (
                       <div key={c.id} style={{ padding: "8px 12px", background: "#f1f5f9", borderRadius: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -3730,7 +3769,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                         </div>
                       </div>
                     ))}
-                  {!enrollments.some((e) => e.student_id === selectedStudentDetail.id && (myTrainerCourseIds.size === 0 || myTrainerCourseIds.has(e.course_id))) && (
+                  {!enrollments.some((e) => e.student_id === selectedStudentDetail.id && myTrainerCourseIds.has(e.course_id)) && (
                     <span style={{ fontSize: "13px", color: "var(--muted)" }}>Not enrolled in any of your courses yet.</span>
                   )}
                 </div>
