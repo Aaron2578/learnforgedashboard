@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
   Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
-  Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
+  Shield, ShieldCheck, Sparkles, Trash2, Unlock, Upload, Users, X,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
@@ -33,9 +33,15 @@ const ALLOWED_FILE_TYPES = new Set([
 ]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-function dateLabel(value) {
-  if (!value) return "No deadline";
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+function dateLabel(value, fallback = "No deadline") {
+  if (!value) return fallback;
+  try {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return fallback;
+    return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(d);
+  } catch {
+    return fallback;
+  }
 }
 
 function isPast(value) {
@@ -673,7 +679,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       const submissionPayload = {
         assignment_id: assignment.id,
         student_id: submissionStudentId,
-        answer_text: answerText || (subMode === "link" ? linkUrl : ""),
+        answer_text: answerText || (subMode === "link" ? linkUrl : "") || (uploadedPath ? "(File attachment)" : "Submitted coursework"),
         submission_type: subMode === "link" ? "Link" : "File",
         submission_link: subMode === "link" ? linkUrl : (previous?.submission_link || null),
         file_path: uploadedPath || (subMode === "file" ? previous?.file_path : null),
@@ -711,9 +717,14 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         await supabase.storage.from("assignment-files").remove([previous.file_path]).catch(() => {});
       }
       setSubmissionDraft(null);
-      event.currentTarget.reset();
+      if (event?.currentTarget?.reset) event.currentTarget.reset();
       setNotice("Work submitted successfully! Assignment status automatically changed to Completed.");
-      await loadPortal();
+      // Optimistic instant state update to prevent any render lag or blank screen
+      setSubmissions((prev) => {
+        const filtered = prev.filter((s) => !(s.assignment_id === assignment.id && s.student_id === submissionStudentId));
+        return [{ id: previous?.id || crypto.randomUUID(), ...submissionPayload }, ...filtered];
+      });
+      await loadPortal(false);
     } catch (requestError) {
       setError(requestError.message || "Your assignment could not be submitted.");
     } finally {
@@ -746,8 +757,22 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       let cleanPath = submission.file_path;
       if (cleanPath.startsWith("assignment-files:")) cleanPath = cleanPath.replace("assignment-files:", "");
       await supabase.storage.from("assignment-files").remove([cleanPath]).catch(() => {});
-      await supabase.from("assignment_submissions").update({ file_path: null }).eq("id", submission.id);
-      setNotice("Uploaded file removed.");
+
+      const hasOtherContent = Boolean(submission.submission_link || (submission.answer_text && submission.answer_text.trim() && submission.answer_text !== "(File attachment)"));
+      if (!hasOtherContent && !submission.graded_at) {
+        // Completely remove submission row if there is no other response content, resetting assignment back to Pending
+        await supabase.from("assignment_submissions").delete().eq("id", submission.id);
+        setSubmissions((prev) => prev.filter((s) => s.id !== submission.id));
+        setNotice("Uploaded file and submission removed. You can submit again anytime.");
+      } else {
+        const updatePayload = {
+          file_path: null,
+          answer_text: hasOtherContent ? submission.answer_text : "(File removed)",
+        };
+        await supabase.from("assignment_submissions").update(updatePayload).eq("id", submission.id);
+        setSubmissions((prev) => prev.map((s) => (s.id === submission.id ? { ...s, ...updatePayload } : s)));
+        setNotice("Uploaded file removed.");
+      }
       await loadPortal(false);
     } catch (err) {
       setError("Failed to remove file: " + err.message);
@@ -852,13 +877,13 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <CheckCircle2 size={16} style={{ color: "#16a34a" }} />
                       <span style={{ fontSize: "13px", fontWeight: 700, color: "#166534" }}>
-                        Status: Completed · Submitted {dateLabel(submission.submitted_at)}
+                        Status: Completed · Submitted {submission?.submitted_at ? dateLabel(submission.submitted_at, "Recently") : "Recently"}
                       </span>
                       <span className="badge blue" style={{ fontSize: "10.5px" }}>
                         {submission.submission_type || (submission.submission_link ? "URL Link" : "File Upload")}
                       </span>
                     </div>
-                    {submission.grade !== null && (
+                    {submission.grade !== null && submission.grade !== undefined && (
                       <span className="badge green" style={{ fontSize: "12px", fontWeight: 800 }}>
                         Grade: {submission.grade} / {assignment.total_marks || 100} pts
                       </span>
@@ -874,7 +899,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                         className="button compact"
                         style={{ background: "#ffffff", borderColor: "#93c5fd", color: "#1d4ed8", display: "inline-flex", alignItems: "center", gap: "5px", textDecoration: "none" }}
                       >
-                        <ExternalLink size={13} /> Open Submitted URL ({submission.submission_link.slice(0, 32)}...)
+                        <ExternalLink size={13} /> Open Submitted URL ({String(submission.submission_link || "").slice(0, 32)}...)
                       </a>
                     )}
                     {submission.file_path && (

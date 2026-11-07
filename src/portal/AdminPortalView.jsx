@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ArrowRight, Award, BookOpen, CalendarClock, CheckCircle2, ClipboardList,
-  Clock, Download, ExternalLink, Eye, EyeOff, FileText, Mail, MapPin, MessageSquare,
+  Clock, Clock3, Download, ExternalLink, Eye, EyeOff, FileText, Mail, MapPin, MessageSquare,
   Pencil, Plus, Send, Trash2, Users, X,
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
@@ -9,9 +9,15 @@ import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditAssignmentModal from "../components/EditAssignmentModal";
 import EditTestModal from "../components/EditTestModal";
 
-function prettyDate(value) {
-  if (!value) return "No deadline";
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+function prettyDate(value, fallback = "No deadline") {
+  if (!value) return fallback;
+  try {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return fallback;
+    return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(d);
+  } catch {
+    return fallback;
+  }
 }
 
 function StudentRecipients({ students, selected, onChange }) {
@@ -416,16 +422,25 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       if (cleanPath.startsWith("assignment-files:")) {
         cleanPath = cleanPath.replace("assignment-files:", "");
       }
-      const { error: storageErr } = await supabase.storage.from("assignment-files").remove([cleanPath]);
-      if (storageErr) {
+      try {
+        await supabase.storage.from("assignment-files").remove([cleanPath]);
+      } catch (storageErr) {
         console.warn("Storage delete warning:", storageErr);
       }
+      const hasOtherContent = Boolean(submission.submission_link || (submission.answer_text && submission.answer_text.trim()));
+      const updatePayload = {
+        file_path: null,
+        answer_text: hasOtherContent ? submission.answer_text : "(File removed by administrator)",
+      };
       const { error: dbErr } = await supabase
         .from("assignment_submissions")
-        .update({ file_path: null })
+        .update(updatePayload)
         .eq("id", submission.id);
 
       if (dbErr) throw dbErr;
+      setSubmissions((prev) =>
+        prev.map((s) => (s.id === submission.id ? { ...s, ...updatePayload } : s))
+      );
       onToast("Student uploaded file deleted manually.");
       await loadAdminData();
     } catch (err) {
@@ -436,12 +451,20 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
   }
 
   async function deleteAssignment(assignment) {
+    if (!assignment) return;
     if (!window.confirm(`Delete “${assignment.title}” and its submissions? This cannot be undone.`)) return;
-    const { error: deleteError } = await supabase.from("assignments").delete().eq("id", assignment.id);
-    if (deleteError) setError(deleteError.message);
-    else {
+    setBusy(true);
+    try {
+      const { error: deleteError } = await supabase.from("assignments").delete().eq("id", assignment.id);
+      if (deleteError) throw deleteError;
+      setAssignments((prev) => prev.filter((a) => a.id !== assignment.id));
+      if (editingAssignment?.id === assignment.id) setEditingAssignment(null);
       onToast("Assignment deleted.");
       await loadAdminData();
+    } catch (err) {
+      setError(`Could not delete assignment: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -635,7 +658,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
             return <div className="admin-submission" key={student.id}>
               <div className="admin-student"><span className="student-avatar">{(student?.full_name || student?.email || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span><strong>{student?.full_name || "Student"}</strong><small>{student?.email || "Student account"}</small></span></div>
               {submission ? (
-                <span className="submission-time" style={{ color: "#166534", fontWeight: 600 }}>Submitted {prettyDate(submission.submitted_at)}</span>
+                <span className="submission-time" style={{ color: "#166534", fontWeight: 600 }}>Submitted {submission.submitted_at ? prettyDate(submission.submitted_at, "Recently") : "Recently"}</span>
               ) : (
                 <span className="badge amber" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
                   <Clock3 size={11} /> Pending submission / In-Class

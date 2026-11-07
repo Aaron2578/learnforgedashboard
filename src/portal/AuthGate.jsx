@@ -4,6 +4,7 @@ import App from "../App.jsx";
 import { supabase } from "../lib/supabase.js";
 import StudentPortal from "./StudentPortal.jsx";
 import TrainerPortal from "./TrainerPortal.jsx";
+import ErrorBoundary from "../components/ErrorBoundary.jsx";
 
 function AuthScreen() {
   const [mode, setMode] = useState("sign-in");
@@ -242,7 +243,11 @@ export default function AuthGate() {
         </main>
       );
     }
-    return <StudentPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
+    return (
+      <ErrorBoundary fallbackTitle="Student Portal Notice">
+        <StudentPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />
+      </ErrorBoundary>
+    );
   }
   if (profile.role === "trainer") {
     if (!profile.is_approved) {
@@ -268,10 +273,18 @@ export default function AuthGate() {
         </main>
       );
     }
-    return <TrainerPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
+    return (
+      <ErrorBoundary fallbackTitle="Trainer Portal Notice">
+        <TrainerPortal user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />
+      </ErrorBoundary>
+    );
   }
   if (profile.role === "superuser" || profile.role === "admin") {
-    return <App user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />;
+    return (
+      <ErrorBoundary fallbackTitle="Admin Portal Notice">
+        <App user={session.user} profile={profile} supabase={supabase} onSignOut={signOut} />
+      </ErrorBoundary>
+    );
   }
   return <main className="auth-page"><section className="auth-card"><h1>Account access is not available</h1><p>Your account has no permitted portal role.</p><button className="button" onClick={signOut}>Sign out</button></section></main>;
 }

@@ -77,6 +77,28 @@ function localDate(d = new Date()) {
   return new Date(d.getTime() - offset * 60_000).toISOString().slice(0, 10);
 }
 
+function formatDateTime(val, fallback = "Submitted") {
+  if (!val) return fallback;
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return fallback;
+    return new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(d);
+  } catch {
+    return fallback;
+  }
+}
+
+function formatDateMedium(val, fallback = "Open deadline") {
+  if (!val) return fallback;
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return fallback;
+    return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(d);
+  } catch {
+    return fallback;
+  }
+}
+
 export default function TrainerPortal({ user, profile, supabase, onSignOut, onExitToAdmin, isAdminPreview }) {
   const [activeTab, setActiveTab] = useState("Overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -974,6 +996,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     try {
       await supabase.from("assignments").delete().eq("id", assignmentId);
       setAssignments((prev) => prev.filter((a) => a.id !== assignmentId));
+      if (selectedAssignmentForSubmissions?.id === assignmentId) {
+        setShowSubmissionsModal(false);
+        setSelectedAssignmentForSubmissions(null);
+      }
+      if (editingAssignment?.id === assignmentId) {
+        setShowAssignmentModal(false);
+        setEditingAssignment(null);
+      }
       setToast("Assignment removed.");
     } catch (err) {
       setError("Could not delete assignment: " + err.message);
@@ -1002,6 +1032,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         graded_at: new Date().toISOString(),
         answer_text: cur.answer_text || "Trainer Evaluation",
         status: "Completed",
+        submitted_at: cur.submitted_at || new Date().toISOString(),
       };
       if (existingSubmissionId) {
         payload.id = existingSubmissionId;
@@ -1121,15 +1152,20 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       } catch (stErr) {
         console.warn("Storage removal warning:", stErr);
       }
+      const hasOtherContent = Boolean(sub.submission_link || (sub.answer_text && sub.answer_text.trim()));
+      const updatePayload = {
+        file_path: null,
+        answer_text: hasOtherContent ? sub.answer_text : "(File removed by trainer)",
+      };
       const { error: dbErr } = await supabase
         .from("assignment_submissions")
-        .update({ file_path: null })
+        .update(updatePayload)
         .eq("id", sub.id);
 
       if (dbErr) throw dbErr;
 
       setAssignmentSubmissions((prev) =>
-        prev.map((s) => (s.id === sub.id ? { ...s, file_path: null } : s))
+        prev.map((s) => (s.id === sub.id ? { ...s, ...updatePayload } : s))
       );
       setToast("Student uploaded file deleted manually.");
     } catch (err) {
@@ -1862,7 +1898,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                         </strong>
                       </div>
                       <small style={{ color: "var(--muted)", display: "block", marginTop: "3px" }}>
-                        By <strong>{student?.full_name || student?.email || "Student"}</strong> · Submitted {new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(new Date(sub.submitted_at))}
+                        By <strong>{student?.full_name || student?.email || "Student"}</strong> · Submitted {formatDateTime(sub.submitted_at, "Recently")}
                       </small>
                     </div>
 
@@ -3009,9 +3045,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             const subs = assignmentSubmissions.filter((s) => s.assignment_id === assignment.id);
             const recips = assignmentRecipients.filter((r) => r.assignment_id === assignment.id);
             const targetCount = recips.length > 0 ? recips.length : myAssignedStudents.length;
-            const dueFormatted = assignment.due_at
-              ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(assignment.due_at))
-              : "Open deadline";
+            const dueFormatted = formatDateMedium(assignment.due_at, "Open deadline");
 
             return (
               <article
@@ -5846,7 +5880,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                             {sub.submission_type || "File"}
                           </span>
                           <span style={{ fontSize: "11.5px", color: "var(--muted)" }}>
-                            {new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(new Date(sub.submitted_at))}
+                            {formatDateTime(sub.submitted_at, "Recently")}
                           </span>
                         </div>
                       ) : (
