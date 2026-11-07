@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
+  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
   Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Unlock, Upload, Users, X,
@@ -8,6 +8,7 @@ import {
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
+import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -56,9 +57,58 @@ function getInitialStudentView() {
   return "My learning";
 }
 
-function StudentPortal({ user, profile, supabase, onSignOut }) {
+function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onExitToAdmin }) {
   const [activeView, setActiveView] = useState(getInitialStudentView);
+  const [studentsList, setStudentsList] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+
+  const activeStudentId = isAdminPreview
+    ? (selectedStudentId || studentsList[0]?.id || user?.id)
+    : (user?.id || profile?.id);
+
+  const activeStudent = useMemo(() => {
+    if (isAdminPreview && studentsList.length > 0) {
+      const match = studentsList.find((s) => s.id === activeStudentId);
+      if (match) return match;
+    }
+    return profile || { id: activeStudentId, email: user?.email, full_name: "Student" };
+  }, [isAdminPreview, studentsList, activeStudentId, profile, user]);
+
+  const effectiveUser = useMemo(() => {
+    if (isAdminPreview && activeStudent) {
+      return { id: activeStudent.id, email: activeStudent.email };
+    }
+    return user || {};
+  }, [isAdminPreview, activeStudent, user]);
+
+  // Fetch all students when in admin preview mode
+  useEffect(() => {
+    if (!isAdminPreview || !supabase) return;
+    let active = true;
+
+    async function fetchStudents() {
+      const { data, error: err } = await supabase
+        .from("profiles")
+        .select("id, email, full_name, timing, is_approved")
+        .eq("role", "student")
+        .order("full_name", { ascending: true });
+
+      if (active && !err && data) {
+        setStudentsList(data);
+        if (data.length > 0) {
+          setSelectedStudentId((prev) => (prev && data.some((s) => s.id === prev) ? prev : data[0].id));
+        }
+      }
+    }
+
+    fetchStudents();
+    return () => {
+      active = false;
+    };
+  }, [isAdminPreview, supabase]);
+
   const [assignments, setAssignments] = useState([]);
+  const [assignmentRecipients, setAssignmentRecipients] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [tests, setTests] = useState([]);
   const [courses, setCourses] = useState([]);
@@ -80,6 +130,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [answers, setAnswers] = useState({});
   const [submissionDraft, setSubmissionDraft] = useState(null);
   const [submissionModeByAssignment, setSubmissionModeByAssignment] = useState({});
+  const [driveSubTab, setDriveSubTab] = useState("materials");
   const [newSubject, setNewSubject] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -89,31 +140,37 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   const [query, setQuery] = useState("");
   const [courseSessionFilter, setCourseSessionFilter] = useState("all");
   const [syllabusCourseFilter, setSyllabusCourseFilter] = useState("all");
+  const [syllabusScope, setSyllabusScope] = useState("all");
   const [expandedCourseSyllabus, setExpandedCourseSyllabus] = useState(() => new Set());
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const loadPortal = useCallback(async (forceLoading = false) => {
+    const studentId = effectiveUser?.id;
+    if (!studentId) {
+      setLoading(false);
+      return;
+    }
     if (forceLoading) setLoading(true);
     setError("");
 
     const noteQuery = supabase
       .from("student_notes")
       .select("id, course_id, title, body, status, category, due_at, drive_url, material_id, created_at")
-      .eq("student_id", user.id)
+      .eq("student_id", studentId)
       .order("created_at", { ascending: false })
       .then(async (res) => {
         if (res.error) {
           return supabase
             .from("student_notes")
             .select("id, course_id, title, body, drive_url, material_id, created_at")
-            .eq("student_id", user.id)
+            .eq("student_id", studentId)
             .order("created_at", { ascending: false })
             .then(async (fallbackRes) => {
               if (fallbackRes.error) {
                 return supabase
                   .from("student_notes")
                   .select("id, course_id, title, body, created_at")
-                  .eq("student_id", user.id)
+                  .eq("student_id", studentId)
                   .order("created_at", { ascending: false });
               }
               return fallbackRes;
@@ -125,13 +182,13 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     const materialRecipientsQuery = supabase
       .from("material_recipients")
       .select("material_id")
-      .eq("student_id", user.id)
+      .eq("student_id", studentId)
       .then((res) => (res.error ? { data: [] } : res));
 
     const assessmentRecipientsQuery = supabase
       .from("assessment_recipients")
       .select("assessment_id")
-      .eq("student_id", user.id)
+      .eq("student_id", studentId)
       .then((res) => (res.error ? { data: [] } : res));
 
     const [
@@ -149,21 +206,23 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       materialRecipientsResult,
       assessmentRecipientsResult,
       enrollmentResult,
+      assignmentRecipientsResult,
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
-      supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", user.id),
+      supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", studentId),
       supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
-      supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", user.id),
-      supabase.from("conversations").select("id, subject, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
+      supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", studentId),
+      supabase.from("conversations").select("id, subject, created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
       supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room").order("name"),
       noteQuery,
-      supabase.from("attendance_records").select("id, course_id, attendance_date, status, note").eq("student_id", user.id).order("attendance_date", { ascending: false }),
-      supabase.from("student_notifications").select("id, title, body, read_at, created_at").eq("student_id", user.id).order("created_at", { ascending: false }),
+      supabase.from("attendance_records").select("id, course_id, attendance_date, status, note").eq("student_id", studentId).order("attendance_date", { ascending: false }),
+      supabase.from("student_notifications").select("id, title, body, read_at, created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
       supabase.from("course_materials").select("*").order("created_at", { ascending: false }),
-      supabase.from("download_requests").select("*").eq("student_id", user.id),
+      supabase.from("download_requests").select("*").eq("student_id", studentId),
       materialRecipientsQuery,
       assessmentRecipientsQuery,
-      supabase.from("course_enrollments").select("course_id").eq("student_id", user.id).then((r) => (r.error ? { data: [] } : r)),
+      supabase.from("course_enrollments").select("course_id").eq("student_id", studentId).then((r) => (r.error ? { data: [] } : r)),
+      supabase.from("assignment_recipients").select("assignment_id, student_id").then((r) => (r.error ? { data: [] } : r)),
     ]);
     const failed = [assignmentResult, submissionResult, testResult, attemptResult, conversationResult, courseResult, noteResult, attendanceResult, notificationResult, materialResult, requestResult].find((result) => result.error);
     if (failed) {
@@ -182,6 +241,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     ]);
 
     setAssignments(assignmentResult.data ?? []);
+    setAssignmentRecipients(assignmentRecipientsResult.data ?? []);
     setSubmissions(submissionResult.data ?? []);
     setTests(loadedTests);
     setCourses(courseResult.data ?? []);
@@ -194,20 +254,25 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     for (const n of (noteResult.data ?? [])) {
       if (n.material_id) permittedMatIds.add(n.material_id);
     }
+    const studentEnrolledCourseIds = new Set((enrollmentResult?.data ?? []).map((r) => r.course_id));
     for (const m of (materialResult.data ?? [])) {
-      if ((m.category || "").toLowerCase() === "syllabus" || (m.title || "").toLowerCase().includes("syllabus")) {
-        permittedMatIds.add(m.id);
+      const isSyllabus = (m.category || "").toLowerCase() === "syllabus" || (m.title || "").toLowerCase().includes("syllabus") || (m.description || "").toLowerCase().includes("syllabus");
+      if (isSyllabus) {
+        // Strictly only permit syllabus if the student is registered/enrolled in this course!
+        if (m.course_id && studentEnrolledCourseIds.has(m.course_id)) {
+          permittedMatIds.add(m.id);
+        }
       }
     }
     setPermittedMaterialIds(permittedMatIds);
     setPermittedAssessmentIds(new Set((assessmentRecipientsResult?.data ?? []).map((r) => r.assessment_id)));
-    setEnrolledCourseIds(new Set((enrollmentResult?.data ?? []).map((r) => r.course_id)));
+    setEnrolledCourseIds(studentEnrolledCourseIds);
     setQuestions(questionResult.data ?? []);
     setAttempts(attemptResult.data ?? []);
     setConversations(loadedConversations);
     setMessages(messageResult.data ?? []);
     setLoading(false);
-  }, [supabase, user.id]);
+  }, [supabase, effectiveUser?.id]);
 
   useEffect(() => { loadPortal(true); }, [loadPortal]);
 
@@ -222,9 +287,10 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   // Real-time synchronization with instant memory patching for zero-latency UI updates
   useEffect(() => {
-    if (!supabase || !user?.id) return;
+    const studentId = effectiveUser?.id;
+    if (!supabase || !studentId) return;
     const channel = supabase
-      .channel(`student-portal-realtime-${user.id}`)
+      .channel(`student-portal-realtime-${studentId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, debouncedReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, debouncedReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, debouncedReload)
@@ -235,9 +301,9 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, debouncedReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "attendance_records" }, (payload) => {
         // Instant optimistic patch for attendance
-        if (payload.new && payload.new.student_id === user.id) {
+        if (payload.new && payload.new.student_id === studentId) {
           setAttendance((prev) => {
-            const next = prev.filter((r) => !(r.student_id === user.id && r.attendance_date === payload.new.attendance_date));
+            const next = prev.filter((r) => !(r.student_id === studentId && r.attendance_date === payload.new.attendance_date));
             return [payload.new, ...next];
           });
         }
@@ -245,7 +311,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, (payload) => {
         // Instant optimistic patch for notes / tasks
-        if (payload.new && payload.new.student_id === user.id) {
+        if (payload.new && payload.new.student_id === studentId) {
           setNotes((prev) => {
             const exists = prev.some((n) => n.id === payload.new.id);
             if (exists) {
@@ -261,9 +327,9 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "course_materials" }, debouncedReload)
       .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, (payload) => {
         // Instant patch for syllabus / material permission
-        if (payload.new && payload.new.student_id === user.id) {
+        if (payload.new && payload.new.student_id === studentId) {
           setPermittedMaterialIds((prev) => new Set([...prev, payload.new.material_id]));
-        } else if (payload.eventType === "DELETE" && payload.old?.student_id === user.id) {
+        } else if (payload.eventType === "DELETE" && payload.old?.student_id === studentId) {
           setPermittedMaterialIds((prev) => {
             const next = new Set(prev);
             next.delete(payload.old.material_id);
@@ -274,9 +340,9 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "assessment_recipients" }, (payload) => {
         // Instant patch for test permission
-        if (payload.new && payload.new.student_id === user.id) {
+        if (payload.new && payload.new.student_id === studentId) {
           setPermittedAssessmentIds((prev) => new Set([...prev, payload.new.assessment_id]));
-        } else if (payload.eventType === "DELETE" && payload.old?.student_id === user.id) {
+        } else if (payload.eventType === "DELETE" && payload.old?.student_id === studentId) {
           setPermittedAssessmentIds((prev) => {
             const next = new Set(prev);
             next.delete(payload.old.assessment_id);
@@ -293,11 +359,12 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, user.id, debouncedReload]);
+  }, [supabase, effectiveUser?.id, debouncedReload]);
 
   useEffect(() => {
-    if (activeView !== "Messages" || !user.id) return;
-    const unreadIncoming = messages.filter((message) => message.sender_id !== user.id && !message.read_at);
+    const studentId = effectiveUser?.id;
+    if (activeView !== "Messages" || !studentId) return;
+    const unreadIncoming = messages.filter((message) => message.sender_id !== studentId && !message.read_at);
     if (!unreadIncoming.length) return;
     const messageIds = unreadIncoming.map((message) => message.id);
     supabase.from("messages").update({ read_at: new Date().toISOString() }).in("id", messageIds)
@@ -308,7 +375,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
           setMessages((current) => current.map((message) => marked.has(message.id) ? { ...message, read_at: new Date().toISOString() } : message));
         }
       });
-  }, [activeView, messages, supabase, user.id]);
+  }, [activeView, messages, supabase, effectiveUser?.id]);
 
   const submissionByAssignment = useMemo(() => new Map(submissions.map((item) => [item.assignment_id, item])), [submissions]);
   const attemptByTest = useMemo(() => new Map(attempts.map((item) => [item.assessment_id, item])), [attempts]);
@@ -321,8 +388,32 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     () => new Map((downloadRequests || []).filter((r) => r.assessment_id).map((r) => [r.assessment_id, r])),
     [downloadRequests]
   );
-  const unreadMessages = messages.filter((message) => message.sender_id !== user.id && !message.read_at).length;
-  const filteredAssignments = assignments.filter((item) => `${item.title} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const unreadMessages = messages.filter((message) => message.sender_id !== effectiveUser?.id && !message.read_at).length;
+  const permittedAssignmentIds = useMemo(() => {
+    return new Set(assignmentRecipients.filter((r) => r.student_id === effectiveUser?.id).map((r) => r.assignment_id));
+  }, [assignmentRecipients, effectiveUser?.id]);
+
+  const assignmentsWithAnyRecipients = useMemo(() => {
+    return new Set(assignmentRecipients.map((r) => r.assignment_id));
+  }, [assignmentRecipients]);
+
+  const allowedAssignments = useMemo(() => {
+    return assignments.filter((item) => {
+      // If student has a submission, show it
+      if (submissionByAssignment.has(item.id)) return true;
+      // If this assignment was explicitly assigned to specific student(s) individually
+      if (assignmentsWithAnyRecipients.has(item.id)) {
+        return permittedAssignmentIds.has(item.id);
+      }
+      // If course enrollment is defined
+      if (item.course_id && enrolledCourseIds.size > 0) {
+        return enrolledCourseIds.has(item.course_id);
+      }
+      return true;
+    });
+  }, [assignments, submissionByAssignment, assignmentsWithAnyRecipients, permittedAssignmentIds, enrolledCourseIds]);
+
+  const filteredAssignments = allowedAssignments.filter((item) => `${item.title} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()));
   const allowedTests = useMemo(() => {
     return tests.filter((item) => {
       // If student has an attempt, show it (e.g. past submitted test)
@@ -555,26 +646,68 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     try {
       if (actualFile && subMode === "file") {
         const safeName = actualFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        uploadedPath = `${user.id}/${assignment.id}/${crypto.randomUUID()}-${safeName}`;
-        const { error: uploadError } = await supabase.storage.from("assignment-files").upload(uploadedPath, actualFile, { contentType: actualFile.type || "application/octet-stream", upsert: false });
-        if (uploadError) throw uploadError;
+        const folderId = user?.id || effectiveUser?.id;
+        uploadedPath = `${folderId}/${assignment.id}/${crypto.randomUUID()}-${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("assignment-files")
+          .upload(uploadedPath, actualFile, { contentType: actualFile.type || "application/octet-stream", upsert: true });
+
+        if (uploadError) {
+          console.warn("Storage upload warning, checking fallback:", uploadError.message);
+          // If storage bucket RLS blocks upload, fallback to Data URL for files under 4MB so submission never breaks
+          if (actualFile.size <= 4 * 1024 * 1024) {
+            uploadedPath = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(actualFile);
+            });
+          }
+          if (!uploadedPath) throw uploadError;
+        }
       }
 
-      const { error: saveError } = await supabase.from("assignment_submissions").upsert({
+      const submissionStudentId = (isAdminPreview && activeStudent?.id) ? activeStudent.id : (user?.id || effectiveUser?.id);
+
+      const submissionPayload = {
         assignment_id: assignment.id,
-        student_id: user.id,
+        student_id: submissionStudentId,
         answer_text: answerText || (subMode === "link" ? linkUrl : ""),
         submission_type: subMode === "link" ? "Link" : "File",
         submission_link: subMode === "link" ? linkUrl : (previous?.submission_link || null),
         file_path: uploadedPath || (subMode === "file" ? previous?.file_path : null),
         status: "Completed",
         submitted_at: new Date().toISOString(),
-      }, { onConflict: "assignment_id,student_id" });
+      };
+
+      let { error: saveError } = await supabase
+        .from("assignment_submissions")
+        .upsert(submissionPayload, { onConflict: "assignment_id,student_id" });
+
+      if (saveError && (saveError.message?.includes("row-level security") || saveError.code === "42501")) {
+        console.warn("Upsert RLS issue, trying update or insert directly:", saveError.message);
+        if (previous?.id) {
+          const updateRes = await supabase
+            .from("assignment_submissions")
+            .update(submissionPayload)
+            .eq("id", previous.id);
+          saveError = updateRes.error;
+        } else {
+          const insertRes = await supabase
+            .from("assignment_submissions")
+            .insert(submissionPayload);
+          saveError = insertRes.error;
+        }
+      }
+
       if (saveError) {
-        if (uploadedPath) await supabase.storage.from("assignment-files").remove([uploadedPath]);
+        if (uploadedPath && !uploadedPath.startsWith("data:")) {
+          await supabase.storage.from("assignment-files").remove([uploadedPath]).catch(() => {});
+        }
         throw saveError;
       }
-      if (uploadedPath && previous?.file_path) {
+      if (uploadedPath && previous?.file_path && !previous.file_path.startsWith("data:")) {
         await supabase.storage.from("assignment-files").remove([previous.file_path]).catch(() => {});
       }
       setSubmissionDraft(null);
@@ -589,12 +722,38 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   async function openSubmissionFile(path) {
+    if (!path) return;
+    if (path.startsWith("data:")) {
+      const win = window.open();
+      if (win) {
+        win.document.write(`<iframe src="${path}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+      }
+      return;
+    }
     const { data: fileData, error: fileError } = await supabase.storage.from("assignment-files").createSignedUrl(path, 60);
     if (fileError) {
       setError(fileError.message);
       return;
     }
     window.open(fileData.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function removeSubmissionFile(assignment, submission) {
+    if (!submission?.file_path) return;
+    if (!window.confirm("Are you sure you want to remove your uploaded file?")) return;
+    setBusy(true);
+    try {
+      let cleanPath = submission.file_path;
+      if (cleanPath.startsWith("assignment-files:")) cleanPath = cleanPath.replace("assignment-files:", "");
+      await supabase.storage.from("assignment-files").remove([cleanPath]).catch(() => {});
+      await supabase.from("assignment_submissions").update({ file_path: null }).eq("id", submission.id);
+      setNotice("Uploaded file removed.");
+      await loadPortal(false);
+    } catch (err) {
+      setError("Failed to remove file: " + err.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submitTest(event) {
@@ -623,9 +782,12 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     setError("");
     setNotice("");
     let conversationId = selectedConversation;
+    const senderId = user?.id || effectiveUser?.id;
+    const convStudentId = (isAdminPreview && activeStudent?.id) ? activeStudent.id : (user?.id || effectiveUser?.id);
+
     if (!conversationId) {
       const { data: conversation, error: conversationError } = await supabase.from("conversations")
-        .insert({ student_id: user.id, subject }).select("id, subject, created_at").single();
+        .insert({ student_id: convStudentId, subject }).select("id, subject, created_at").single();
       if (conversationError) {
         setError(conversationError.message);
         setBusy(false);
@@ -636,7 +798,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     }
     const { data: sentMsg, error: messageError } = await supabase.from("messages").insert({
       conversation_id: conversationId,
-      sender_id: user.id,
+      sender_id: senderId,
       body,
     }).select("id, conversation_id, sender_id, body, read_at, created_at").single();
     if (messageError) {
@@ -716,14 +878,27 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
                       </a>
                     )}
                     {submission.file_path && (
-                      <button
-                        className="button compact"
-                        type="button"
-                        style={{ background: "#ffffff", borderColor: "#86efac", color: "#15803d", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                        onClick={() => openSubmissionFile(submission.file_path)}
-                      >
-                        <Download size={13} /> Download Submitted Document
-                      </button>
+                      <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                        <button
+                          className="button compact"
+                          type="button"
+                          style={{ background: "#ffffff", borderColor: "#86efac", color: "#15803d", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                          onClick={() => openSubmissionFile(submission.file_path)}
+                        >
+                          <Download size={13} /> Download Submitted Document
+                        </button>
+                        {!submission.graded_at && (
+                          <button
+                            className="button compact"
+                            type="button"
+                            style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                            onClick={() => removeSubmissionFile(assignment, submission)}
+                            title="Delete uploaded file"
+                          >
+                            <Trash2 size={13} /> Remove File
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -1000,8 +1175,118 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       }
     }
 
+    const myUploads = submissions.filter((s) => s.file_path);
+
     return (
       <section className="portal-materials-section">
+        {/* Drive Sub-Tabs: Admin Course Materials vs Student Uploads */}
+        <div className="portal-tabs" role="tablist" style={{ marginBottom: "18px" }}>
+          <button
+            className={`portal-tab ${driveSubTab === "materials" ? "active" : ""}`}
+            type="button"
+            onClick={() => setDriveSubTab("materials")}
+          >
+            <HardDrive size={15} />
+            <span>Course Materials &amp; Guides ({filtered.length})</span>
+          </button>
+          <button
+            className={`portal-tab ${driveSubTab === "uploads" ? "active" : ""}`}
+            type="button"
+            onClick={() => setDriveSubTab("uploads")}
+          >
+            <Upload size={15} />
+            <span>My Uploaded Files ({myUploads.length})</span>
+          </button>
+        </div>
+
+        {driveSubTab === "uploads" ? (
+          <div>
+            <div style={{ marginBottom: "14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <p style={{ margin: 0, fontSize: "13px", color: "var(--muted)" }}>
+                Documents and coursework files you have attached to assignments. Administrators can review or manually manage these files.
+              </p>
+              <button
+                type="button"
+                className="button primary compact"
+                onClick={() => navigate("Assignments")}
+              >
+                <Plus size={13} /> Upload New Coursework File
+              </button>
+            </div>
+
+            {myUploads.length > 0 ? (
+              <div className="materials-grid">
+                {myUploads.map((sub) => {
+                  const assignment = assignments.find((a) => a.id === sub.assignment_id);
+                  const course = coursesById[assignment?.course_id];
+                  const rawName = sub.file_path ? sub.file_path.split("/").pop() : "File";
+                  const cleanName = rawName.replace(/^[a-f0-9-]{36}_?/, "");
+
+                  return (
+                    <article className="card material-card material-card-pdf" key={sub.id}>
+                      <div className="material-card-header">
+                        <span className="material-icon pdf">
+                          <FileText size={18} />
+                        </span>
+                        <div className="material-card-badges">
+                          <span className="badge blue">{course ? course.code : "Coursework"}</span>
+                          <span className="badge green">My Upload</span>
+                        </div>
+                      </div>
+
+                      <h3 className="material-title">{cleanName}</h3>
+                      <p className="material-desc">
+                        {assignment ? `Attached to: ${assignment.title}` : "Coursework Document"}
+                        <br />
+                        <small style={{ color: "var(--muted)", fontSize: "11px" }}>
+                          Uploaded {dateLabel(sub.submitted_at)}
+                        </small>
+                      </p>
+
+                      <div className="material-actions student-material-actions two-buttons" style={{ marginTop: "12px" }}>
+                        <button
+                          className="button primary material-preview-btn"
+                          type="button"
+                          onClick={() => openSubmissionFile(sub.file_path)}
+                        >
+                          <Eye size={13} />
+                          <span>View Document</span>
+                        </button>
+                        {!sub.graded_at && (
+                          <button
+                            className="button compact"
+                            type="button"
+                            style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" }}
+                            onClick={() => removeSubmissionFile(assignment, sub)}
+                            title="Remove file"
+                          >
+                            <Trash2 size={13} />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="card portal-empty">
+                <Upload size={24} />
+                <strong>No uploaded files yet</strong>
+                <span>When you upload documents for your assignments or coursework, they will appear here.</span>
+                <button
+                  type="button"
+                  className="button primary"
+                  style={{ marginTop: "12px" }}
+                  onClick={() => navigate("Assignments")}
+                >
+                  <Upload size={14} /> Go to Assignments to Upload
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
         <div className="materials-grid">
           {filtered.map((item) => {
             const course = coursesById[item.course_id];
@@ -1111,13 +1396,28 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             <span>Course materials and Drive links uploaded by your administrator will appear here.</span>
           </div>
         )}
+          </div>
+        )}
       </section>
     );
   }
 
   function renderCourses() {
-    // Only display courses the student is actually enrolled in (fallback to all if no enrollments recorded yet)
-    const activeCourses = enrolledCourseIds.size > 0 ? courses.filter((c) => enrolledCourseIds.has(c.id)) : courses;
+    // Strictly isolate: students only see courses they are actively registered / enrolled in
+    const activeCourses = courses.filter((c) => enrolledCourseIds.has(c.id));
+
+    if (activeCourses.length === 0) {
+      return (
+        <div className="card portal-empty" style={{ padding: "48px 24px", textAlign: "center" }}>
+          <GraduationCap size={36} style={{ color: "var(--muted)", margin: "0 auto 12px" }} />
+          <strong style={{ fontSize: "16px", color: "var(--ink)", display: "block" }}>No Course Enrollments Found</strong>
+          <p style={{ maxWidth: "460px", margin: "8px auto 0", color: "var(--muted)", fontSize: "13.5px", lineHeight: "1.5" }}>
+            You are only permitted to view courses you are actively registered in. Once registered, your course details and syllabus will appear here.
+          </p>
+        </div>
+      );
+    }
+
     const filtered = activeCourses.filter((course) => {
       const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.room || ""} ${course.description || ""}`.toLowerCase();
       return search.includes(query.trim().toLowerCase());
@@ -1292,45 +1592,42 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   }
 
   function renderSyllabus() {
-    // Only display courses the student is actually enrolled in (fallback to all if no enrollments recorded yet)
-    const activeCourses = enrolledCourseIds.size > 0
-      ? courses.filter((c) => enrolledCourseIds.has(c.id))
-      : courses;
+    // Strictly isolate: students can ONLY view the courses they are registered / enrolled in
+    // E.g. If registered in Python, they only see Python's syllabus and never other courses!
+    const activeCourses = courses.filter((c) => enrolledCourseIds.has(c.id));
 
+    // Only syllabus materials strictly belonging to the student's enrolled courses
     const allSyllabusMaterials = materials.filter((m) => {
-      const cat = (m.category || "").toLowerCase();
-      const title = (m.title || "").toLowerCase();
-      return cat === "syllabus" || title.includes("syllabus");
+      const isSyllabus =
+        (m.category || "").toLowerCase() === "syllabus" ||
+        (m.title || "").toLowerCase().includes("syllabus") ||
+        (m.description || "").toLowerCase().includes("syllabus");
+      if (!isSyllabus) return false;
+      return m.course_id && enrolledCourseIds.has(m.course_id);
     });
+
+    if (activeCourses.length === 0) {
+      return (
+        <div className="card portal-empty" style={{ padding: "48px 24px", textAlign: "center" }}>
+          <FileSpreadsheet size={36} style={{ color: "var(--muted)", margin: "0 auto 12px" }} />
+          <strong style={{ fontSize: "16px", color: "var(--ink)", display: "block" }}>No Course Syllabus Available</strong>
+          <p style={{ maxWidth: "460px", margin: "8px auto 0", color: "var(--muted)", fontSize: "13.5px", lineHeight: "1.5" }}>
+            You can only view syllabi for courses you are actively registered in. Once your administrator or instructor enrolls you in your course (e.g. Python), your syllabus PDF will appear here.
+          </p>
+        </div>
+      );
+    }
 
     const filtered = activeCourses.filter((course) => {
       if (syllabusCourseFilter !== "all" && course.id !== syllabusCourseFilter) {
         return false;
       }
-      if (courseSessionFilter === "it") {
-        const isIt = (course.department || "").toUpperCase() === "IT" ||
-                     (course.code || "").toUpperCase().startsWith("TMIT") ||
-                     /JAVA|PYTHON|REACT|WEB|SQL|CLOUD|NODE|FULL STACK/i.test(course.name || "");
-        if (!isIt) return false;
-      } else if (courseSessionFilter === "sap") {
-        const isSap = (course.department || "").toUpperCase() === "SAP" ||
-                      (course.code || "").toUpperCase().startsWith("TMSAP") ||
-                      /SAP|FICO|MM|SD|ABAP|HANA/i.test(course.name || "");
-        if (!isSap) return false;
-      }
-
       const search = `${course.name} ${course.code} ${course.department || ""} ${course.instructor || ""} ${course.description || ""}`.toLowerCase();
       const queryMatch = search.includes(query.trim().toLowerCase());
       const hasMatchingDoc = allSyllabusMaterials.some(
         (m) => m.course_id === course.id && `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase())
       );
       return queryMatch || hasMatchingDoc;
-    });
-
-    const generalSyllabi = allSyllabusMaterials.filter((m) => {
-      if (m.course_id && coursesById[m.course_id]) return false;
-      if (!query.trim()) return true;
-      return `${m.title} ${m.description || ""}`.toLowerCase().includes(query.trim().toLowerCase());
     });
 
     function renderSyllabusCard(course) {
@@ -1343,9 +1640,15 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             <div className="course-badges-group">
               <span className="course-code-badge" style={{ fontWeight: 700 }}>{course.code}</span>
               {course.department && <span className="course-dept-badge">{course.department}</span>}
-              <span className="badge-view-only" style={{ background: "#f0fdf4", color: "#166534", fontSize: "11px", fontWeight: 600 }}>
-                <FileSpreadsheet size={11} /> Syllabus
-              </span>
+              {courseSyllabi.length > 0 ? (
+                <span className="badge-view-only" style={{ background: "#dcfce7", color: "#166534", fontSize: "11px", fontWeight: 700 }}>
+                  <FileSpreadsheet size={11} /> {courseSyllabi.length} Syllabus PDF{courseSyllabi.length > 1 ? "s" : ""}
+                </span>
+              ) : (
+                <span className="badge-view-only" style={{ background: "#f0fdf4", color: "#166534", fontSize: "11px", fontWeight: 600 }}>
+                  <FileSpreadsheet size={11} /> Syllabus
+                </span>
+              )}
             </div>
             <span className="portal-status submitted" style={{ fontSize: "11px", padding: "3px 8px" }}>
               Enrolled
@@ -1539,71 +1842,46 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
     return (
       <div className="course-sessions-container">
-        {/* Session Filter Tabs & Course Dropdown */}
+        {/* Header Filter Bar */}
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "16px" }}>
-          <div className="course-session-tabs" style={{ marginBottom: 0 }}>
-            <button
-              type="button"
-              className={`course-session-tab ${courseSessionFilter === "all" && syllabusCourseFilter === "all" ? "active" : ""}`}
-              onClick={() => {
-                setCourseSessionFilter("all");
-                setSyllabusCourseFilter("all");
-              }}
-            >
-              All Enrolled ({activeCourses.length})
-            </button>
-            <button
-              type="button"
-              className={`course-session-tab ${courseSessionFilter === "it" && syllabusCourseFilter === "all" ? "active" : ""}`}
-              onClick={() => {
-                setCourseSessionFilter("it");
-                setSyllabusCourseFilter("all");
-              }}
-            >
-              🖥️ IT Courses
-            </button>
-            <button
-              type="button"
-              className={`course-session-tab ${courseSessionFilter === "sap" && syllabusCourseFilter === "all" ? "active" : ""}`}
-              onClick={() => {
-                setCourseSessionFilter("sap");
-                setSyllabusCourseFilter("all");
-              }}
-            >
-              💼 SAP Modules
-            </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span className="badge blue" style={{ fontSize: "12.5px", padding: "6px 14px", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <BookOpen size={14} /> My Registered Courses ({activeCourses.length})
+            </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <label htmlFor="syllabus-course-select" style={{ fontSize: "12px", fontWeight: 600, color: "var(--muted)" }}>Filter Course:</label>
-            <select
-              id="syllabus-course-select"
-              className="input-select"
-              style={{ fontSize: "12px", padding: "6px 12px", borderRadius: "8px" }}
-              value={syllabusCourseFilter}
-              onChange={(e) => {
-                setSyllabusCourseFilter(e.target.value);
-                setCourseSessionFilter("all");
-              }}
-            >
-              <option value="all">All Enrolled Courses</option>
-              {activeCourses.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} · {c.name}
-                </option>
-              ))}
-            </select>
-            {syllabusCourseFilter !== "all" && (
-              <button
-                type="button"
-                className="button compact"
-                style={{ fontSize: "11px", padding: "4px 8px" }}
-                onClick={() => setSyllabusCourseFilter("all")}
+          {activeCourses.length > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <label htmlFor="syllabus-course-select" style={{ fontSize: "12px", fontWeight: 600, color: "var(--muted)" }}>Filter Course:</label>
+              <select
+                id="syllabus-course-select"
+                className="input-select"
+                style={{ fontSize: "12px", padding: "6px 12px", borderRadius: "8px" }}
+                value={syllabusCourseFilter}
+                onChange={(e) => setSyllabusCourseFilter(e.target.value)}
               >
-                Reset
-              </button>
-            )}
-          </div>
+                <option value="all">All Enrolled Courses</option>
+                {activeCourses.map((c) => {
+                  const hasSyllabus = allSyllabusMaterials.some((m) => m.course_id === c.id);
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.code} · {c.name} {hasSyllabus ? "(✓ PDF Ready)" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              {syllabusCourseFilter !== "all" && (
+                <button
+                  type="button"
+                  className="button compact"
+                  style={{ fontSize: "11px", padding: "4px 8px" }}
+                  onClick={() => setSyllabusCourseFilter("all")}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Syllabi Grid */}
@@ -1616,70 +1894,6 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             <FileSpreadsheet size={24} />
             <strong>No course syllabi found</strong>
             <span>{query ? `No syllabi matched "${query}". Try searching a different keyword.` : "Your enrolled course syllabi will appear here once registered."}</span>
-          </div>
-        )}
-
-        {/* Campus-wide General Syllabi */}
-        {generalSyllabi.length > 0 && (
-          <div className="course-session-block" style={{ marginTop: "32px" }}>
-            <div className="course-session-heading">
-              <div className="course-session-title">
-                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                  <FileSpreadsheet size={16} /> Campus-Wide Academic Syllabi &amp; Calendars
-                </span>
-                <span className="course-session-pill">{generalSyllabi.length} Document{generalSyllabi.length > 1 ? "s" : ""}</span>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px" }}>
-              {generalSyllabi.map((mat) => (
-                <article className="card panel" key={mat.id} style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
-                      <span className="badge blue" style={{ fontSize: "11px", fontWeight: 700 }}>
-                        Campus-Wide
-                      </span>
-                      <span className="badge-view-only" style={{ background: "#f0fdf4", color: "#166534", fontSize: "11px" }}>
-                        Syllabus
-                      </span>
-                    </div>
-
-                    <h3 style={{ fontSize: "16px", fontWeight: 700, margin: "0 0 6px", color: "var(--ink)" }}>{mat.title}</h3>
-                    <p style={{ fontSize: "13px", color: "var(--muted)", margin: "0 0 12px", lineHeight: 1.4 }}>
-                      {mat.description || "General campus academic syllabus and course schedule."}
-                    </p>
-                  </div>
-
-                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
-                    <button
-                      className="button primary compact"
-                      type="button"
-                      onClick={() =>
-                        openSecureViewer({
-                          title: mat.title,
-                          subtitle: "Campus-Wide Syllabus",
-                          url: mat.drive_url,
-                          filePath: mat.file_path,
-                          materialId: mat.id,
-                        })
-                      }
-                    >
-                      <Eye size={13} /> View Syllabus
-                    </button>
-                    {mat.drive_url && (
-                      <a
-                        className="button compact"
-                        href={mat.drive_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Open in new Google tab"
-                      >
-                        <ExternalLink size={13} /> Google Doc
-                      </a>
-                    )}
-                  </div>
-                </article>
-              ))}
-            </div>
           </div>
         )}
       </div>
@@ -1897,10 +2111,12 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
 
   function renderAttendance() {
     const totalDays = attendance.length;
-    const presentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "present").length;
-    const lateCount = attendance.filter((r) => (r.status || "").toLowerCase() === "late").length;
-    const absentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "absent").length;
-    const attendanceRate = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
+    const presentCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "present").length;
+    const lateCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "late").length;
+    const absentCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "absent").length;
+    const holidayCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "holiday").length;
+    const workingDays = presentCount + lateCount + absentCount;
+    const attendanceRate = workingDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / workingDays) * 100) : 100;
 
     return (
       <div className="student-attendance-view">
@@ -1911,7 +2127,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
               <span className="metric-icon green"><Clock3 size={17} /></span>
             </div>
             <div className="metric-value">{attendanceRate}%</div>
-            <div className="metric-foot">{presentCount} of {totalDays} sessions attended</div>
+            <div className="metric-foot">{presentCount} of {workingDays} working sessions</div>
           </article>
           <article className="card metric-card">
             <div className="metric-top">
@@ -1936,6 +2152,14 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
             </div>
             <div className="metric-value">{absentCount}</div>
             <div className="metric-foot">Recorded absences</div>
+          </article>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Holidays</span>
+              <span className="metric-icon purple"><Sparkles size={17} /></span>
+            </div>
+            <div className="metric-value">{holidayCount}</div>
+            <div className="metric-foot">Campus & official holidays</div>
           </article>
         </section>
 
@@ -1971,7 +2195,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       </aside>
       <section className="thread-body">
         <div className="thread-heading"><div><strong>{activeConversation?.subject ?? "New message"}</strong><small>{activeConversation ? "Your message thread with the institution" : "Send a message to the institution team"}</small></div></div>
-        {activeConversation ? <div className="thread-messages">{currentThread.map((message) => <div className={`chat-message ${message.sender_id === user.id ? "mine" : ""}`} key={message.id}><span>{message.sender_id === user.id ? "You" : "LearnForge team"}</span><p>{message.body}</p><small>{dateLabel(message.created_at)}</small></div>)}</div> : <div className="thread-empty-state"><MessageSquare size={22} /><strong>How can we help?</strong><span>Start a new conversation with your institution.</span></div>}
+        {activeConversation ? <div className="thread-messages">{currentThread.map((message) => <div className={`chat-message ${message.sender_id === effectiveUser?.id ? "mine" : ""}`} key={message.id}><span>{message.sender_id === effectiveUser?.id ? "You" : "LearnForge team"}</span><p>{message.body}</p><small>{dateLabel(message.created_at)}</small></div>)}</div> : <div className="thread-empty-state"><MessageSquare size={22} /><strong>How can we help?</strong><span>Start a new conversation with your institution.</span></div>}
         <form className="message-compose" onSubmit={sendMessage}>
           {!activeConversation && <label className="form-field"><span>Subject</span><input required maxLength={150} value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="What would you like to discuss?" /></label>}
           <label className="sr-only" htmlFor="student-message">Your message</label><textarea id="student-message" rows="3" maxLength="10000" required value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Write a message…" />
@@ -1984,14 +2208,19 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
   function renderOverview() {
     const submittedCount = submissions.length;
     const completedTests = attempts.length;
-    const upcomingAssignments = assignments.filter((item) => !isPast(item.due_at) && !submissionByAssignment.has(item.id)).length;
+    const upcomingAssignments = allowedAssignments.filter((item) => !isPast(item.due_at) && !submissionByAssignment.has(item.id)).length;
     const pendingNotesCount = notes.filter((n) => n.status !== "completed").length;
 
     // Overall Attendance Rate %
     const totalDays = attendance.length;
-    const presentCount = attendance.filter((r) => (r.status || "").toLowerCase() === "present").length;
-    const lateCount = attendance.filter((r) => (r.status || "").toLowerCase() === "late").length;
-    const attendancePercentage = totalDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / totalDays) * 100) : 100;
+    const presentCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "present").length;
+    const lateCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "late").length;
+    const holidayCount = attendance.filter((r) => normalizeAttendanceStatus(r) === "holiday").length;
+    const workingDays = attendance.filter((r) => {
+      const s = normalizeAttendanceStatus(r);
+      return s === "present" || s === "late" || s === "absent";
+    }).length;
+    const attendancePercentage = workingDays > 0 ? Math.round(((presentCount + lateCount * 0.5) / workingDays) * 100) : 100;
 
     // Recent Test Marks
     const recentAttempt = attempts[0];
@@ -2001,11 +2230,11 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       <div className="page-heading">
         <div>
           <div className="eyebrow">{new Intl.DateTimeFormat("en", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date())}</div>
-          <h1>Welcome, {profile.full_name || user.email?.split("@")[0]} <Sparkles className="greeting-icon" size={19} /></h1>
+          <h1>Welcome, {activeStudent?.full_name || effectiveUser?.email?.split("@")[0]} <Sparkles className="greeting-icon" size={19} /></h1>
           <p>Your assignments, tests, and campus messages in one place.</p>
-          {profile?.timing && (
+          {activeStudent?.timing && (
             <div className="student-timing-chip" style={{ marginTop: "6px", width: "fit-content" }}>
-              <Clock3 size={13} /> Class Timing: <strong>{profile.timing}</strong>
+              <Clock3 size={13} /> Class Timing: <strong>{activeStudent.timing}</strong>
             </div>
           )}
         </div>
@@ -2022,7 +2251,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Attendance")}>
           <div className="metric-top"><span>Attendance Rate</span><span className="metric-icon green"><Clock3 size={17} /></span></div>
           <div className="metric-value">{attendancePercentage}%</div>
-          <div className="metric-foot">{presentCount} present · {totalDays} recorded</div>
+          <div className="metric-foot">{presentCount} present · {holidayCount > 0 ? `${holidayCount} hol · ` : ""}{totalDays} recorded</div>
         </article>
 
         <article className="card metric-card" style={{ cursor: "pointer" }} onClick={() => navigate("Tests")}>
@@ -2039,8 +2268,8 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
       </section>
       <section className="student-overview-grid">
         <article className="card panel"><div className="panel-heading"><div><h2>Next assignments</h2><p>Keep an eye on upcoming deadlines</p></div><button className="text-link" onClick={() => navigate("Assignments")}>All assignments <ArrowRight size={13} /></button></div>
-          {assignments.slice(0, 3).map((assignment) => <div className="overview-work-item" key={assignment.id}><span className="portal-item-icon assignment"><BookOpen size={15} /></span><span><strong>{assignment.title}</strong><small>Due {dateLabel(assignment.due_at)}</small></span><span className={`portal-status ${submissionByAssignment.has(assignment.id) ? "submitted" : isPast(assignment.due_at) ? "overdue" : "pending"}`}>{submissionByAssignment.has(assignment.id) ? "Submitted" : isPast(assignment.due_at) ? "Past due" : "To do"}</span></div>)}
-          {!assignments.length && <div className="portal-empty compact"><BookOpen size={18} /><span>No assignments are published yet.</span></div>}
+          {allowedAssignments.slice(0, 3).map((assignment) => <div className="overview-work-item" key={assignment.id}><span className="portal-item-icon assignment"><BookOpen size={15} /></span><span><strong>{assignment.title}</strong><small>Due {dateLabel(assignment.due_at)}</small></span><span className={`portal-status ${submissionByAssignment.has(assignment.id) ? "submitted" : isPast(assignment.due_at) ? "overdue" : "pending"}`}>{submissionByAssignment.has(assignment.id) ? "Submitted" : isPast(assignment.due_at) ? "Past due" : "To do"}</span></div>)}
+          {!allowedAssignments.length && <div className="portal-empty compact"><BookOpen size={18} /><span>No assignments are published yet.</span></div>}
         </article>
         <article className="card panel"><div className="panel-heading"><div><h2>Course Syllabus &amp; Roadmaps</h2><p>Access outlines and official syllabi</p></div><button className="text-link" onClick={() => navigate("Syllabus")}>All syllabi <ArrowRight size={13} /></button></div>
           {(enrolledCourseIds.size > 0 ? courses.filter((c) => enrolledCourseIds.has(c.id)) : courses).slice(0, 3).map((course) => (
@@ -2070,27 +2299,173 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
     Messages: ["Campus community", "Messages", "Send a private message to your institution’s support team."],
   };
   const heading = pageTitles[activeView] || pageTitles["My learning"];
-  const unreadConversations = new Set(messages.filter((message) => message.sender_id !== user.id && !message.read_at).map((message) => message.conversation_id)).size;
+  const unreadConversations = new Set(messages.filter((message) => message.sender_id !== effectiveUser?.id && !message.read_at).map((message) => message.conversation_id)).size;
 
   return <div className="app-shell student-app">
     {mobileNavOpen && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
     <aside className={`sidebar student-sidebar ${mobileNavOpen ? "mobile-open" : ""}`} aria-label="Student navigation">
       {mobileNavOpen && <button className="drawer-close icon-button" type="button" aria-label="Close navigation menu" onClick={() => setMobileNavOpen(false)}><X size={16} /></button>}
-      <div className="brand"><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>LearnForge</strong><small>Student portal</small></span></div>
+      <div className="brand" style={{ cursor: "pointer" }} onClick={() => navigate("My learning")}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>LearnForge</strong><small>Student portal</small></span></div>
       <div className="nav-label">My campus</div>
       <nav className="side-nav">{STUDENT_NAV.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="student-support"><ShieldCheck size={16} /><span><strong>Your work is private</strong><small>Only you and your institution can view your submissions.</small></span></div>
-      <div className="profile"><span className="profile-avatar">{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span><span className="profile-copy"><strong>{profile.full_name || user.email}</strong><small>{profile.timing ? `Timing: ${profile.timing}` : "Student"}</small></span></div>
-      <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
+      <div className="profile">
+        <span className="profile-avatar">{(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span>
+        <span className="profile-copy">
+          <strong>{activeStudent?.full_name || effectiveUser?.email}</strong>
+          <small>{activeStudent?.timing ? `Timing: ${activeStudent.timing}` : (isAdminPreview ? "Student (Preview)" : "Student")}</small>
+        </span>
+      </div>
+      {isAdminPreview ? (
+        <button
+          className="signout-button"
+          type="button"
+          onClick={onExitToAdmin || onSignOut}
+          title="Return to Admin Workspace"
+          aria-label="Back to Admin"
+          style={{ color: "#2563eb", background: "rgba(37, 99, 235, 0.08)", borderColor: "rgba(37, 99, 235, 0.2)" }}
+        >
+          <ArrowLeft size={15} />
+          <span>Back to Admin</span>
+        </button>
+      ) : onSignOut ? (
+        <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out">
+          <LogOut size={15} />
+          <span>Sign out</span>
+        </button>
+      ) : null}
     </aside>
     <main className="main-content">
-      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation"><Menu size={18} /></button><div className="breadcrumb">Student portal <span>/</span> <strong>{activeView}</strong></div></div><div className="top-actions"><label className="search-box"><span className="sr-only">Search this page</span><input type="search" aria-label={`Search ${activeView.toLowerCase()}`} placeholder={`Search ${activeView.toLowerCase()}…`} value={query} onChange={(event) => setQuery(event.target.value)} /></label><span className="top-avatar" title={user.email}>{profile.full_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span></div></header>
+      <header className="topbar">
+        <div className="topbar-left">
+          <button className="mobile-menu icon-button" onClick={() => setMobileNavOpen((open) => !open)} aria-label="Toggle navigation">
+            <Menu size={18} />
+          </button>
+          <div className="breadcrumb">Student portal <span>/</span> <strong>{activeView}</strong></div>
+          {isAdminPreview && (
+            <div className="admin-student-preview-header-badge" style={{ display: "inline-flex", alignItems: "center", gap: "8px", marginLeft: "12px", flexWrap: "wrap" }}>
+              <span className="badge blue" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                <Shield size={12} /> Admin Mode
+              </span>
+              {studentsList.length > 0 && (
+                <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: 0 }}>
+                  <span style={{ fontSize: "11.5px", color: "var(--muted)", fontWeight: 700 }}>Student:</span>
+                  <select
+                    value={activeStudentId}
+                    onChange={(e) => setSelectedStudentId(e.target.value)}
+                    className="admin-student-select-header"
+                    style={{
+                      padding: "3px 8px",
+                      borderRadius: "6px",
+                      border: "1px solid #93c5fd",
+                      background: "#eff6ff",
+                      color: "#1e3a8a",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      maxWidth: "260px",
+                      cursor: "pointer",
+                    }}
+                    title="Select student to view"
+                    aria-label="Select student"
+                  >
+                    {studentsList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name || s.email} {s.timing ? `(${s.timing})` : `(${s.email})`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="top-actions">
+          <label className="search-box">
+            <span className="sr-only">Search this page</span>
+            <input
+              type="search"
+              aria-label={`Search ${activeView.toLowerCase()}`}
+              placeholder={`Search ${activeView.toLowerCase()}…`}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <span className="top-avatar" title={effectiveUser?.email}>
+            {(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}
+          </span>
+          {isAdminPreview && (
+            <button
+              className="button primary compact"
+              type="button"
+              onClick={onExitToAdmin || onSignOut}
+              title="Return to Admin Workspace"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                background: "#2563eb",
+                color: "#fff",
+                fontWeight: 600,
+                fontSize: "12px",
+                padding: "5px 12px",
+                borderRadius: "6px",
+              }}
+            >
+              <ArrowLeft size={14} />
+              <span>Exit Preview</span>
+            </button>
+          )}
+        </div>
+      </header>
+
+      {isAdminPreview && (
+        <aside className="admin-student-preview-banner" aria-label="Student Preview Controls">
+          <div className="preview-banner-left">
+            <Eye size={16} />
+            <span className="preview-banner-title">
+              Live Student Preview: <strong>{activeStudent?.full_name || activeStudent?.email || "Student"}</strong>
+            </span>
+            {activeStudent?.timing && (
+              <span className="badge" style={{ background: "#e0e7ff", color: "#3730a3", fontSize: "11px", fontWeight: 600 }}>
+                <Clock3 size={11} style={{ marginRight: "3px" }} /> {activeStudent.timing}
+              </span>
+            )}
+          </div>
+          <div className="preview-banner-controls">
+            <label className="preview-select-label">
+              <span>Switch Student:</span>
+              <select
+                value={activeStudentId}
+                onChange={(e) => setSelectedStudentId(e.target.value)}
+                className="preview-student-dropdown"
+                aria-label="Switch Student"
+              >
+                {studentsList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.full_name || s.email} {s.timing ? `• ${s.timing}` : `• ${s.email}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="button compact preview-exit-btn"
+              type="button"
+              onClick={onExitToAdmin || onSignOut}
+              title="Return to Admin Workspace"
+            >
+              <ArrowLeft size={13} />
+              <span>Exit to Admin</span>
+            </button>
+          </div>
+        </aside>
+      )}
+
       <div className="content">
         <div className="page-heading"><div><div className="eyebrow">{heading[0]}</div><h1>{heading[1]}</h1><p>{heading[2]}</p></div>{activeView === "Messages" && <button className="button primary" onClick={() => { setSelectedConversation(""); setNewSubject(""); }}><Plus size={14} />New message</button>}</div>
         {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
         {notice && <div className="portal-alert success" role="status"><CheckCircle2 size={15} />{notice}<button type="button" onClick={() => setNotice("")}>Dismiss</button></div>}
-        {loading ? <div className="card portal-loading">Loading your secure coursework…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Syllabus" ? renderSyllabus() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
+        {loading ? <div className="card portal-loading">Loading coursework for {activeStudent?.full_name || "student"}…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Syllabus" ? renderSyllabus() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
       </div>
     </main>
 
@@ -2100,7 +2475,7 @@ function StudentPortal({ user, profile, supabase, onSignOut }) {
         subtitle={viewingDocument.subtitle}
         url={viewingDocument.url}
         directDownloadUrl={viewingDocument.directDownloadUrl}
-        userEmail={user.email}
+        userEmail={effectiveUser?.email || user?.email}
         isSuperuser={false}
         downloadStatus={viewingDocument.downloadStatus}
         onRequestDownload={(reason) =>

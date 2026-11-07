@@ -8,18 +8,22 @@ import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
+import EditMaterialModal from "../components/EditMaterialModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import StudentAccessModal from "../components/StudentAccessModal";
 import CreateTrainerModal from "../components/CreateTrainerModal";
 import AssignTrainerStudentsModal from "../components/AssignTrainerStudentsModal";
+import { cleanAllFileStorage } from "../lib/storageCleanup.js";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
+import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback, updateAttendanceWithFallback } from "../lib/attendanceUtils.js";
 
 const headings = {
   Overview: ["Workspace", "Admin overview", "Manage students, course access, and learning records in one place."],
   Students: ["People", "Students", "Approve access, invite students, and manage student accounts."],
   Trainers: ["Faculty & Staff", "Trainers & Instructors", "Create trainer accounts, manage credentials, and assign timing."],
   Courses: ["Academic programs", "Courses", "Create courses, manage schedules and instructors, and enroll students."],
+  Syllabus: ["Academic curriculum", "Course Syllabus", "Upload, review, and distribute course syllabi, curriculum roadmaps, and learning goals across all courses."],
   Attendance: ["Academic operations", "Attendance", "Record and review daily student attendance."],
   Tasks: ["Academic & Student support", "Tasks", "Assign tasks, homework, and practice milestones to students separately or in batches."],
   Notes: ["Academic & Student support", "Tasks", "Assign tasks, homework, and practice milestones to students separately or in batches."],
@@ -61,6 +65,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [studentSearch, setStudentSearch] = useState("");
   const [courseSessionFilter, setCourseSessionFilter] = useState("all");
   const [attendancePrefillDate, setAttendancePrefillDate] = useState("");
+  const [attendancePrefillStatus, setAttendancePrefillStatus] = useState("present");
   const [recentInvites, setRecentInvites] = useState([]);
 
   // Notes & Access state
@@ -85,6 +90,17 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   const [noteFormCourseId, setNoteFormCourseId] = useState("");
   const [shareSelectedStudentIds, setShareSelectedStudentIds] = useState([]);
   const [shareStudentSearch, setShareStudentSearch] = useState("");
+
+  // Syllabus state
+  const [showUploadSyllabusModal, setShowUploadSyllabusModal] = useState(false);
+  const [syllabusCourseId, setSyllabusCourseId] = useState("");
+  const [syllabusTitle, setSyllabusTitle] = useState("");
+  const [syllabusDescription, setSyllabusDescription] = useState("");
+  const [syllabusDriveUrl, setSyllabusDriveUrl] = useState("");
+  const [syllabusFile, setSyllabusFile] = useState(null);
+  const [editingSyllabus, setEditingSyllabus] = useState(null);
+  const [syllabusCourseFilter, setSyllabusCourseFilter] = useState("all");
+  const [syllabusSearch, setSyllabusSearch] = useState("");
 
   useEffect(() => {
     if (notePrefillStudentId) {
@@ -119,6 +135,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         assessmentRecipientsResult,
         materialRecipientsResult,
         allNotesResult,
+        submissionsResult,
       ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, trainer_id, created_at").eq("role", "student").order("created_at", { ascending: false }),
         supabase.from("profiles").select("id, email, full_name, is_approved, timing, created_at").eq("role", "trainer").order("created_at", { ascending: false }),
@@ -142,6 +159,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           }
           return r;
         }),
+        supabase.from("assignment_submissions").select("id, file_path").not("file_path", "is", null).then((r) => r.error ? { data: [] } : r),
       ]);
       const failure = [studentResult, courseResult, enrollmentResult].find((result) => result.error);
       if (failure) {
@@ -164,8 +182,25 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       if (notesSummaryResult?.data) {
         setNotesSummary(notesSummaryResult.data);
       }
+
+      const activeMaterialsWithFile = (materialsResult.data ?? []).filter((m) => !!m.file_path);
+      const activeSubmissionsWithFile = (submissionsResult?.data ?? []).filter((s) => !!s.file_path);
+      const totalAttachedCount = activeMaterialsWithFile.length + activeSubmissionsWithFile.length;
+
       if (storageResult && !storageResult.error && storageResult.data) {
-        setStorageStats(storageResult.data);
+        setStorageStats({
+          ...storageResult.data,
+          file_used_bytes: totalAttachedCount === 0 ? 0 : (storageResult.data.file_used_bytes || 0),
+          file_used_pretty: totalAttachedCount === 0 ? "0 bytes" : (storageResult.data.file_used_pretty || "0 bytes"),
+          attached_files_count: totalAttachedCount,
+        });
+      } else {
+        setStorageStats((prev) => ({
+          ...(prev || {}),
+          file_used_bytes: 0,
+          file_used_pretty: "0 bytes",
+          attached_files_count: totalAttachedCount,
+        }));
       }
 
       if (view === "Attendance") {
@@ -185,6 +220,22 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   }, [supabase, view]);
 
   useEffect(() => { loadData(true); }, [loadData]);
+
+  // On initial load, perform a one-time clean to ensure attached file storage is reset to 0 bytes
+  useEffect(() => {
+    if (!supabase) return;
+    const cleanStorageKey = "tmdashboard_storage_cleaned_to_zero_v1";
+    if (!sessionStorage.getItem(cleanStorageKey)) {
+      cleanAllFileStorage(supabase)
+        .then(() => {
+          sessionStorage.setItem(cleanStorageKey, "true");
+          loadData(false);
+        })
+        .catch((err) => {
+          console.warn("Initial storage cleanup note:", err);
+        });
+    }
+  }, [supabase, loadData]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -510,22 +561,65 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     setError("");
 
     if (view === "Attendance") {
+      const selectedStudentId = values.get("student_id");
+      const courseId = values.get("course_id") || null;
+      const attendanceDate = values.get("attendance_date");
+      const status = values.get("status") || "present";
+      const note = String(values.get("note") || "").trim();
+
+      if (selectedStudentId === "ALL") {
+        const approvedStudents = students.filter((s) => s.is_approved);
+        if (!approvedStudents.length) {
+          setError("No approved students available to mark attendance.");
+          setBusy(false);
+          return;
+        }
+        const studentIds = approvedStudents.map((s) => s.id);
+        let delQuery = supabase.from("attendance_records").delete().in("student_id", studentIds).eq("attendance_date", attendanceDate);
+        if (courseId) {
+          delQuery = delQuery.eq("course_id", courseId);
+        }
+        await delQuery;
+
+        const recordsToInsert = studentIds.map((sId) => ({
+          student_id: sId,
+          course_id: courseId,
+          attendance_date: attendanceDate,
+          status: (status || "present").toLowerCase(),
+          note: note || (String(status).toLowerCase() === "holiday" ? "Campus Holiday" : ""),
+          created_by: user.id,
+        }));
+
+        try {
+          await insertAttendanceWithFallback(supabase, recordsToInsert);
+          setShowForm(false);
+          form.reset();
+          onToast(`Attendance marked for ${recordsToInsert.length} student(s) (${status.toUpperCase()}).`);
+          await loadData();
+        } catch (batchErr) {
+          setError(batchErr.message);
+        }
+        setBusy(false);
+        return;
+      }
+
       const payload = {
-        student_id: values.get("student_id"),
-        course_id: values.get("course_id") || null,
-        attendance_date: values.get("attendance_date"),
-        status: values.get("status"),
-        note: String(values.get("note") || "").trim(),
+        student_id: selectedStudentId,
+        course_id: courseId,
+        attendance_date: attendanceDate,
+        status: (status || "present").toLowerCase(),
+        note: note || (String(status).toLowerCase() === "holiday" ? "Campus Holiday" : ""),
         created_by: user.id,
       };
-      const { error: insertError } = await supabase.from("attendance_records").insert(payload);
-      if (insertError) {
-        setError(insertError.message);
-      } else {
+
+      try {
+        await insertAttendanceWithFallback(supabase, payload);
         setShowForm(false);
         form.reset();
         onToast("Attendance recorded.");
         await loadData();
+      } catch (insertError) {
+        setError(insertError.message);
       }
       setBusy(false);
       return;
@@ -637,9 +731,23 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     setBusy(true);
     setError("");
     const isAttendance = view === "Attendance";
-    const table = isAttendance ? "attendance_records" : "student_notes";
+
+    if (isAttendance) {
+      try {
+        await updateAttendanceWithFallback(supabase, recordId, payload);
+        setEditingRecord(null);
+        onToast("Attendance updated.");
+        await loadData();
+      } catch (err) {
+        setError(err.message);
+      }
+      setBusy(false);
+      return;
+    }
+
+    const table = "student_notes";
     let { error: updateError } = await supabase.from(table).update(payload).eq("id", recordId);
-    if (updateError && !isAttendance && (updateError.message?.includes("drive_url") || updateError.code === "PGRST204" || updateError.code === "42703")) {
+    if (updateError && (updateError.message?.includes("drive_url") || updateError.code === "PGRST204" || updateError.code === "42703")) {
       const { drive_url, ...fallbackPayload } = payload;
       if (drive_url && !fallbackPayload.body?.includes(drive_url)) {
         fallbackPayload.body = `${fallbackPayload.body || ""}\n\nDrive Link: ${drive_url}`.trim();
@@ -651,7 +759,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       setError(updateError.message);
     } else {
       setEditingRecord(null);
-      onToast(isAttendance ? "Attendance updated." : "Note updated successfully.");
+      onToast("Note updated successfully.");
       await loadData();
     }
     setBusy(false);
@@ -804,6 +912,33 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     }
   }
 
+  async function openMaterialDoc(material) {
+    let previewUrl = material.drive_url;
+    if (material.file_path) {
+      if (material.file_path.startsWith("data:") || material.file_path.startsWith("http")) {
+        previewUrl = material.file_path;
+      } else {
+        let bucket = "course-materials";
+        let cleanPath = material.file_path.replace(/^course-materials:|^assignment-files:/, "");
+        if (material.file_path.startsWith("assignment-files:")) bucket = "assignment-files";
+        try {
+          const { data } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 3600);
+          if (data?.signedUrl) previewUrl = data.signedUrl;
+        } catch {}
+      }
+    }
+    if (previewUrl) {
+      const course = courses.find((c) => c.id === material.course_id);
+      setViewingNoteDoc({
+        title: material.title,
+        subtitle: course ? `${course.code} · Official Course Syllabus` : "Syllabus Document",
+        url: previewUrl,
+      });
+    } else {
+      if (onToast) onToast("Could not generate a preview link for this syllabus.");
+    }
+  }
+
   async function handlePermitTestForStudent(test, studentId) {
     try {
       const { error: insErr } = await supabase.from("assessment_recipients").upsert({ assessment_id: test.id, student_id: studentId }, { onConflict: "assessment_id,student_id" });
@@ -860,6 +995,188 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
     } else {
       onToast("Note deleted.");
       await loadData();
+    }
+  }
+
+  async function handleCleanFileStorage() {
+    if (!window.confirm("Are you sure you want to clear and purge all attached files from database storage? This will delete stored files from cloud storage and reset attached file paths to 0 bytes.")) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await cleanAllFileStorage(supabase);
+      setStorageStats((prev) => ({
+        ...(prev || {}),
+        file_used_bytes: 0,
+        file_used_pretty: "0 bytes",
+        attached_files_count: 0,
+      }));
+      onToast("Database file storage cleaned successfully! File attached storage is now 0 bytes.");
+      await loadData(true);
+    } catch (err) {
+      setError("Failed to clean file storage: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUploadSyllabus(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!syllabusTitle.trim()) {
+      setError("Please provide a title for the syllabus.");
+      return;
+    }
+    if (!syllabusCourseId) {
+      setError("Please select a course for this syllabus.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    try {
+      let uploadedFilePath = null;
+      let originalFileName = null;
+      let fileSize = 0;
+
+      if (syllabusFile) {
+        const safeName = syllabusFile.name.replace(/[^a-zA-Z0-9.-]/g, "_");
+        const uniquePath = `syllabus_${Date.now()}_${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("course-materials")
+          .upload(uniquePath, syllabusFile);
+
+        if (uploadError) {
+          const { error: fallbackError } = await supabase.storage
+            .from("assignment-files")
+            .upload(uniquePath, syllabusFile);
+          if (fallbackError) throw uploadError;
+          uploadedFilePath = `assignment-files:${uniquePath}`;
+        } else {
+          uploadedFilePath = `course-materials:${uniquePath}`;
+        }
+        originalFileName = syllabusFile.name;
+        fileSize = syllabusFile.size;
+      }
+
+      const { data: insertedMat, error: insertError } = await supabase
+        .from("course_materials")
+        .insert({
+          title: syllabusTitle.trim(),
+          description: syllabusDescription.trim(),
+          category: "Syllabus",
+          course_id: syllabusCourseId,
+          file_path: uploadedFilePath,
+          file_name: originalFileName,
+          file_size: fileSize,
+          file_type: syllabusFile?.type || "application/pdf",
+          drive_url: syllabusDriveUrl.trim() || null,
+          created_by: user.id,
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+
+      // Distribute syllabus to all currently enrolled students of this course
+      const courseEnrolledStudents = enrollments
+        .filter((en) => en.course_id === syllabusCourseId)
+        .map((en) => en.student_id);
+
+      if (insertedMat && courseEnrolledStudents.length > 0) {
+        const recipInserts = courseEnrolledStudents.map((sid) => ({
+          material_id: insertedMat.id,
+          student_id: sid,
+        }));
+        await supabase.from("material_recipients").insert(recipInserts).then(() => {});
+      }
+
+      onToast(`Syllabus "${syllabusTitle}" published for course!`);
+      setShowUploadSyllabusModal(false);
+      setSyllabusTitle("");
+      setSyllabusDescription("");
+      setSyllabusDriveUrl("");
+      setSyllabusFile(null);
+      await loadData();
+    } catch (err) {
+      setError(`Failed to upload syllabus: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteSyllabus(material) {
+    if (!window.confirm(`Delete syllabus "${material.title}"? This cannot be undone.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (material.file_path && !material.file_path.startsWith("data:") && !material.file_path.startsWith("http")) {
+        let bucket = "course-materials";
+        let cleanPath = material.file_path.replace(/^course-materials:|^assignment-files:/, "");
+        if (material.file_path.startsWith("assignment-files:")) bucket = "assignment-files";
+        try {
+          await supabase.storage.from(bucket).remove([cleanPath]);
+        } catch (stErr) {
+          console.warn("Storage deletion note:", stErr);
+        }
+      }
+
+      await supabase.from("material_recipients").delete().eq("material_id", material.id).then(() => {});
+      const { error: delErr } = await supabase.from("course_materials").delete().eq("id", material.id);
+      if (delErr) throw delErr;
+
+      onToast("Syllabus deleted successfully.");
+      await loadData();
+    } catch (err) {
+      setError(`Failed to delete syllabus: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateSyllabus(materialId, updates) {
+    setBusy(true);
+    setError("");
+    try {
+      let filePath = updates.filePath;
+      let fileSize = updates.fileSize;
+      let fileName = updates.fileName;
+
+      if (updates.replacementFile) {
+        const file = updates.replacementFile;
+        const cleanName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
+        const path = `syllabus_${Date.now()}_${cleanName}`;
+        const { error: upErr } = await supabase.storage.from("course-materials").upload(path, file);
+        if (!upErr) {
+          filePath = `course-materials:${path}`;
+          fileSize = file.size;
+          fileName = file.name;
+        }
+      }
+
+      const patch = {
+        title: updates.title,
+        description: updates.description,
+        category: "Syllabus",
+        course_id: updates.courseId || null,
+        drive_url: updates.driveUrl || null,
+      };
+      if (filePath) patch.file_path = filePath;
+      if (fileSize !== undefined) patch.file_size = fileSize;
+      if (fileName) patch.file_name = fileName;
+
+      const { error: upDbErr } = await supabase.from("course_materials").update(patch).eq("id", materialId);
+      if (upDbErr) throw upDbErr;
+
+      onToast("Syllabus updated successfully.");
+      setEditingSyllabus(null);
+      await loadData();
+    } catch (err) {
+      setError(`Failed to update syllabus: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -997,6 +1314,42 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           ) : (
             <p className="course-card-description placeholder">No description or syllabus added yet.</p>
           )}
+
+          {(() => {
+            const courseSyllabi = (materials || []).filter(
+              (m) =>
+                m.course_id === course.id &&
+                ((m.category || "").toLowerCase() === "syllabus" ||
+                  (m.title || "").toLowerCase().includes("syllabus") ||
+                  (m.description || "").toLowerCase().includes("syllabus"))
+            );
+            if (!courseSyllabi.length) return null;
+            return (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px" }} onClick={(e) => e.stopPropagation()}>
+                {courseSyllabi.map((syl) => (
+                  <button
+                    key={syl.id}
+                    type="button"
+                    className="button compact"
+                    style={{
+                      background: "#f0fdf4",
+                      color: "#166534",
+                      borderColor: "#86efac",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                    title="Click to view attached syllabus PDF"
+                    onClick={() => openMaterialDoc(syl)}
+                  >
+                    <Eye size={13} /> View Syllabus: {syl.title}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
         </div>
 
         <div className="course-meta-chips">
@@ -1096,16 +1449,361 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       </article>
     );
   }
+
+  function renderSyllabusView() {
+    const allSyllabi = materials.filter(
+      (m) =>
+        (m.category || "").toLowerCase() === "syllabus" ||
+        (m.title || "").toLowerCase().includes("syllabus") ||
+        (m.description || "").toLowerCase().includes("syllabus")
+    );
+
+    const distinctCoursesWithSyllabus = new Set(allSyllabi.map((s) => s.course_id).filter(Boolean));
+    const coursesWithSyllabusCount = courses.filter((c) => distinctCoursesWithSyllabus.has(c.id)).length;
+    const coursesMissingSyllabusCount = Math.max(0, courses.length - coursesWithSyllabusCount);
+
+    const filteredCoursesForSyllabus = courses.filter((c) => {
+      if (syllabusCourseFilter !== "all" && c.id !== syllabusCourseFilter) return false;
+      if (!syllabusSearch.trim()) return true;
+      const q = syllabusSearch.trim().toLowerCase();
+      const courseSyllabi = allSyllabi.filter((s) => s.course_id === c.id);
+      const syllabiText = courseSyllabi.map((s) => `${s.title} ${s.description || ""}`).join(" ").toLowerCase();
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.instructor || "").toLowerCase().includes(q) ||
+        (c.department || "").toLowerCase().includes(q) ||
+        syllabiText.includes(q)
+      );
+    });
+
+    const generalSyllabi = allSyllabi.filter((s) => !s.course_id || !courses.some((c) => c.id === s.course_id));
+
+    return (
+      <div className="admin-syllabus-view">
+        {/* Metric Summary Cards */}
+        <section className="metrics student-metrics" style={{ marginBottom: "20px" }}>
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Total Courses</span>
+              <span className="metric-icon blue"><BookOpen size={17} /></span>
+            </div>
+            <strong>{courses.length}</strong>
+            <small>Active academic programs</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Courses With Syllabus</span>
+              <span className="metric-icon green"><CheckCircle2 size={17} /></span>
+            </div>
+            <strong style={{ color: "var(--green)" }}>{coursesWithSyllabusCount}</strong>
+            <small>Curriculum published</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Total Syllabi</span>
+              <span className="metric-icon purple"><FileText size={17} /></span>
+            </div>
+            <strong>{allSyllabi.length}</strong>
+            <small>Documents &amp; outlines</small>
+          </article>
+
+          <article className="card metric-card">
+            <div className="metric-top">
+              <span>Missing Syllabus</span>
+              <span className="metric-icon amber"><Clock3 size={17} /></span>
+            </div>
+            <strong style={{ color: coursesMissingSyllabusCount > 0 ? "#d97706" : "var(--green)" }}>
+              {coursesMissingSyllabusCount}
+            </strong>
+            <small>{coursesMissingSyllabusCount > 0 ? "Awaiting outline upload" : "All courses ready"}</small>
+          </article>
+        </section>
+
+        {/* Toolbar */}
+        <div className="student-admin-toolbar" style={{ marginBottom: "18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", flex: 1 }}>
+            <label className="search-box" style={{ maxWidth: "340px", flex: 1 }}>
+              <Search size={15} />
+              <input
+                type="search"
+                aria-label="Search syllabi by course or title"
+                placeholder="Search syllabi by course name, code, or topic..."
+                value={syllabusSearch}
+                onChange={(e) => setSyllabusSearch(e.target.value)}
+              />
+            </label>
+
+            <select
+              value={syllabusCourseFilter}
+              onChange={(e) => setSyllabusCourseFilter(e.target.value)}
+              style={{ height: "38px", padding: "0 10px", borderRadius: "8px", border: "1px solid var(--line)", background: "#fff", fontSize: "13px" }}
+            >
+              <option value="all">All Courses ({courses.length})</option>
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => {
+              setSyllabusCourseId(courses[0]?.id || "");
+              setSyllabusTitle("");
+              setSyllabusDescription("");
+              setSyllabusDriveUrl("");
+              setSyllabusFile(null);
+              setShowUploadSyllabusModal(true);
+            }}
+          >
+            <Plus size={15} /> Upload Course Syllabus
+          </button>
+        </div>
+
+        {/* Course Syllabi Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "18px" }}>
+          {filteredCoursesForSyllabus.map((course) => {
+            const courseSyllabi = allSyllabi.filter((s) => s.course_id === course.id);
+            const courseStudents = enrollments.filter((e) => e.course_id === course.id);
+            const hasSyllabus = courseSyllabi.length > 0;
+
+            return (
+              <article
+                className="card panel"
+                key={course.id}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  border: hasSyllabus ? "1px solid var(--line)" : "1px dashed #cbd5e1",
+                  background: hasSyllabus ? "var(--surface)" : "#fafafa",
+                }}
+              >
+                <div>
+                  {/* Course Header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span className="badge blue" style={{ fontSize: "11px", fontWeight: 700 }}>
+                        {course.code}
+                      </span>
+                      {hasSyllabus ? (
+                        <span className="badge green" style={{ fontSize: "11px", fontWeight: 600 }}>
+                          <Check size={11} strokeWidth={3} /> Syllabus Uploaded ({courseSyllabi.length})
+                        </span>
+                      ) : (
+                        <span className="badge amber" style={{ fontSize: "11px", fontWeight: 600 }}>
+                          <Clock3 size={11} /> Missing Syllabus
+                        </span>
+                      )}
+                    </div>
+
+                    <span style={{ fontSize: "11.5px", color: "var(--muted)", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <Users size={12} /> {courseStudents.length} student{courseStudents.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
+                  <h3 style={{ fontSize: "16px", margin: "0 0 6px", color: "var(--ink)", fontWeight: 700 }}>
+                    {course.name}
+                  </h3>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", fontSize: "12px", color: "var(--muted)", marginBottom: "14px" }}>
+                    {course.instructor && (
+                      <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                        <GraduationCap size={13} /> {course.instructor}
+                      </span>
+                    )}
+                    {course.department && (
+                      <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                        <BookOpen size={13} /> {course.department}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Attached Syllabi List */}
+                  {hasSyllabus ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px" }}>
+                      {courseSyllabi.map((syl) => {
+                        const driveUrl = syl.drive_url || extractDriveUrl(syl.description || "");
+                        const docType = getDriveDocTypeLabel(driveUrl || syl.file_name);
+                        const isPdf = (syl.file_type && syl.file_type.includes("pdf")) || (syl.file_name && syl.file_name.toLowerCase().endsWith(".pdf"));
+
+                        return (
+                          <div
+                            key={syl.id}
+                            style={{
+                              padding: "12px",
+                              background: "#f8fafc",
+                              borderRadius: "8px",
+                              border: "1px solid var(--line)",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                              <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", flex: 1 }}>
+                                <span style={{ width: "28px", height: "28px", borderRadius: "6px", background: "#f0fdf4", color: "#166534", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: "2px" }}>
+                                  <FileText size={15} />
+                                </span>
+                                <div>
+                                  <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "block" }}>
+                                    {syl.title}
+                                  </strong>
+                                  {syl.description && (
+                                    <p style={{ margin: "3px 0 0", fontSize: "12px", color: "var(--muted)", lineHeight: 1.4 }}>
+                                      {syl.description}
+                                    </p>
+                                  )}
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
+                                    <span className="badge" style={{ fontSize: "10.5px", background: "#e0f2fe", color: "#0369a1" }}>
+                                      {isPdf ? "PDF Document" : docType || "Syllabus"}
+                                    </span>
+                                    {syl.file_size > 0 && (
+                                      <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                                        {(syl.file_size / (1024 * 1024)).toFixed(2)} MB
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div style={{ display: "flex", gap: "4px" }}>
+                                <button
+                                  className="button compact"
+                                  type="button"
+                                  style={{ padding: "4px 8px", fontSize: "11.5px" }}
+                                  onClick={() => setEditingSyllabus(syl)}
+                                  title="Edit syllabus details"
+                                >
+                                  <Pencil size={12} />
+                                </button>
+                                <button
+                                  className="button compact danger-outline"
+                                  type="button"
+                                  style={{ padding: "4px 8px", fontSize: "11.5px" }}
+                                  onClick={() => handleDeleteSyllabus(syl)}
+                                  title="Delete syllabus"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+                              <button
+                                className="button compact primary"
+                                type="button"
+                                style={{ flex: 1, fontSize: "12px", padding: "4px 10px" }}
+                                onClick={() => openMaterialDoc(syl)}
+                              >
+                                <Eye size={12} /> View Syllabus
+                              </button>
+                              {driveUrl && (
+                                <a
+                                  className="button compact"
+                                  href={driveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ fontSize: "12px", textDecoration: "none", padding: "4px 10px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                                >
+                                  <ExternalLink size={12} /> Drive
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "18px 12px", textAlign: "center", background: "#fff", borderRadius: "8px", border: "1px dashed var(--line)", marginBottom: "12px" }}>
+                      <FileText size={22} style={{ color: "var(--muted)", margin: "0 auto 6px", display: "block" }} />
+                      <strong style={{ fontSize: "13px", color: "var(--muted)", display: "block" }}>No syllabus uploaded yet</strong>
+                      <span style={{ fontSize: "11.5px", color: "var(--muted)", display: "block", marginTop: "2px" }}>
+                        Enrolled students currently see course overview info.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card-actions" style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid var(--line)", display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    className={`button ${hasSyllabus ? "compact" : "primary compact"}`}
+                    type="button"
+                    style={{ width: "100%" }}
+                    onClick={() => {
+                      setSyllabusCourseId(course.id);
+                      setSyllabusTitle(`${course.name} - Official Syllabus`);
+                      setSyllabusDescription("");
+                      setSyllabusDriveUrl("");
+                      setSyllabusFile(null);
+                      setShowUploadSyllabusModal(true);
+                    }}
+                  >
+                    <Plus size={13} /> {hasSyllabus ? "Add Another Syllabus File" : "Upload Syllabus for this Course"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+
+          {/* General Syllabi (if any) */}
+          {generalSyllabi.length > 0 && (
+            <article className="card panel" style={{ gridColumn: "1 / -1", border: "1px solid var(--line)" }}>
+              <div className="panel-heading">
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px" }}>Campus-Wide / Multi-Course Syllabi ({generalSyllabi.length})</h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12.5px" }}>General academic curriculum outlines and learning guidelines.</p>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "12px", marginTop: "12px" }}>
+                {generalSyllabi.map((syl) => (
+                  <div key={syl.id} style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <strong style={{ fontSize: "14px" }}>{syl.title}</strong>
+                      <div style={{ display: "flex", gap: "4px" }}>
+                        <button className="button compact" type="button" onClick={() => setEditingSyllabus(syl)}><Pencil size={12} /></button>
+                        <button className="button compact danger-outline" type="button" onClick={() => handleDeleteSyllabus(syl)}><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                    {syl.description && <p style={{ fontSize: "12px", color: "var(--muted)", margin: "4px 0" }}>{syl.description}</p>}
+                    <button className="button compact primary" type="button" style={{ marginTop: "8px", width: "100%" }} onClick={() => openMaterialDoc(syl)}>
+                      <Eye size={12} /> View Syllabus Document
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </article>
+          )}
+
+          {!filteredCoursesForSyllabus.length && (
+            <div className="card portal-empty" style={{ gridColumn: "1 / -1" }}>
+              <FileText size={26} />
+              <strong>No courses match your filter</strong>
+              <span>Try clearing your search term or select "All Courses" from the dropdown.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   const [eyebrow, title, description] = headings[view] || ["Workspace", view || "Management", "Manage campus records."];
 
   return <div className="admin-workspace">
     <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="heading-actions">
-      {["Students", "Trainers", "Courses", "Attendance", "Notes", "Tasks"].includes(view) && (
+      {["Students", "Trainers", "Courses", "Syllabus", "Attendance", "Notes", "Tasks"].includes(view) && (
         <button
           className="button primary"
           onClick={() => {
             if (view === "Trainers") {
               setShowTrainerModal(true);
+            } else if (view === "Syllabus") {
+              setSyllabusCourseId(courses[0]?.id || "");
+              setSyllabusTitle("");
+              setSyllabusDescription("");
+              setSyllabusDriveUrl("");
+              setSyllabusFile(null);
+              setShowUploadSyllabusModal(true);
             } else {
               setShowForm((current) => !current);
             }
@@ -1119,6 +1817,8 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             ? "Create trainer account"
             : view === "Courses"
             ? "Add course"
+            : view === "Syllabus"
+            ? "Upload syllabus"
             : view === "Attendance"
             ? "Record attendance"
             : "Assign task"}
@@ -1126,7 +1826,32 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
       )}
       <button className="button" onClick={loadData}>Refresh</button>
     </div></div>
-    {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
+    {error && (
+      <div className="portal-alert error" role="alert" style={{ marginBottom: "16px", display: "flex", flexDirection: "column", gap: "10px", alignItems: "stretch" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+          <span>{error}</span>
+          <button type="button" onClick={() => setError("")} style={{ flexShrink: 0 }}>Dismiss</button>
+        </div>
+        {error.includes("attendance_records_status_check") && (
+          <div style={{ background: "rgba(0,0,0,0.06)", padding: "10px 12px", borderRadius: "8px", display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+            <code style={{ fontSize: "12px", color: "var(--ink)", wordBreak: "break-all" }}>
+              ALTER TABLE public.attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check; ALTER TABLE public.attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (lower(status) in ('present', 'late', 'absent', 'holiday'));
+            </code>
+            <button
+              type="button"
+              className="button compact primary"
+              style={{ background: "#7c3aed" }}
+              onClick={() => {
+                navigator.clipboard.writeText("ALTER TABLE public.attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;\nALTER TABLE public.attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (lower(status) in ('present', 'late', 'absent', 'holiday'));");
+                onToast("SQL command copied to clipboard! Paste and execute it in your Supabase SQL Editor.");
+              }}
+            >
+              <Copy size={13} /> Copy Migration SQL
+            </button>
+          </div>
+        )}
+      </div>
+    )}
 
     {recentInvites.length > 0 && <div className="card invite-links-box">
       <div className="invite-links-header">
@@ -1282,8 +2007,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         </div>
         <label className="form-field">
           <span>Student</span>
-          <select name="student_id" required defaultValue="">
+          <select name="student_id" required defaultValue={attendancePrefillStatus === "holiday" ? "ALL" : ""}>
             <option value="" disabled>Select a student</option>
+            <option value="ALL">All Enrolled Students (Batch Attendance / Holiday)</option>
             {students.filter((student) => student.is_approved).map((student) => (
               <option key={student.id} value={student.id}>{student.full_name || student.email} · {student.email}</option>
             ))}
@@ -1292,7 +2018,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         <label className="form-field">
           <span>Course (optional)</span>
           <select name="course_id" defaultValue="">
-            <option value="">No course</option>
+            <option value="">Campus-wide (All Courses)</option>
             {courses.map((course) => (
               <option key={course.id} value={course.id}>{course.code} · {course.name}</option>
             ))}
@@ -1304,15 +2030,21 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         </label>
         <label className="form-field">
           <span>Status</span>
-          <select name="status" defaultValue="present">
+          <select name="status" defaultValue={attendancePrefillStatus || "present"} key={attendancePrefillStatus}>
             <option value="present">Present</option>
             <option value="late">Late</option>
             <option value="absent">Absent</option>
+            <option value="holiday">Holiday</option>
           </select>
         </label>
         <label className="form-field">
           <span>Note (optional)</span>
-          <input name="note" maxLength="1000" />
+          <input
+            name="note"
+            maxLength="1000"
+            placeholder={attendancePrefillStatus === "holiday" ? "e.g. Campus Holiday / Festival" : "e.g. Excused leave"}
+            defaultValue={attendancePrefillStatus === "holiday" ? "Campus Holiday" : ""}
+          />
         </label>
         <div className="form-actions">
           <button className="button" type="button" onClick={() => setShowForm(false)}>Cancel</button>
@@ -1644,6 +2376,16 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             <button className="button" type="button" onClick={loadData} title="Refresh live storage metrics">
               <RefreshCw size={13} /> Refresh
             </button>
+            <button
+              className="button compact"
+              type="button"
+              style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" }}
+              onClick={handleCleanFileStorage}
+              disabled={busy}
+              title="Purge all attached files and clean database storage"
+            >
+              <Trash2 size={13} /> Clear DB File Storage
+            </button>
           </div>
         </div>
 
@@ -1669,8 +2411,16 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
           <div className="storage-stat-pill">
             <span>File Attachment Storage</span>
-            <strong>{storageStats?.file_used_pretty || "0 bytes"}</strong>
-            <small>Student uploads &amp; attachments</small>
+            <strong style={{ color: (storageStats?.attached_files_count > 0 && storageStats?.file_used_bytes > 0) ? "var(--text)" : "var(--green)" }}>
+              {(storageStats?.attached_files_count > 0 && storageStats?.file_used_bytes > 0)
+                ? (storageStats?.file_used_pretty || "0 bytes")
+                : "0 bytes"}
+            </strong>
+            <small>
+              {storageStats?.attached_files_count > 0
+                ? `${storageStats.attached_files_count} student uploads & attachments`
+                : "Student uploads & attachments (0 bytes)"}
+            </small>
           </div>
         </div>
       </section>
@@ -2321,7 +3071,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </div>
         )}
       </div>
-    </> : view === "Attendance" ? (
+    </> : view === "Syllabus" ? (
+      renderSyllabusView()
+    ) : view === "Attendance" ? (
       <AttendanceCalendar
         records={records}
         students={students}
@@ -2329,8 +3081,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         isAdmin={true}
         onEditRecord={(record) => setEditingRecord(record)}
         onDeleteRecord={(record) => deleteRecord(record)}
-        onAddRecord={(selectedDate) => {
+        onAddRecord={(selectedDate, defaultStatus = "present") => {
           setAttendancePrefillDate(selectedDate);
+          setAttendancePrefillStatus(defaultStatus);
           setShowForm(true);
         }}
       />
@@ -2839,6 +3592,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         onPermitTest={handlePermitTestForStudent}
         onRevokeTest={handleRevokeTestForStudent}
         onAddManualNote={handleAddManualNoteForStudent}
+        onEditManualNote={(note) => setEditingRecord(note)}
         onDeleteManualNote={handleDeleteManualNoteForStudent}
         onEnrollStudent={enrollStudentInCourse}
         onUnenrollStudent={unenrollStudentFromCourse}
@@ -2851,6 +3605,129 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         onClose={() => setShowTrainerModal(false)}
         onCreated={() => loadData()}
         onToast={onToast}
+      />
+    )}
+
+    {showUploadSyllabusModal && (
+      <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowUploadSyllabusModal(false); }}>
+        <div className="modal" style={{ maxWidth: "560px" }}>
+          <div className="modal-heading">
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span className="portal-item-icon" style={{ width: "38px", height: "38px", background: "#f0fdf4", color: "#166534", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <FileText size={18} />
+              </span>
+              <div>
+                <h2 style={{ margin: 0 }}>Upload Course Syllabus</h2>
+                <p style={{ margin: 0 }}>Publish comprehensive course syllabus and curriculum outlines for students.</p>
+              </div>
+            </div>
+            <button type="button" className="quiet-icon" onClick={() => setShowUploadSyllabusModal(false)}><X size={18} /></button>
+          </div>
+
+          <form onSubmit={handleUploadSyllabus}>
+            <label className="form-field">
+              <span>Course *</span>
+              <select
+                required
+                value={syllabusCourseId}
+                onChange={(e) => {
+                  setSyllabusCourseId(e.target.value);
+                  const selCourse = courses.find((c) => c.id === e.target.value);
+                  if (selCourse && !syllabusTitle) {
+                    setSyllabusTitle(`${selCourse.name} - Syllabus`);
+                  }
+                }}
+              >
+                <option value="">Select a course...</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="form-field" style={{ marginTop: "12px" }}>
+              <span>Syllabus Title *</span>
+              <input
+                required
+                placeholder="e.g. Python Full Stack Comprehensive Curriculum & Roadmaps"
+                value={syllabusTitle}
+                onChange={(e) => setSyllabusTitle(e.target.value)}
+              />
+            </label>
+
+            <label className="form-field" style={{ marginTop: "12px" }}>
+              <span>Curriculum Description / Weekly Modules</span>
+              <textarea
+                rows={4}
+                placeholder="Overview of modules, prerequisites, evaluation criteria, tools, and learning roadmap..."
+                value={syllabusDescription}
+                onChange={(e) => setSyllabusDescription(e.target.value)}
+              />
+            </label>
+
+            <label className="form-field" style={{ marginTop: "12px" }}>
+              <span>Upload Syllabus Document (.PDF, .DOC, .DOCX)</span>
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx"
+                onChange={(e) => setSyllabusFile(e.target.files[0] || null)}
+              />
+              {syllabusFile && (
+                <small style={{ color: "var(--green)", fontWeight: 600, marginTop: "4px", display: "block" }}>
+                  Selected: {syllabusFile.name} ({(syllabusFile.size / (1024 * 1024)).toFixed(2)} MB)
+                </small>
+              )}
+            </label>
+
+            <label className="form-field" style={{ marginTop: "12px" }}>
+              <span>Google Drive Link (Optional)</span>
+              <input
+                type="url"
+                placeholder="https://drive.google.com/file/d/..."
+                value={syllabusDriveUrl}
+                onChange={(e) => setSyllabusDriveUrl(e.target.value)}
+              />
+              <small style={{ color: "var(--muted)", fontSize: "11.5px" }}>
+                Add direct Google Drive file link. LearnForge automatically generates protected in-dashboard previews.
+              </small>
+            </label>
+
+            <div style={{ marginTop: "14px", padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "12px", color: "#166534", display: "flex", alignItems: "center", gap: "8px" }}>
+              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+              <span>
+                Publishing this syllabus will automatically grant view-only access to all students enrolled in this course.
+              </span>
+            </div>
+
+            <div className="form-actions" style={{ marginTop: "18px" }}>
+              <button className="button" type="button" onClick={() => setShowUploadSyllabusModal(false)}>Cancel</button>
+              <button className="button primary" disabled={busy}>
+                <Plus size={14} /> {busy ? "Uploading..." : "Save & Publish Syllabus"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+
+    {editingSyllabus && (
+      <EditMaterialModal
+        material={editingSyllabus}
+        courses={courses}
+        onClose={() => setEditingSyllabus(null)}
+        onSave={handleUpdateSyllabus}
+        onDelete={() => handleDeleteSyllabus(editingSyllabus)}
+      />
+    )}
+
+    {viewingNoteDoc && (
+      <SecureDocumentViewer
+        title={viewingNoteDoc.title}
+        subtitle={viewingNoteDoc.subtitle}
+        url={viewingNoteDoc.url}
+        userEmail={user.email}
+        isSuperuser={true}
+        onClose={() => setViewingNoteDoc(null)}
       />
     )}
   </div>;

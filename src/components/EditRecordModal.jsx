@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Clock3, ExternalLink, FileText, GraduationCap, HardDrive, Link2, X } from "lucide-react";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
+import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 
 export default function EditRecordModal({
   view, // "Attendance" | "Notes"
@@ -15,8 +16,8 @@ export default function EditRecordModal({
   const [studentId, setStudentId] = useState(record.student_id || "");
   const [courseId, setCourseId] = useState(record.course_id || "");
   const [attendanceDate, setAttendanceDate] = useState(record.attendance_date || "");
-  const [status, setStatus] = useState(record.status || "present");
-  const [note, setNote] = useState(record.note || "");
+  const [status, setStatus] = useState(() => (isAttendance ? normalizeAttendanceStatus(record) : (record.status || "present")));
+  const [note, setNote] = useState(() => (isAttendance ? cleanAttendanceNote(record.note) : (record.note || "")));
   const [title, setTitle] = useState(record.title || "");
 
   const existingDriveUrl = record.drive_url || extractDriveUrl(record.body || "");
@@ -152,6 +153,7 @@ export default function EditRecordModal({
                     <option value="present">Present</option>
                     <option value="late">Late</option>
                     <option value="absent">Absent</option>
+                    <option value="holiday">Holiday</option>
                   </select>
                 </label>
               </div>

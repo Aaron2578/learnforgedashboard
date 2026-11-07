@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   BookOpen, Check, ClipboardList, Clock3, Copy, ExternalLink, Eye,
-  FileText, GraduationCap, HardDrive, KeyRound, Link2, Lock, Plus,
+  FileText, GraduationCap, HardDrive, KeyRound, Link2, Lock, Pencil, Plus,
   ShieldCheck, Trash2, Unlock, Upload, Users, X
 } from "lucide-react";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
@@ -21,6 +21,7 @@ export default function StudentAccessModal({
   onPermitTest,
   onRevokeTest,
   onAddManualNote,
+  onEditManualNote,
   onDeleteManualNote,
   onEnrollStudent,
   onUnenrollStudent,
@@ -738,14 +739,27 @@ export default function StudentAccessModal({
                           </small>
                         </div>
 
-                        <button
-                          type="button"
-                          className="modal-unenroll-btn"
-                          onClick={() => onDeleteManualNote(note.id)}
-                          title="Delete note"
-                        >
-                          <Trash2 size={13} /> Delete
-                        </button>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          {onEditManualNote && (
+                            <button
+                              type="button"
+                              className="button compact"
+                              onClick={() => onEditManualNote(note)}
+                              title="Edit note"
+                              style={{ height: "30px", fontSize: "12px", padding: "0 8px" }}
+                            >
+                              <Pencil size={12} /> Edit
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="modal-unenroll-btn"
+                            onClick={() => onDeleteManualNote(note.id)}
+                            title="Delete note"
+                          >
+                            <Trash2 size={13} /> Delete
+                          </button>
+                        </div>
                       </div>
 
                       {cleanBody && (

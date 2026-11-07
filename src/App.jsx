@@ -34,6 +34,7 @@ import AdminPortalView from "./portal/AdminPortalView.jsx";
 import AdminManagementView from "./portal/AdminManagementView.jsx";
 import AdminDriveView from "./portal/AdminDriveView.jsx";
 import TrainerPortal from "./portal/TrainerPortal.jsx";
+import StudentPortal from "./portal/StudentPortal.jsx";
 
 const STORAGE_KEY = "learnforge-dashboard-v1";
 const LEGACY_STORAGE_KEY = "northstar-institute-dashboard-v1";
@@ -43,6 +44,7 @@ const NAV_ITEMS = [
   { label: "Students", icon: Users },
   { label: "Trainers", icon: GraduationCap },
   { label: "Courses", icon: BookOpen },
+  { label: "Syllabus", icon: FileText },
   { label: "Drive & Files", icon: HardDrive },
   { label: "Attendance", icon: ClipboardCheck },
   { label: "Tasks", icon: CheckCircle2 },
@@ -51,6 +53,7 @@ const NAV_ITEMS = [
   { label: "Tests", icon: CheckCircle2 },
   { group: "Instruction" },
   { label: "Trainer Dashboard", icon: GraduationCap },
+  { label: "Student Dashboard", icon: BookOpen },
   { group: "Community" },
   { label: "Calendar", icon: CalendarDays },
   { label: "Messages", icon: MessageSquare },
@@ -637,23 +640,44 @@ function App({ user, profile, supabase, onSignOut }) {
       />
     );
   }
+  function renderStudentPortalView() {
+    return (
+      <StudentPortal
+        user={user}
+        profile={profile}
+        supabase={supabase}
+        onSignOut={() => changeView("Overview")}
+        onExitToAdmin={() => changeView("Overview")}
+        isAdminPreview={true}
+      />
+    );
+  }
 
   const viewContent = {
     Overview: renderAdminManagementView,
     Students: renderAdminManagementView,
     Trainers: renderAdminManagementView,
     Courses: renderAdminManagementView,
+    Syllabus: renderAdminManagementView,
     "Drive & Files": renderAdminDriveView,
     Attendance: renderAdminManagementView,
     Tasks: renderAdminManagementView,
     Notes: renderAdminManagementView,
     "Trainer Dashboard": renderTrainerPortalView,
+    "Student Dashboard": renderStudentPortalView,
     Reports: renderReports,
     Calendar: renderCalendar,
     Assignments: renderAdminPortalView,
     Tests: renderAdminPortalView,
     Messages: supabase ? renderAdminPortalView : renderMessages,
   };
+
+  if (activeView === "Trainer Dashboard") {
+    return renderTrainerPortalView();
+  }
+  if (activeView === "Student Dashboard") {
+    return renderStudentPortalView();
+  }
 
   return (
     <div className="app-shell">

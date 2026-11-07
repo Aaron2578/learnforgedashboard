@@ -44,7 +44,9 @@ import {
   BarChart3,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
+import EditMaterialModal from "../components/EditMaterialModal";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
+import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 
 const TRAINER_NAV = [
   { label: "Overview", icon: LayoutDashboard },
@@ -115,10 +117,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [selectedAssignmentForSubmissions, setSelectedAssignmentForSubmissions] = useState(null);
   const [gradingState, setGradingState] = useState({});
   const [savingGradeId, setSavingGradeId] = useState(null);
+  const [showAssignAssignmentModal, setShowAssignAssignmentModal] = useState(false);
+  const [selectedAssignmentToAssign, setSelectedAssignmentToAssign] = useState(null);
+  const [assignmentAssignTargetStudentIds, setAssignmentAssignTargetStudentIds] = useState([]);
 
   // Notes Modal State
   const [editingNote, setEditingNote] = useState(null);
   const [noteDriveUrl, setNoteDriveUrl] = useState("");
+  const [showShareNoteModal, setShowShareNoteModal] = useState(false);
+  const [selectedNoteToShare, setSelectedNoteToShare] = useState(null);
+  const [noteShareTargetStudentIds, setNoteShareTargetStudentIds] = useState([]);
 
   // Tests & Assessments State
   const [assessments, setAssessments] = useState([]);
@@ -172,6 +180,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   // Materials & Drive Tab State
   const [showMaterialModal, setShowMaterialModal] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState(null);
   const [matSource, setMatSource] = useState("upload"); // 'upload' | 'drive'
   const [matTitle, setMatTitle] = useState("");
   const [matDescription, setMatDescription] = useState("");
@@ -552,9 +561,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     const existing = attendanceRecords.filter((r) => r.attendance_date === attendanceDate);
     const stateMap = {};
     existing.forEach((r) => {
-      const raw = (r.status || "").toLowerCase();
-      const norm = raw === "present" ? "Present" : raw === "late" ? "Late" : raw === "absent" ? "Absent" : r.status;
-      stateMap[r.student_id] = { status: norm, note: r.note || "" };
+      const norm = normalizeAttendanceStatus(r);
+      const titleCase = norm === "present" ? "Present" : norm === "late" ? "Late" : norm === "absent" ? "Absent" : "Holiday";
+      stateMap[r.student_id] = { status: titleCase, note: cleanAttendanceNote(r.note) };
     });
     setAttendanceState(stateMap);
   }, [attendanceDate, attendanceRecords]);
@@ -596,7 +605,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             student_id: student.id,
             course_id: attendanceCourseId === "all" ? null : attendanceCourseId,
             attendance_date: attendanceDate,
-            status: entry.status,
+            status: (entry.status || "present").toLowerCase(),
             note: entry.note || "",
             created_by: user.id,
           });
@@ -621,7 +630,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         ];
       });
 
-      // Lightning-fast batch delete + batch insert in just 2 quick calls
+      // Lightning-fast batch delete + batch insert with automatic holiday fallback
       const studentIds = recordsToUpsert.map((r) => r.student_id);
       await supabase
         .from("attendance_records")
@@ -629,11 +638,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         .in("student_id", studentIds)
         .eq("attendance_date", attendanceDate);
 
-      const { error: insertErr } = await supabase
-        .from("attendance_records")
-        .insert(recordsToUpsert);
-
-      if (insertErr) throw insertErr;
+      await insertAttendanceWithFallback(supabase, recordsToUpsert);
 
       setToast(`Attendance saved successfully for ${recordsToUpsert.length} student(s)!`);
       loadTrainerData(false);
@@ -878,6 +883,92 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     }
   }
 
+  async function handleAssignAssignmentToStudents(assignmentId, targetStudentIds) {
+    if (!targetStudentIds || targetStudentIds.length === 0) {
+      setError("Please select at least one student to assign this assignment.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+
+    try {
+      const records = targetStudentIds.map((sid) => ({
+        assignment_id: assignmentId,
+        student_id: sid,
+      }));
+
+      // Optimistic update
+      setAssignmentRecipients((prev) => {
+        const remaining = prev.filter((r) => r.assignment_id !== assignmentId);
+        return [...remaining, ...records];
+      });
+
+      // Clear existing recipients and insert updated list
+      await supabase.from("assignment_recipients").delete().eq("assignment_id", assignmentId);
+      const { error: insErr } = await supabase.from("assignment_recipients").insert(records);
+      if (insErr) throw insErr;
+
+      const assignTitle = selectedAssignmentToAssign?.title || "Assignment";
+      setToast(`Assignment "${assignTitle}" successfully assigned to ${targetStudentIds.length} student(s)!`);
+      setShowAssignAssignmentModal(false);
+      setSelectedAssignmentToAssign(null);
+      setAssignmentAssignTargetStudentIds([]);
+      loadTrainerData(false);
+    } catch (err) {
+      setError("Failed to assign assignment: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleShareNoteWithStudents(noteRecord, targetStudentIds) {
+    if (!targetStudentIds || targetStudentIds.length === 0) {
+      setError("Please select at least one student to assign this note.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+
+    try {
+      const payloads = targetStudentIds.map((sid) => ({
+        student_id: sid,
+        course_id: noteRecord.course_id || null,
+        title: noteRecord.title,
+        body: noteRecord.body,
+        drive_url: noteRecord.drive_url || null,
+        status: "assigned",
+        category: noteRecord.category || "Class Notes",
+        due_at: noteRecord.due_at || null,
+        material_id: noteRecord.material_id || null,
+        created_by: user.id,
+      }));
+
+      const { error: insErr } = await supabase.from("student_notes").insert(payloads);
+      if (insErr) {
+        // Fallback for older schemas
+        const fallback = targetStudentIds.map((sid) => ({
+          student_id: sid,
+          course_id: noteRecord.course_id || null,
+          title: noteRecord.title,
+          body: noteRecord.body,
+          created_by: user.id,
+        }));
+        const retry = await supabase.from("student_notes").insert(fallback);
+        if (retry.error) throw retry.error;
+      }
+
+      setToast(`Note "${noteRecord.title}" successfully assigned to ${targetStudentIds.length} student(s)!`);
+      setShowShareNoteModal(false);
+      setSelectedNoteToShare(null);
+      setNoteShareTargetStudentIds([]);
+      loadTrainerData(false);
+    } catch (err) {
+      setError("Failed to assign note: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDeleteAssignment(assignmentId) {
     if (!window.confirm("Delete this assignment? All student submissions for it will also be removed.")) return;
     try {
@@ -889,8 +980,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     }
   }
 
-  async function handleSaveGrade(submissionId, maxScore = 100) {
-    const cur = gradingState[submissionId] || {};
+  async function handleSaveGrade(assignmentId, studentId, existingSubmissionId, maxScore = 100) {
+    const curKey = existingSubmissionId || `${assignmentId}-${studentId}`;
+    const cur = gradingState[curKey] || {};
     const gradeVal = cur.grade !== undefined && cur.grade !== "" ? Number(cur.grade) : null;
     const feedbackVal = (cur.feedback || "").trim();
 
@@ -899,28 +991,102 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       return;
     }
 
-    setSavingGradeId(submissionId);
+    setSavingGradeId(curKey);
     setError("");
     try {
-      const { error: gradeErr } = await supabase
+      const payload = {
+        assignment_id: assignmentId,
+        student_id: studentId,
+        grade: gradeVal,
+        feedback: feedbackVal || null,
+        graded_at: new Date().toISOString(),
+        answer_text: cur.answer_text || "Trainer Evaluation",
+        status: "Completed",
+      };
+      if (existingSubmissionId) {
+        payload.id = existingSubmissionId;
+      }
+
+      const { data: savedSub, error: gradeErr } = await supabase
         .from("assignment_submissions")
-        .update({
-          grade: gradeVal,
-          feedback: feedbackVal,
-          graded_at: new Date().toISOString(),
-        })
-        .eq("id", submissionId);
+        .upsert(payload, { onConflict: "assignment_id,student_id" })
+        .select()
+        .single();
 
       if (gradeErr) throw gradeErr;
 
-      setAssignmentSubmissions((prev) =>
-        prev.map((s) => (s.id === submissionId ? { ...s, grade: gradeVal, feedback: feedbackVal, graded_at: new Date().toISOString() } : s))
-      );
+      setAssignmentSubmissions((prev) => {
+        const idx = prev.findIndex((s) => s.assignment_id === assignmentId && s.student_id === studentId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...savedSub, grade: gradeVal, feedback: feedbackVal, graded_at: new Date().toISOString() };
+          return next;
+        }
+        return [savedSub, ...prev];
+      });
       setToast("Grade and feedback saved successfully!");
     } catch (err) {
       setError("Failed to save grade: " + err.message);
     } finally {
       setSavingGradeId(null);
+    }
+  }
+
+  async function handleDeleteMaterial(mat) {
+    if (!mat) return;
+    if (!window.confirm(`Delete "${mat.title}"? This will remove student access and cannot be undone.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (mat.file_path && !mat.file_path.startsWith("data:")) {
+        let bucket = "course-materials";
+        let cleanPath = mat.file_path;
+        if (mat.file_path.startsWith("course-materials:")) {
+          cleanPath = mat.file_path.replace("course-materials:", "");
+        } else if (mat.file_path.startsWith("assignment-files:")) {
+          bucket = "assignment-files";
+          cleanPath = mat.file_path.replace("assignment-files:", "");
+        }
+        try {
+          await supabase.storage.from(bucket).remove([cleanPath]);
+        } catch (stErr) {
+          console.warn("Storage deletion warning:", stErr);
+        }
+      }
+
+      const { error: delErr } = await supabase.from("course_materials").delete().eq("id", mat.id);
+      if (delErr) throw delErr;
+
+      setMaterials((prev) => prev.filter((m) => m.id !== mat.id));
+      setToast(`"${mat.title}" deleted successfully.`);
+    } catch (err) {
+      setError("Could not delete material: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateMaterial(materialId, form) {
+    setBusy(true);
+    setError("");
+    try {
+      const payload = {
+        title: form.title.trim(),
+        description: form.description?.trim() || "",
+        category: form.category || "Class Notes",
+        course_id: form.courseId || null,
+        drive_url: form.driveUrl?.trim() || null,
+      };
+      const { error: updErr } = await supabase.from("course_materials").update(payload).eq("id", materialId);
+      if (updErr) throw updErr;
+
+      setMaterials((prev) => prev.map((m) => (m.id === materialId ? { ...m, ...payload } : m)));
+      setEditingMaterial(null);
+      setToast("Material updated successfully.");
+    } catch (err) {
+      setError("Failed to update material: " + err.message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -937,6 +1103,39 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       }
     } catch (err) {
       setError("Could not open student submission file: " + err.message);
+    }
+  }
+
+  async function handleDeleteStudentSubmissionFile(sub) {
+    if (!sub?.file_path) return;
+    if (!window.confirm("Delete this student's uploaded file? The file will be permanently removed from cloud storage.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      let cleanPath = sub.file_path;
+      if (cleanPath.startsWith("assignment-files:")) {
+        cleanPath = cleanPath.replace("assignment-files:", "");
+      }
+      try {
+        await supabase.storage.from("assignment-files").remove([cleanPath]);
+      } catch (stErr) {
+        console.warn("Storage removal warning:", stErr);
+      }
+      const { error: dbErr } = await supabase
+        .from("assignment_submissions")
+        .update({ file_path: null })
+        .eq("id", sub.id);
+
+      if (dbErr) throw dbErr;
+
+      setAssignmentSubmissions((prev) =>
+        prev.map((s) => (s.id === sub.id ? { ...s, file_path: null } : s))
+      );
+      setToast("Student uploaded file deleted manually.");
+    } catch (err) {
+      setError("Could not delete student file: " + err.message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1328,9 +1527,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     const todayStr = localDate();
     const todayAttendanceCount = attendanceRecords.filter((r) => r.attendance_date === todayStr && myAssignedStudentIds.has(r.student_id)).length;
     const allMyAtt = attendanceRecords.filter((r) => myAssignedStudentIds.has(r.student_id));
-    const attPresent = allMyAtt.filter((r) => r.status === "Present").length;
-    const attLate = allMyAtt.filter((r) => r.status === "Late").length;
-    const overallAttRate = allMyAtt.length > 0 ? Math.round(((attPresent + attLate * 0.5) / allMyAtt.length) * 100) : 100;
+    const attPresent = allMyAtt.filter((r) => normalizeAttendanceStatus(r) === "present").length;
+    const attLate = allMyAtt.filter((r) => normalizeAttendanceStatus(r) === "late").length;
+    const attWorkingDays = allMyAtt.filter((r) => {
+      const s = normalizeAttendanceStatus(r);
+      return s === "present" || s === "late" || s === "absent";
+    }).length;
+    const overallAttRate = attWorkingDays > 0 ? Math.round(((attPresent + attLate * 0.5) / attWorkingDays) * 100) : 100;
 
     const myTasks = tasks.filter((t) => myAssignedStudentIds.has(t.student_id) || t.created_by === activeTrainerId);
     const activeAssignments = myTrainerAssignments;
@@ -1527,7 +1730,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   <CalendarCheck size={18} />
                 </div>
                 <strong style={{ fontSize: "14px", color: "var(--ink)" }}>Take Attendance</strong>
-                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Mark Present, Late, or Absent.</span>
+                <span style={{ fontSize: "12px", color: "var(--muted)" }}>Mark Present, Late, Absent, or Holiday.</span>
               </button>
 
               <button
@@ -1905,7 +2108,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     const presentCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "present").length;
     const lateCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "late").length;
     const absentCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "absent").length;
-    const unmarkedCount = attendanceStudents.length - (presentCount + lateCount + absentCount);
+    const holidayCount = attendanceStudents.filter((s) => (attendanceState[s.id]?.status || "").toLowerCase() === "holiday").length;
+    const unmarkedCount = attendanceStudents.length - (presentCount + lateCount + absentCount + holidayCount);
 
     return (
       <div className="trainer-attendance-view">
@@ -1980,6 +2184,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <button
                 className="button compact"
                 type="button"
+                style={{ background: "#ede9fe", color: "#6d28d9", borderColor: "#ddd6fe", fontWeight: 600 }}
+                onClick={() => markAllAttendance("Holiday")}
+                title="Mark all students holiday"
+              >
+                <Sparkles size={13} style={{ color: "#7c3aed" }} /> Mark All Holiday
+              </button>
+              <button
+                className="button compact"
+                type="button"
                 onClick={() => markAllAttendance(null)}
                 title="Clear all marks"
               >
@@ -1993,6 +2206,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             <span className="badge green" style={{ padding: "4px 10px", fontSize: "12px" }}>Present: {presentCount}</span>
             <span className="badge amber" style={{ padding: "4px 10px", fontSize: "12px" }}>Late: {lateCount}</span>
             <span className="badge rose" style={{ padding: "4px 10px", fontSize: "12px" }}>Absent: {absentCount}</span>
+            <span className="badge" style={{ padding: "4px 10px", fontSize: "12px", background: "#ede9fe", color: "#6d28d9" }}>Holiday: {holidayCount}</span>
             {unmarkedCount > 0 && (
               <span className="badge blue" style={{ padding: "4px 10px", fontSize: "12px" }}>Unmarked: {unmarkedCount}</span>
             )}
@@ -2061,6 +2275,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           const isPresent = (status || "").toLowerCase() === "present";
                           const isLate = (status || "").toLowerCase() === "late";
                           const isAbsent = (status || "").toLowerCase() === "absent";
+                          const isHoliday = (status || "").toLowerCase() === "holiday";
                           return (
                             <div style={{ display: "inline-flex", gap: "6px", background: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
                               <button
@@ -2112,6 +2327,23 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                                 onClick={() => setStudentAttendance(student.id, "Absent")}
                               >
                                 Absent
+                              </button>
+
+                              <button
+                                type="button"
+                                className={`button compact ${isHoliday ? "primary" : ""}`}
+                                style={{
+                                  background: isHoliday ? "#7c3aed" : "transparent",
+                                  color: isHoliday ? "#fff" : "var(--ink)",
+                                  border: "none",
+                                  minHeight: "28px",
+                                  padding: "2px 10px",
+                                  fontSize: "12px",
+                                  fontWeight: isHoliday ? 700 : 500,
+                                }}
+                                onClick={() => setStudentAttendance(student.id, "Holiday")}
+                              >
+                                Holiday
                               </button>
                             </div>
                           );
@@ -2542,7 +2774,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
                     <button
                       className="button compact"
                       type="button"
@@ -2550,6 +2782,19 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       title="Toggle completion status"
                     >
                       <CheckCircle2 size={12} /> {isCompleted ? "Mark Assigned" : "Mark Completed"}
+                    </button>
+                    <button
+                      className="button compact"
+                      type="button"
+                      style={{ background: "#e0e7ff", color: "#3730a3", borderColor: "#c7d2fe", fontWeight: 600 }}
+                      onClick={() => {
+                        setSelectedNoteToShare(task);
+                        setNoteShareTargetStudentIds([]);
+                        setShowShareNoteModal(true);
+                      }}
+                      title="Assign or share this note individually to other students"
+                    >
+                      <Send size={11} /> Assign to Student
                     </button>
                     <button
                       className="button compact"
@@ -2813,11 +3058,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   )}
                 </div>
 
-                <div className="card-actions" style={{ display: "flex", gap: "8px", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                <div className="card-actions" style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
                   <button
                     className="button primary compact"
                     type="button"
-                    style={{ flex: 1 }}
+                    style={{ flex: 1, minWidth: "140px" }}
                     onClick={() => {
                       setSelectedAssignmentForSubmissions(assignment);
                       const state = {};
@@ -2828,7 +3073,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       setShowSubmissionsModal(true);
                     }}
                   >
-                    <CheckCircle2 size={13} /> Review Submissions ({subs.length})
+                    <CheckCircle2 size={13} /> Submissions ({subs.length})
+                  </button>
+                  <button
+                    className="button compact"
+                    type="button"
+                    style={{ background: "#f0fdf4", color: "#166534", borderColor: "#bbf7d0", fontWeight: 600 }}
+                    onClick={() => {
+                      setSelectedAssignmentToAssign(assignment);
+                      const currentRecips = recips.map((r) => r.student_id);
+                      setAssignmentAssignTargetStudentIds(currentRecips.length > 0 ? currentRecips : Array.from(myAssignedStudentIds));
+                      setShowAssignAssignmentModal(true);
+                    }}
+                    title="Assign or reassign this assignment individually to students"
+                  >
+                    <Users size={12} /> Assign ({recips.length > 0 ? recips.length : myAssignedStudents.length})
                   </button>
                   <button
                     className="button compact"
@@ -2898,8 +3157,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
     myAssignedStudents.forEach((s) => {
       const att = attendanceRecords.filter((r) => r.student_id === s.id);
-      totalAttSessions += att.length;
-      totalAttPresent += att.filter((r) => r.status === "Present").length + att.filter((r) => r.status === "Late").length * 0.5;
+      const workingDays = att.filter((r) => {
+        const st = normalizeAttendanceStatus(r);
+        return st === "present" || st === "late" || st === "absent";
+      }).length;
+      totalAttSessions += workingDays;
+      totalAttPresent += att.filter((r) => normalizeAttendanceStatus(r) === "present").length + att.filter((r) => normalizeAttendanceStatus(r) === "late").length * 0.5;
 
       const subs = assignmentSubmissions.filter((sub) => sub.student_id === s.id && myTrainerAssignmentIds.has(sub.assignment_id));
       totalAssignmentsSubmitted += subs.length;
@@ -3030,10 +3293,12 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     .filter(Boolean);
 
                   const att = attendanceRecords.filter((r) => r.student_id === student.id);
-                  const pres = att.filter((r) => r.status === "Present").length;
-                  const late = att.filter((r) => r.status === "Late").length;
-                  const abs = att.filter((r) => r.status === "Absent").length;
-                  const attRate = att.length > 0 ? Math.round(((pres + late * 0.5) / att.length) * 100) : 100;
+                  const pres = att.filter((r) => normalizeAttendanceStatus(r) === "present").length;
+                  const late = att.filter((r) => normalizeAttendanceStatus(r) === "late").length;
+                  const abs = att.filter((r) => normalizeAttendanceStatus(r) === "absent").length;
+                  const hol = att.filter((r) => normalizeAttendanceStatus(r) === "holiday").length;
+                  const workingDays = pres + late + abs;
+                  const attRate = workingDays > 0 ? Math.round(((pres + late * 0.5) / workingDays) * 100) : 100;
 
                   const subs = assignmentSubmissions.filter((sub) => sub.student_id === student.id && myTrainerAssignmentIds.has(sub.assignment_id));
                   const gradedSubs = subs.filter((sub) => sub.grade !== null && sub.grade !== undefined);
@@ -3290,7 +3555,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   </p>
                 </div>
 
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "12px", alignItems: "center" }}>
                   <button
                     className="button primary compact"
                     type="button"
@@ -3316,6 +3581,23 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <ExternalLink size={13} /> Open Tab
                     </a>
                   )}
+                  <button
+                    className="button compact"
+                    type="button"
+                    onClick={() => setEditingMaterial(item)}
+                    title="Edit syllabus"
+                  >
+                    <Pencil size={12} /> Edit
+                  </button>
+                  <button
+                    className="quiet-icon danger-icon"
+                    type="button"
+                    onClick={() => handleDeleteMaterial(item)}
+                    title="Delete syllabus"
+                    aria-label={`Delete ${item.title}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </article>
             );
@@ -3531,7 +3813,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       </p>
                     </div>
 
-                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "10px" }}>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: "10px", alignItems: "center" }}>
                       <button
                         className="button primary compact"
                         type="button"
@@ -3557,6 +3839,23 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           <ExternalLink size={12} /> Open Tab
                         </a>
                       )}
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => setEditingMaterial(mat)}
+                        title="Edit material details"
+                      >
+                        <Pencil size={12} /> Edit
+                      </button>
+                      <button
+                        className="quiet-icon danger-icon"
+                        type="button"
+                        onClick={() => handleDeleteMaterial(mat)}
+                        title="Delete material"
+                        aria-label={`Delete ${mat.title}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   </article>
                 );
@@ -4335,7 +4634,20 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                             }}
                             title={`Add note or task individually to ${student.full_name || "this student"}`}
                           >
-                            <CheckCircle2 size={12} /> Add Note / Task
+                            <CheckCircle2 size={12} /> Note / Task
+                          </button>
+                          <button
+                            className="button compact"
+                            type="button"
+                            style={{ background: "#ecfdf5", color: "#065f46", borderColor: "#a7f3d0" }}
+                            onClick={() => {
+                              setSelectedAssignmentToAssign(myTrainerAssignments[0] || null);
+                              setAssignmentAssignTargetStudentIds([student.id]);
+                              setShowAssignAssignmentModal(true);
+                            }}
+                            title={`Assign coursework assignment individually to ${student.full_name || "this student"}`}
+                          >
+                            <BookOpen size={12} /> Assign Assignment
                           </button>
                           <button
                             className="button compact"
@@ -4591,9 +4903,29 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
         <div className="content">
           {error && (
-            <div className="portal-alert error" role="alert" style={{ marginBottom: "16px" }}>
-              {error}
-              <button type="button" onClick={() => setError("")}>Dismiss</button>
+            <div className="portal-alert error" role="alert" style={{ marginBottom: "16px", display: "flex", flexDirection: "column", gap: "10px", alignItems: "stretch" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                <span>{error}</span>
+                <button type="button" onClick={() => setError("")} style={{ flexShrink: 0 }}>Dismiss</button>
+              </div>
+              {error.includes("attendance_records_status_check") && (
+                <div style={{ background: "rgba(0,0,0,0.06)", padding: "10px 12px", borderRadius: "8px", display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                  <code style={{ fontSize: "12px", color: "var(--ink)", wordBreak: "break-all" }}>
+                    ALTER TABLE public.attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check; ALTER TABLE public.attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (lower(status) in ('present', 'late', 'absent', 'holiday'));
+                  </code>
+                  <button
+                    type="button"
+                    className="button compact primary"
+                    style={{ background: "#7c3aed" }}
+                    onClick={() => {
+                      navigator.clipboard.writeText("ALTER TABLE public.attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;\nALTER TABLE public.attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (lower(status) in ('present', 'late', 'absent', 'holiday'));");
+                      setToast("SQL command copied to clipboard! Paste and execute it in your Supabase SQL Editor.");
+                    }}
+                  >
+                    <Copy size={13} /> Copy Migration SQL
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -4763,6 +5095,249 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         </div>
       )}
 
+      {/* Assign Assignment Modal */}
+      {showAssignAssignmentModal && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowAssignAssignmentModal(false); }}>
+          <div className="modal" style={{ maxWidth: "540px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon assignment" style={{ width: "38px", height: "38px", background: "#f0fdf4", color: "#16a34a", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <BookOpen size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>Assign Assignment to Students</h2>
+                  <p>Choose which individual students are assigned this coursework item.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setShowAssignAssignmentModal(false)}><X size={18} /></button>
+            </div>
+
+            <div style={{ marginTop: "16px" }}>
+              <label className="form-field">
+                <span>Select Assignment *</span>
+                <select
+                  value={selectedAssignmentToAssign?.id || ""}
+                  onChange={(e) => {
+                    const assign = myTrainerAssignments.find((a) => a.id === e.target.value);
+                    setSelectedAssignmentToAssign(assign);
+                    if (assign) {
+                      const currentRecs = assignmentRecipients
+                        .filter((r) => r.assignment_id === assign.id && myAssignedStudentIds.has(r.student_id))
+                        .map((r) => r.student_id);
+                      setAssignmentAssignTargetStudentIds(currentRecs.length > 0 ? currentRecs : Array.from(myAssignedStudentIds));
+                    }
+                  }}
+                >
+                  {myTrainerAssignments.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.title} {coursesById[a.course_id] ? `(${coursesById[a.course_id].code})` : ""}
+                    </option>
+                  ))}
+                  {!myTrainerAssignments.length && <option value="">No assignments available</option>}
+                </select>
+              </label>
+
+              {/* Student Selection Checkboxes */}
+              <div style={{ marginTop: "14px", padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                  <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Users size={16} style={{ color: "#16a34a" }} />
+                    Target Students ({assignmentAssignTargetStudentIds.length} selected) *
+                  </strong>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ background: "#dcfce7", color: "#166534", fontWeight: 700 }}
+                      onClick={() => setAssignmentAssignTargetStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select All ({myAssignedStudents.length})
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => setAssignmentAssignTargetStudentIds([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid var(--line)", borderRadius: "6px", background: "#fff", padding: "4px" }}>
+                  {myAssignedStudents.map((student) => {
+                    const isChecked = assignmentAssignTargetStudentIds.includes(student.id);
+                    const isAlreadyAssigned = assignmentRecipients.some(
+                      (r) => r.assignment_id === selectedAssignmentToAssign?.id && r.student_id === student.id
+                    );
+
+                    return (
+                      <label
+                        key={student.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "8px 10px",
+                          borderBottom: "1px solid var(--line)",
+                          cursor: "pointer",
+                          background: isChecked ? "rgba(22, 163, 74, 0.05)" : "transparent",
+                          borderRadius: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setAssignmentAssignTargetStudentIds((prev) => [...prev, student.id]);
+                              } else {
+                                setAssignmentAssignTargetStudentIds((prev) => prev.filter((id) => id !== student.id));
+                              }
+                            }}
+                          />
+                          <div>
+                            <strong style={{ fontSize: "13px", display: "block" }}>{student.full_name || student.email}</strong>
+                            <small style={{ color: "var(--muted)", fontSize: "11px" }}>{student.email}</small>
+                          </div>
+                        </div>
+
+                        {isAlreadyAssigned && (
+                          <span className="badge green" style={{ fontSize: "10px", padding: "2px 6px" }}>
+                            Currently Assigned
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                  {!myAssignedStudents.length && (
+                    <div style={{ padding: "14px", textAlign: "center", color: "var(--muted)", fontSize: "12px" }}>
+                      No students currently assigned to your roster.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: "18px" }}>
+                <button className="button" type="button" onClick={() => setShowAssignAssignmentModal(false)}>Cancel</button>
+                <button
+                  className="button primary"
+                  disabled={busy || !selectedAssignmentToAssign}
+                  onClick={() => handleAssignAssignmentToStudents(selectedAssignmentToAssign.id, assignmentAssignTargetStudentIds)}
+                >
+                  <Users size={14} /> {busy ? "Assigning..." : `Save & Assign (${assignmentAssignTargetStudentIds.length} Student${assignmentAssignTargetStudentIds.length === 1 ? "" : "s"})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share / Assign Note Modal */}
+      {showShareNoteModal && selectedNoteToShare && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowShareNoteModal(false); }}>
+          <div className="modal" style={{ maxWidth: "540px" }}>
+            <div className="modal-heading">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span className="portal-item-icon" style={{ width: "38px", height: "38px", background: "#e0e7ff", color: "#3730a3", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <FileText size={18} />
+                </span>
+                <div>
+                  <h2 style={{ margin: 0 }}>Assign Note to Students</h2>
+                  <p>Distribute a copy of "{selectedNoteToShare.title}" individually to your assigned students.</p>
+                </div>
+              </div>
+              <button type="button" className="quiet-icon" onClick={() => setShowShareNoteModal(false)}><X size={18} /></button>
+            </div>
+
+            <div style={{ marginTop: "16px" }}>
+              <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", marginBottom: "14px", fontSize: "12.5px" }}>
+                <strong style={{ color: "var(--ink)", display: "block" }}>{selectedNoteToShare.title}</strong>
+                <span style={{ color: "var(--muted)" }}>Category: {selectedNoteToShare.category || "Class Notes"}</span>
+              </div>
+
+              {/* Student Selection Checkboxes */}
+              <div style={{ padding: "14px", background: "#f8fafc", borderRadius: "10px", border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                  <strong style={{ fontSize: "13.5px", color: "var(--ink)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Users size={16} style={{ color: "#4f46e5" }} />
+                    Select Students to Assign ({noteShareTargetStudentIds.length} selected) *
+                  </strong>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ background: "#e0e7ff", color: "#3730a3", fontWeight: 700 }}
+                      onClick={() => setNoteShareTargetStudentIds(Array.from(myAssignedStudentIds))}
+                    >
+                      Select All ({myAssignedStudents.length})
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => setNoteShareTargetStudentIds([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid var(--line)", borderRadius: "6px", background: "#fff", padding: "4px" }}>
+                  {myAssignedStudents.map((student) => {
+                    const isChecked = noteShareTargetStudentIds.includes(student.id);
+
+                    return (
+                      <label
+                        key={student.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "8px 10px",
+                          borderBottom: "1px solid var(--line)",
+                          cursor: "pointer",
+                          background: isChecked ? "rgba(79, 70, 229, 0.05)" : "transparent",
+                          borderRadius: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setNoteShareTargetStudentIds((prev) => [...prev, student.id]);
+                              } else {
+                                setNoteShareTargetStudentIds((prev) => prev.filter((id) => id !== student.id));
+                              }
+                            }}
+                          />
+                          <div>
+                            <strong style={{ fontSize: "13px", display: "block" }}>{student.full_name || student.email}</strong>
+                            <small style={{ color: "var(--muted)", fontSize: "11px" }}>{student.email}</small>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: "18px" }}>
+                <button className="button" type="button" onClick={() => setShowShareNoteModal(false)}>Cancel</button>
+                <button
+                  className="button primary"
+                  disabled={busy || noteShareTargetStudentIds.length === 0}
+                  onClick={() => handleShareNoteWithStudents(selectedNoteToShare, noteShareTargetStudentIds)}
+                >
+                  <Send size={14} /> {busy ? "Assigning..." : `Assign Note to ${noteShareTargetStudentIds.length} Student${noteShareTargetStudentIds.length === 1 ? "" : "s"}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Student Details Modal */}
       {selectedStudentDetail && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setSelectedStudentDetail(null); }}>
@@ -4894,18 +5469,20 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 </strong>
                 {(() => {
                   const studentRecords = attendanceRecords.filter((r) => r.student_id === selectedStudentDetail.id);
-                  const p = studentRecords.filter((r) => r.status === "Present").length;
-                  const l = studentRecords.filter((r) => r.status === "Late").length;
-                  const a = studentRecords.filter((r) => r.status === "Absent").length;
-                  const total = studentRecords.length;
-                  const pct = total ? Math.round(((p + l * 0.5) / total) * 100) : 100;
+                  const p = studentRecords.filter((r) => normalizeAttendanceStatus(r) === "present").length;
+                  const l = studentRecords.filter((r) => normalizeAttendanceStatus(r) === "late").length;
+                  const a = studentRecords.filter((r) => normalizeAttendanceStatus(r) === "absent").length;
+                  const h = studentRecords.filter((r) => normalizeAttendanceStatus(r) === "holiday").length;
+                  const workingDays = p + l + a;
+                  const pct = workingDays ? Math.round(((p + l * 0.5) / workingDays) * 100) : 100;
 
                   return (
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                       <span className="badge green">Present: {p}</span>
                       <span className="badge amber">Late: {l}</span>
                       <span className="badge rose">Absent: {a}</span>
-                      <span className="badge blue">Overall: {pct}% Rate ({total} total check-ins)</span>
+                      {h > 0 && <span className="badge" style={{ background: "#ede9fe", color: "#6d28d9" }}>Holiday: {h}</span>}
+                      <span className="badge blue">Overall: {pct}% Rate ({studentRecords.length} check-ins)</span>
                     </div>
                   );
                 })()}
@@ -4925,6 +5502,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   title="Add note or task individually to this student"
                 >
                   <CheckCircle2 size={13} /> Add Note / Task
+                </button>
+
+                <button
+                  className="button primary"
+                  type="button"
+                  style={{ background: "#059669" }}
+                  onClick={() => {
+                    setSelectedAssignmentToAssign(myTrainerAssignments[0] || null);
+                    setAssignmentAssignTargetStudentIds([selectedStudentDetail.id]);
+                    setShowAssignAssignmentModal(true);
+                    setSelectedStudentDetail(null);
+                    setActiveTab("Assignments");
+                  }}
+                  title="Assign assignment individually to this student"
+                >
+                  <BookOpen size={13} /> Assign Assignment
                 </button>
 
                 <button
@@ -5217,7 +5810,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               {myAssignedStudents.map((student) => {
                 const sub = assignmentSubmissions.find((s) => s.assignment_id === selectedAssignmentForSubmissions.id && s.student_id === student.id);
                 const hasSubmission = Boolean(sub);
-                const currentGrading = sub ? gradingState[sub.id] || { grade: sub.grade ?? "", feedback: sub.feedback ?? "" } : null;
+                const draftKey = sub?.id || `${selectedAssignmentForSubmissions.id}-${student.id}`;
+                const currentGrading = gradingState[draftKey] ?? { grade: sub?.grade ?? "", feedback: sub?.feedback ?? "" };
 
                 return (
                   <div
@@ -5256,25 +5850,36 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           </span>
                         </div>
                       ) : (
-                        <span className="badge amber" style={{ fontSize: "11px" }}>
-                          <Clock3 size={11} /> Pending Submission
+                        <span className="badge amber" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <Clock3 size={11} /> Pending Online / In-Person Evaluation
                         </span>
                       )}
                     </div>
 
-                    {hasSubmission && (
-                      <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid var(--line)" }}>
-                        {/* Submission Deliverables */}
+                    <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid var(--line)" }}>
+                      {/* Submission Deliverables (if any) */}
+                      {hasSubmission && (
                         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
                           {sub.file_path && (
-                            <button
-                              className="button compact"
-                              type="button"
-                              onClick={() => handleDownloadSubmissionFile(sub.file_path)}
-                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" }}
-                            >
-                              <Download size={13} /> Download Submitted File
-                            </button>
+                            <>
+                              <button
+                                className="button compact"
+                                type="button"
+                                onClick={() => handleDownloadSubmissionFile(sub.file_path)}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" }}
+                              >
+                                <Download size={13} /> Download Submitted File
+                              </button>
+                              <button
+                                className="button compact"
+                                type="button"
+                                onClick={() => handleDeleteStudentSubmissionFile(sub)}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" }}
+                                title="Manually delete student uploaded file"
+                              >
+                                <Trash2 size={12} /> Delete File Manually
+                              </button>
+                            </>
                           )}
                           {(sub.submission_link || (sub.submission_type === "Link" && sub.answer_text)) && (
                             <a
@@ -5293,57 +5898,57 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                             </div>
                           )}
                         </div>
+                      )}
 
-                        {/* Inline Grading Form */}
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", background: "#f8fafc", padding: "12px", borderRadius: "8px" }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
-                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)" }}>Score:</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max={selectedAssignmentForSubmissions.total_marks || 100}
-                              placeholder="Marks"
-                              value={currentGrading?.grade ?? ""}
-                              onChange={(e) =>
-                                setGradingState((prev) => ({
-                                  ...prev,
-                                  [sub.id]: { ...(prev[sub.id] || {}), grade: e.target.value },
-                                }))
-                              }
-                              style={{ width: "70px", height: "32px", fontSize: "12px", padding: "0 6px" }}
-                            />
-                            <span style={{ fontSize: "12px", color: "var(--muted)" }}>/ {selectedAssignmentForSubmissions.total_marks || 100}</span>
-                          </label>
-
+                      {/* Inline Grading Form for All Students */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", background: "#f8fafc", padding: "12px", borderRadius: "8px" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--ink)" }}>Score:</span>
                           <input
-                            placeholder="Feedback comments for student..."
-                            value={currentGrading?.feedback ?? ""}
+                            type="number"
+                            min="0"
+                            max={selectedAssignmentForSubmissions.total_marks || 100}
+                            placeholder="Marks"
+                            value={currentGrading?.grade ?? ""}
                             onChange={(e) =>
                               setGradingState((prev) => ({
                                 ...prev,
-                                [sub.id]: { ...(prev[sub.id] || {}), feedback: e.target.value },
+                                [draftKey]: { ...(prev[draftKey] || {}), grade: e.target.value },
                               }))
                             }
-                            style={{ flex: 1, minWidth: "180px", height: "32px", fontSize: "12px", padding: "0 8px" }}
+                            style={{ width: "70px", height: "32px", fontSize: "12px", padding: "0 6px" }}
                           />
+                          <span style={{ fontSize: "12px", color: "var(--muted)" }}>/ {selectedAssignmentForSubmissions.total_marks || 100}</span>
+                        </label>
 
-                          <button
-                            className="button primary compact"
-                            type="button"
-                            disabled={savingGradeId === sub.id}
-                            onClick={() => handleSaveGrade(sub.id, selectedAssignmentForSubmissions.total_marks || 100)}
-                          >
-                            <Check size={12} /> {savingGradeId === sub.id ? "Saving..." : "Save Grade"}
-                          </button>
-                        </div>
+                        <input
+                          placeholder="Feedback comments for student..."
+                          value={currentGrading?.feedback ?? ""}
+                          onChange={(e) =>
+                            setGradingState((prev) => ({
+                              ...prev,
+                              [draftKey]: { ...(prev[draftKey] || {}), feedback: e.target.value },
+                            }))
+                          }
+                          style={{ flex: 1, minWidth: "180px", height: "32px", fontSize: "12px", padding: "0 8px" }}
+                        />
 
-                        {sub.graded_at && (
-                          <div style={{ marginTop: "6px", fontSize: "11px", color: "#15803d", display: "flex", alignItems: "center", gap: "4px" }}>
-                            <CheckCircle2 size={12} /> Graded: {sub.grade} / {selectedAssignmentForSubmissions.total_marks || 100} pts {sub.feedback ? `· "${sub.feedback}"` : ""}
-                          </div>
-                        )}
+                        <button
+                          className="button primary compact"
+                          type="button"
+                          disabled={savingGradeId === draftKey}
+                          onClick={() => handleSaveGrade(selectedAssignmentForSubmissions.id, student.id, sub?.id, selectedAssignmentForSubmissions.total_marks || 100)}
+                        >
+                          <Check size={12} /> {savingGradeId === draftKey ? "Saving..." : sub?.graded_at ? "Update Grade" : "Save Grade"}
+                        </button>
                       </div>
-                    )}
+
+                      {sub?.graded_at && (
+                        <div style={{ marginTop: "6px", fontSize: "11px", color: "#15803d", display: "flex", alignItems: "center", gap: "4px" }}>
+                          <CheckCircle2 size={12} /> Graded: {sub.grade} / {selectedAssignmentForSubmissions.total_marks || 100} pts {sub.feedback ? `· "${sub.feedback}"` : ""}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -5509,6 +6114,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </form>
           </div>
         </div>
+      )}
+
+      {/* Edit Material Modal */}
+      {editingMaterial && (
+        <EditMaterialModal
+          material={editingMaterial}
+          courses={myTrainerCourses}
+          onClose={() => setEditingMaterial(null)}
+          onSave={handleUpdateMaterial}
+          onDelete={handleDeleteMaterial}
+        />
       )}
 
       {/* Document Viewer Modal */}

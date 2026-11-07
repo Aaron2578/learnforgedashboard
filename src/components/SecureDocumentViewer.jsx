@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   Shield,
@@ -41,6 +41,12 @@ export function getEmbedUrl(rawUrl) {
   const driveId = url.match(/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/i);
   if (driveId) {
     return `https://drive.google.com/file/d/${driveId[1]}/preview`;
+  }
+
+  // Google Drive uc?id=
+  const driveUc = url.match(/drive\.google\.com\/uc\?.*id=([a-zA-Z0-9_-]+)/i);
+  if (driveUc) {
+    return `https://drive.google.com/file/d/${driveUc[1]}/preview`;
   }
 
   // Google Docs
@@ -94,9 +100,46 @@ export default function SecureDocumentViewer({
   const [requestReason, setRequestReason] = useState("");
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
-  const embedUrl = getEmbedUrl(url);
+  // Convert Base64 data: URLs to safe Blob URLs so Chrome & Edge never block them in iframes or window.open
+  const [blobUrl, setBlobUrl] = useState(null);
+
+  useEffect(() => {
+    if (url && url.startsWith("data:")) {
+      try {
+        const parts = url.split(",");
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
+        const byteString = atob(parts[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ab], { type: mime });
+        const createdBlobUrl = URL.createObjectURL(blob);
+        setBlobUrl(createdBlobUrl);
+        return () => {
+          URL.revokeObjectURL(createdBlobUrl);
+        };
+      } catch (err) {
+        console.warn("Could not convert data URL to Blob URL:", err);
+      }
+    } else {
+      setBlobUrl(null);
+    }
+  }, [url]);
+
+  const activeUrl = blobUrl || url;
+  const embedUrl = getEmbedUrl(activeUrl);
   const isGoogleSource = /drive\.google\.com|docs\.google\.com|forms\.gle/i.test(url || "");
   const canDownload = isSuperuser || isTrainer || downloadStatus === "approved";
+
+  function handleOpenInNewTab() {
+    const target = blobUrl || directDownloadUrl || url || embedUrl;
+    if (target) {
+      window.open(target, "_blank", "noopener,noreferrer");
+    }
+  }
 
   async function handleSendRequest(e) {
     e.preventDefault();
@@ -199,20 +242,17 @@ export default function SecureDocumentViewer({
               </button>
             )}
 
-            {/* Admin/Trainer only: Open in new tab. Students must view inside the dashboard */}
-            {isGoogleSource && (isSuperuser || isTrainer) && (
-              <a
-                className="button compact"
-                href={url || embedUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open directly in a new Google tab (Admin/Trainer)"
-                style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
-              >
-                <ExternalLink size={13} />
-                <span>Open in Google Tab</span>
-              </a>
-            )}
+            {/* Direct Open in New Tab Button for all viewers if browser restricts iframe preview */}
+            <button
+              className="button compact"
+              type="button"
+              onClick={handleOpenInNewTab}
+              title="Open document directly in a new browser tab"
+              style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
+            >
+              <ExternalLink size={13} />
+              <span>Open in New Tab</span>
+            </button>
 
             {/* Close Modal Button */}
             <button
@@ -230,13 +270,11 @@ export default function SecureDocumentViewer({
         <aside className="secure-viewer-notice">
           <Shield size={14} />
           <span>
-            <strong>Protected Institutional Material:</strong> You may view and study this document inside the dashboard. Direct saving, printing, and distribution are restricted.
+            <strong>Protected Institutional Material:</strong> You may view and study this document inside the dashboard.
           </span>
-          {isGoogleSource && (
-            <span style={{ marginLeft: "auto", fontSize: "11.5px", color: "var(--muted)" }}>
-              If Google displays an account prompt or cookie warning, click <strong>Open in Google Tab</strong> to take the form.
-            </span>
-          )}
+          <span style={{ marginLeft: "auto", fontSize: "11.5px", color: "var(--muted)" }}>
+            Tip: Click <strong>Open in New Tab</strong> if your device or browser restricts embedded previews.
+          </span>
           {downloadStatus === "approved" && (
             <span className="secure-approved-tag">
               <CheckCircle2 size={13} /> Approved by Admin
@@ -261,18 +299,63 @@ export default function SecureDocumentViewer({
 
           {/* Embedded Content - standard un-sandboxed iframe enables Google Drive & Docs preview */}
           {embedUrl ? (
-            <iframe
-              src={embedUrl}
-              title={title}
-              className="secure-viewer-frame"
-              allow="autoplay; encrypted-media; fullscreen"
-              loading="eager"
-            />
+            <>
+              <iframe
+                src={embedUrl}
+                title={title}
+                className="secure-viewer-frame"
+                allow="autoplay; encrypted-media; fullscreen"
+                loading="eager"
+              />
+              <div
+                className="secure-viewer-bottom-bar"
+                style={{
+                  padding: "8px 16px",
+                  background: "#f8fafc",
+                  borderTop: "1px solid var(--line)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontSize: "12px",
+                  color: "var(--muted)",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                }}
+              >
+                <span>Having trouble reading the document in this frame?</span>
+                <button
+                  type="button"
+                  className="text-link"
+                  style={{
+                    fontSize: "12px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    fontWeight: 600,
+                    color: "var(--blue)",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                  }}
+                  onClick={handleOpenInNewTab}
+                >
+                  <ExternalLink size={13} /> Open full document in new tab
+                </button>
+              </div>
+            </>
           ) : (
             <div className="secure-viewer-empty">
               <AlertCircle size={28} />
               <strong>No preview URL available</strong>
-              <p>This file or test link could not be loaded directly.</p>
+              <p>This file or link could not be loaded directly.</p>
+              <button
+                className="button primary compact"
+                type="button"
+                onClick={handleOpenInNewTab}
+                style={{ marginTop: "12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
+              >
+                <ExternalLink size={13} /> Try opening in new tab
+              </button>
             </div>
           )}
         </div>

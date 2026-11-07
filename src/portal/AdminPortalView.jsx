@@ -354,8 +354,12 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(false);
   }
 
-  async function gradeSubmission(submission) {
-    const draft = gradeDrafts[submission.id] ?? {};
+  async function gradeStudentSubmission(assignment, student, existingSubmission) {
+    const draftKey = existingSubmission?.id || `${assignment.id}-${student.id}`;
+    const draft = gradeDrafts[draftKey] ?? {
+      grade: existingSubmission?.grade ?? "",
+      feedback: existingSubmission?.feedback ?? "",
+    };
     const numericGrade = Number(draft.grade);
     if (!Number.isFinite(numericGrade) || numericGrade < 0 || numericGrade > 100) {
       setError("Enter a grade from 0 to 100.");
@@ -363,23 +367,72 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     }
     setBusy(true);
     setError("");
-    const { error: gradeError } = await supabase.from("assignment_submissions").update({
-      grade: numericGrade,
-      feedback: (draft.feedback ?? submission.feedback ?? "").trim() || null,
-      graded_at: new Date().toISOString(),
-    }).eq("id", submission.id);
-    if (gradeError) setError(gradeError.message);
-    else {
-      onToast("Assignment grade saved.");
+    try {
+      const payload = {
+        assignment_id: assignment.id,
+        student_id: student.id,
+        grade: numericGrade,
+        feedback: (draft.feedback ?? "").trim() || null,
+        graded_at: new Date().toISOString(),
+        answer_text: existingSubmission?.answer_text || "Instructor Evaluation",
+        status: "Completed",
+      };
+      if (existingSubmission?.id) {
+        payload.id = existingSubmission.id;
+      }
+      const { error: gradeError } = await supabase
+        .from("assignment_submissions")
+        .upsert(payload, { onConflict: "assignment_id,student_id" });
+
+      if (gradeError) throw gradeError;
+      onToast(`Assignment grade (${numericGrade}/100) saved for ${student.full_name || student.email}.`);
       await loadAdminData();
+    } catch (err) {
+      setError(`Could not save grade: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
+
+  const gradeSubmission = (sub) => {
+    const student = profiles[sub.student_id] || { id: sub.student_id };
+    const assignment = assignments.find((a) => a.id === sub.assignment_id) || { id: sub.assignment_id };
+    return gradeStudentSubmission(assignment, student, sub);
+  };
 
   async function downloadSubmission(path) {
     const { data, error: fileError } = await supabase.storage.from("assignment-files").createSignedUrl(path, 60);
     if (fileError) setError(fileError.message);
     else window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function deleteStudentSubmissionFile(submission) {
+    if (!submission?.file_path) return;
+    if (!window.confirm("Are you sure you want to manually delete this student's uploaded file? The file will be removed from storage.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      let cleanPath = submission.file_path;
+      if (cleanPath.startsWith("assignment-files:")) {
+        cleanPath = cleanPath.replace("assignment-files:", "");
+      }
+      const { error: storageErr } = await supabase.storage.from("assignment-files").remove([cleanPath]);
+      if (storageErr) {
+        console.warn("Storage delete warning:", storageErr);
+      }
+      const { error: dbErr } = await supabase
+        .from("assignment_submissions")
+        .update({ file_path: null })
+        .eq("id", submission.id);
+
+      if (dbErr) throw dbErr;
+      onToast("Student uploaded file deleted manually.");
+      await loadAdminData();
+    } catch (err) {
+      setError(`Could not delete student file: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteAssignment(assignment) {
@@ -565,19 +618,49 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     {loading ? <div className="card portal-loading">Loading secure student records…</div> : view === "Assignments" ? <section className="admin-work-list">
       {filteredAssignments.map((assignment) => {
         const rows = submissions.filter((submission) => submission.assignment_id === assignment.id);
+        const recipientIds = assignmentRecipients[assignment.id] ?? [];
+        const assignedStudents = recipientIds.length > 0
+          ? students.filter((s) => recipientIds.includes(s.id))
+          : students;
+        const extraStudents = students.filter((s) => !assignedStudents.some((a) => a.id === s.id) && rows.some((r) => r.student_id === s.id));
+        const fullRoster = [...assignedStudents, ...extraStudents];
+
         return <article className="card admin-assignment-card" key={assignment.id}>
-          <div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><BookOpen size={16} /></span><span><h2>{assignment.title}</h2><p>{assignment.description || "No additional instructions."}</p><small><CalendarClock size={12} />Due {prettyDate(assignment.due_at)} · {rows.length} submissions · {(assignmentRecipients[assignment.id] ?? []).length} assigned</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingAssignment(assignment)}><Pencil size={13} /> Edit</button><button className="button" type="button" disabled={busy} onClick={() => sendReminder(assignment, assignmentRecipients[assignment.id], "Assignment")}><Mail size={14} />Remind</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteAssignment(assignment)} aria-label={`Delete ${assignment.title}`}><Trash2 size={15} /></button></div></div>
-          {rows.length ? <div className="submission-list">{rows.map((submission) => {
-            const student = profiles[submission.student_id];
-            const draft = gradeDrafts[submission.id] ?? { grade: submission.grade ?? "", feedback: submission.feedback ?? "" };
-            return <div className="admin-submission" key={submission.id}>
+          <div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><BookOpen size={16} /></span><span><h2>{assignment.title}</h2><p>{assignment.description || "No additional instructions."}</p><small><CalendarClock size={12} />Due {prettyDate(assignment.due_at)} · {rows.length} submitted · {fullRoster.length} assigned</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingAssignment(assignment)}><Pencil size={13} /> Edit</button><button className="button" type="button" disabled={busy} onClick={() => sendReminder(assignment, assignmentRecipients[assignment.id], "Assignment")}><Mail size={14} />Remind</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteAssignment(assignment)} aria-label={`Delete ${assignment.title}`}><Trash2 size={15} /></button></div></div>
+          {fullRoster.length ? <div className="submission-list">{fullRoster.map((student) => {
+            const submission = rows.find((s) => s.student_id === student.id);
+            const draftKey = submission?.id || `${assignment.id}-${student.id}`;
+            const draft = gradeDrafts[draftKey] ?? { grade: submission?.grade ?? "", feedback: submission?.feedback ?? "" };
+
+            return <div className="admin-submission" key={student.id}>
               <div className="admin-student"><span className="student-avatar">{(student?.full_name || student?.email || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span><strong>{student?.full_name || "Student"}</strong><small>{student?.email || "Student account"}</small></span></div>
-              <span className="submission-time">Submitted {prettyDate(submission.submitted_at)}</span>
-              {submission.answer_text && <p className="submission-answer">{submission.answer_text}</p>}
-              {submission.file_path && <button className="text-link" type="button" onClick={() => downloadSubmission(submission.file_path)}><Download size={13} />Download student file</button>}
-              <div className="grading-controls"><label className="form-field"><span>Grade / 100</span><input type="number" min="0" max="100" step="0.5" value={draft.grade} onChange={(event) => setGradeDrafts((current) => ({ ...current, [submission.id]: { ...draft, grade: event.target.value } }))} placeholder="—" /></label><label className="form-field"><span>Feedback</span><input maxLength="2000" value={draft.feedback} onChange={(event) => setGradeDrafts((current) => ({ ...current, [submission.id]: { ...draft, feedback: event.target.value } }))} placeholder="Optional feedback for the student" /></label><button className="button primary" disabled={busy} onClick={() => gradeSubmission(submission)}><CheckCircle2 size={14} />Save grade</button></div>
+              {submission ? (
+                <span className="submission-time" style={{ color: "#166534", fontWeight: 600 }}>Submitted {prettyDate(submission.submitted_at)}</span>
+              ) : (
+                <span className="badge amber" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                  <Clock3 size={11} /> Pending submission / In-Class
+                </span>
+              )}
+              {submission?.answer_text && <p className="submission-answer">{submission.answer_text}</p>}
+              {submission?.file_path && (
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0", flexWrap: "wrap" }}>
+                  <button className="text-link" type="button" onClick={() => downloadSubmission(submission.file_path)}>
+                    <Download size={13} /> Download student file
+                  </button>
+                  <button
+                    className="button compact"
+                    type="button"
+                    style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b", height: "26px", fontSize: "11px", padding: "0 8px" }}
+                    onClick={() => deleteStudentSubmissionFile(submission)}
+                    title="Manually delete student uploaded file from storage"
+                  >
+                    <Trash2 size={11} /> Delete file manually
+                  </button>
+                </div>
+              )}
+              <div className="grading-controls"><label className="form-field"><span>Grade / 100</span><input type="number" min="0" max="100" step="0.5" value={draft.grade} onChange={(event) => setGradeDrafts((current) => ({ ...current, [draftKey]: { ...draft, grade: event.target.value } }))} placeholder="Marks" /></label><label className="form-field"><span>Feedback</span><input maxLength="2000" value={draft.feedback} onChange={(event) => setGradeDrafts((current) => ({ ...current, [draftKey]: { ...draft, feedback: event.target.value } }))} placeholder="Optional feedback for the student" /></label><button className="button primary" disabled={busy} onClick={() => gradeStudentSubmission(assignment, student, submission)}><CheckCircle2 size={14} />{submission?.graded_at ? "Update grade" : "Save grade"}</button></div>
             </div>;
-          })}</div> : <div className="admin-no-submissions"><Users size={15} />No student submissions yet.</div>}
+          })}</div> : <div className="admin-no-submissions"><Users size={15} />No students assigned to this coursework.</div>}
         </article>;
       })}
       {!filteredAssignments.length && <div className="card portal-empty"><BookOpen size={22} /><strong>No assignments found</strong><span>Publish an assignment for your students to get started.</span></div>}

@@ -14,7 +14,9 @@ import {
   GraduationCap,
   Filter,
   List,
+  Sparkles,
 } from "lucide-react";
+import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES = [
@@ -115,15 +117,17 @@ export default function AttendanceCalendar({
     let present = 0;
     let absent = 0;
     let late = 0;
+    let holiday = 0;
     filteredRecords.forEach((r) => {
-      const status = (r.status || "").toLowerCase();
+      const status = normalizeAttendanceStatus(r);
       if (status === "present") present++;
       else if (status === "absent") absent++;
       else if (status === "late") late++;
+      else if (status === "holiday") holiday++;
     });
-    const total = present + absent + late;
-    const rate = total > 0 ? Math.round((present / total) * 100) : 0;
-    return { present, absent, late, total, rate };
+    const totalWorking = present + absent + late;
+    const rate = totalWorking > 0 ? Math.round(((present + late * 0.5) / totalWorking) * 100) : 100;
+    return { present, absent, late, holiday, total: filteredRecords.length, rate };
   }, [filteredRecords]);
 
   // Calendar matrix calculation
@@ -176,20 +180,21 @@ export default function AttendanceCalendar({
   const todayKey = formatDateString(today.getFullYear(), today.getMonth(), today.getDate());
 
   function renderDayRecordBadge(record) {
-    const st = (record.status || "").toLowerCase();
+    const st = normalizeAttendanceStatus(record);
     const student = studentsById[record.student_id];
     const name = student?.full_name || student?.email?.split("@")[0] || "Student";
     const course = coursesById[record.course_id];
+    const displayNote = cleanAttendanceNote(record.note);
 
     return (
       <div
         key={record.id}
         className={`cal-status-chip ${st}`}
-        title={`${name} - ${record.status.toUpperCase()}${course ? ` (${course.code})` : ""}${record.note ? `: ${record.note}` : ""}`}
+        title={`${name} - ${st.toUpperCase()}${course ? ` (${course.code})` : ""}${displayNote ? `: ${displayNote}` : ""}`}
       >
         <span className="cal-chip-dot" />
         <span className="cal-chip-label">
-          {isAdmin ? `${name.split(" ")[0]}: ${st}` : st}
+          {st === "holiday" ? "HOLIDAY" : (isAdmin ? `${name.split(" ")[0]}: ${st}` : st)}
         </span>
       </div>
     );
@@ -307,6 +312,10 @@ export default function AttendanceCalendar({
           <AlertCircle size={15} />
           <span>Late: <strong>{metrics.late}</strong></span>
         </div>
+        <div className="cal-metric-chip holiday">
+          <Sparkles size={15} />
+          <span>Holiday: <strong>{metrics.holiday}</strong></span>
+        </div>
         <div className="cal-metric-chip rate">
           <Clock3 size={15} />
           <span>Attendance Rate: <strong>{metrics.rate}%</strong></span>
@@ -385,14 +394,26 @@ export default function AttendanceCalendar({
               </div>
 
               {isAdmin && onAddRecord && (
-                <button
-                  type="button"
-                  className="button primary compact"
-                  onClick={() => onAddRecord(selectedDate)}
-                >
-                  <Plus size={13} />
-                  <span>Mark Attendance</span>
-                </button>
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="button compact"
+                    style={{ background: "#ede9fe", color: "#6d28d9", borderColor: "#ddd6fe", fontWeight: 600 }}
+                    onClick={() => onAddRecord(selectedDate, "holiday")}
+                    title="Mark this date as a Holiday"
+                  >
+                    <Sparkles size={13} />
+                    <span>Declare Holiday</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="button primary compact"
+                    onClick={() => onAddRecord(selectedDate)}
+                  >
+                    <Plus size={13} />
+                    <span>Mark Attendance</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -401,7 +422,8 @@ export default function AttendanceCalendar({
                 {selectedDateRecords.map((record) => {
                   const student = studentsById[record.student_id];
                   const course = coursesById[record.course_id];
-                  const st = (record.status || "present").toLowerCase();
+                  const st = normalizeAttendanceStatus(record);
+                  const displayNote = cleanAttendanceNote(record.note);
 
                   return (
                     <div className="cal-inspector-row" key={record.id}>
@@ -428,15 +450,26 @@ export default function AttendanceCalendar({
                       </div>
 
                       <div className="inspector-status">
-                        <span className={`cohort-status-pill ${st === "present" ? "completed" : st === "absent" ? "pending" : "pending"}`} style={st === "absent" ? { background: "#fee2e2", color: "#b91c1c", borderColor: "#fecaca" } : {}}>
-                          {st === "present" ? <CheckCircle2 size={13} /> : st === "absent" ? <XCircle size={13} /> : <AlertCircle size={13} />}
-                          <span>{st.toUpperCase()}</span>
+                        <span
+                          className={`cohort-status-pill ${st}`}
+                          style={
+                            st === "holiday"
+                              ? { background: "#f5f3ff", color: "#6d28d9", borderColor: "#ddd6fe" }
+                              : st === "absent"
+                              ? { background: "#fee2e2", color: "#b91c1c", borderColor: "#fecaca" }
+                              : st === "late"
+                              ? { background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }
+                              : { background: "#dcfce7", color: "#15803d", borderColor: "#bbf7d0" }
+                          }
+                        >
+                          {st === "present" ? <CheckCircle2 size={13} /> : st === "absent" ? <XCircle size={13} /> : st === "holiday" ? <Sparkles size={13} /> : <AlertCircle size={13} />}
+                          <span>{st === "holiday" ? "HOLIDAY" : st.toUpperCase()}</span>
                         </span>
                       </div>
 
-                      {record.note && (
-                        <div className="inspector-note" title={record.note}>
-                          <small>Note: {record.note}</small>
+                      {displayNote && (
+                        <div className="inspector-note" title={displayNote}>
+                          <small>Note: {displayNote}</small>
                         </div>
                       )}
 
@@ -495,7 +528,8 @@ export default function AttendanceCalendar({
               {filteredRecords.map((record) => {
                 const student = studentsById[record.student_id];
                 const course = coursesById[record.course_id];
-                const st = (record.status || "present").toLowerCase();
+                const st = normalizeAttendanceStatus(record);
+                const displayNote = cleanAttendanceNote(record.note);
 
                 return (
                   <div className="cal-inspector-row" key={record.id}>
@@ -526,15 +560,24 @@ export default function AttendanceCalendar({
                     </div>
 
                     <div className="inspector-status">
-                      <span className={`cohort-status-pill ${st === "present" ? "completed" : st === "absent" ? "pending" : "pending"}`} style={st === "absent" ? { background: "#fee2e2", color: "#b91c1c", borderColor: "#fecaca" } : {}}>
-                        {st === "present" ? <CheckCircle2 size={13} /> : st === "absent" ? <XCircle size={13} /> : <AlertCircle size={13} />}
+                      <span
+                        className={`cohort-status-pill ${st === "present" ? "completed" : st === "holiday" ? "holiday" : "pending"}`}
+                        style={
+                          st === "absent"
+                            ? { background: "#fee2e2", color: "#b91c1c", borderColor: "#fecaca" }
+                            : st === "holiday"
+                            ? { background: "#ede9fe", color: "#6d28d9", borderColor: "#ddd6fe" }
+                            : {}
+                        }
+                      >
+                        {st === "present" ? <CheckCircle2 size={13} /> : st === "holiday" ? <Sparkles size={13} /> : st === "absent" ? <XCircle size={13} /> : <AlertCircle size={13} />}
                         <span>{st.toUpperCase()}</span>
                       </span>
                     </div>
 
-                    {record.note && (
+                    {displayNote && (
                       <div className="inspector-note">
-                        <small>{record.note}</small>
+                        <small>{displayNote}</small>
                       </div>
                     )}
 

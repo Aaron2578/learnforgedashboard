@@ -30,10 +30,13 @@ import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
 import AssignMaterialModal from "../components/AssignMaterialModal";
 import { getDriveDocTypeLabel } from "../lib/driveUtils.js";
+import { cleanAllFileStorage } from "../lib/storageCleanup.js";
 
 export default function AdminDriveView({ supabase, user, query = "", onToast }) {
-  const [activeTab, setActiveTab] = useState("materials"); // 'materials' | 'requests'
+  const [activeTab, setActiveTab] = useState("materials"); // 'materials' | 'student_uploads' | 'requests'
   const [materials, setMaterials] = useState([]);
+  const [studentUploads, setStudentUploads] = useState([]);
+  const [assignmentsList, setAssignmentsList] = useState([]);
   const [courses, setCourses] = useState([]);
   const [downloadRequests, setDownloadRequests] = useState([]);
   const [students, setStudents] = useState({});
@@ -79,6 +82,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       .on("postgres_changes", { event: "*", schema: "public", table: "material_recipients" }, () => loadData(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "student_notes" }, () => loadData(false))
       .on("postgres_changes", { event: "*", schema: "public", table: "course_enrollments" }, () => loadData(false))
+      .on("postgres_changes", { event: "*", schema: "public", table: "assignment_submissions" }, () => loadData(false))
       .subscribe();
 
     return () => {
@@ -93,7 +97,7 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     setError("");
 
     try {
-      const [materialsRes, coursesRes, requestsRes, profilesRes, enrollmentsRes, materialRecipientsRes, studentNotesRes] = await Promise.all([
+      const [materialsRes, coursesRes, requestsRes, profilesRes, enrollmentsRes, materialRecipientsRes, studentNotesRes, studentUploadsRes, assignmentsRes] = await Promise.all([
         supabase
           .from("course_materials")
           .select("*")
@@ -127,6 +131,16 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
             }
             return r.error ? { data: [] } : r;
           }),
+        supabase
+          .from("assignment_submissions")
+          .select("id, assignment_id, student_id, file_path, submission_type, submission_link, submitted_at, grade, answer_text")
+          .not("file_path", "is", null)
+          .order("submitted_at", { ascending: false })
+          .then((r) => r.error ? { data: [] } : r),
+        supabase
+          .from("assignments")
+          .select("id, title, course_id")
+          .then((r) => r.error ? { data: [] } : r),
       ]);
 
       if (materialsRes.error) throw materialsRes.error;
@@ -145,6 +159,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
       setEnrollments(enrollmentsRes?.data || []);
       setMaterialRecipients(materialRecipientsRes?.data || []);
       setStudentNotes(studentNotesRes?.data || []);
+      setStudentUploads(studentUploadsRes?.data || []);
+      setAssignmentsList(assignmentsRes?.data || []);
     } catch (err) {
       console.error("Error loading drive materials:", err);
       setError(err.message || "Could not load drive files.");
@@ -529,6 +545,55 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     }
   }
 
+  async function handleCleanFileStorage() {
+    if (!window.confirm("Are you sure you want to clear and purge all attached files from database storage? This will delete stored files from cloud storage and reset attached file paths to 0 bytes.")) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await cleanAllFileStorage(supabase);
+      onToast("Database file storage cleaned successfully! File attached storage is now 0 bytes.");
+      await loadData();
+    } catch (err) {
+      setError("Failed to clean file storage: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteStudentUpload(submission) {
+    if (!submission?.file_path) return;
+    if (!window.confirm("Manually delete this student's uploaded file? The file will be permanently removed from cloud storage.")) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      let cleanPath = submission.file_path;
+      if (cleanPath.startsWith("assignment-files:")) {
+        cleanPath = cleanPath.replace("assignment-files:", "");
+      }
+      try {
+        await supabase.storage.from("assignment-files").remove([cleanPath]);
+      } catch (stErr) {
+        console.warn("Storage removal warning:", stErr);
+      }
+      const { error: dbErr } = await supabase
+        .from("assignment_submissions")
+        .update({ file_path: null })
+        .eq("id", submission.id);
+
+      if (dbErr) throw dbErr;
+      onToast("Student uploaded file deleted manually.");
+      await loadData(false);
+    } catch (err) {
+      setError("Could not delete student file: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateMaterial(materialId, data) {
     setBusy(true);
     setError("");
@@ -661,6 +726,19 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
     );
   });
 
+  // Filtered student uploaded files
+  const filteredStudentUploads = useMemo(() => {
+    return studentUploads.filter((sub) => {
+      if (!term) return true;
+      const student = students[sub.student_id];
+      const assignment = assignmentsList.find((a) => a.id === sub.assignment_id);
+      const course = courses.find((c) => c.id === assignment?.course_id);
+      const rawFileName = sub.file_path || "";
+      const haystack = `${student?.full_name || ""} ${student?.email || ""} ${assignment?.title || ""} ${course?.code || ""} ${course?.name || ""} ${rawFileName}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [studentUploads, students, assignmentsList, courses, term]);
+
   // Distinct courses with materials or matching subject filter
   const displayedCourseGroups = useMemo(() => {
     const groups = [];
@@ -699,6 +777,17 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         </div>
         <div className="heading-actions">
           <button
+            className="button"
+            type="button"
+            style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" }}
+            onClick={handleCleanFileStorage}
+            disabled={busy}
+            title="Purge all attached files from database storage"
+          >
+            <Trash2 size={14} />
+            <span>Clear DB File Storage</span>
+          </button>
+          <button
             className="button primary"
             type="button"
             onClick={() => setShowAddModal(true)}
@@ -727,6 +816,17 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         >
           <HardDrive size={15} />
           <span>Materials by Subject Code ({materials.length})</span>
+        </button>
+
+        <button
+          className={`portal-tab ${activeTab === "student_uploads" ? "active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "student_uploads"}
+          onClick={() => setActiveTab("student_uploads")}
+        >
+          <Upload size={15} />
+          <span>Student Uploaded Files ({studentUploads.length})</span>
         </button>
 
         <button
@@ -1250,6 +1350,126 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
                 {materials.length
                   ? "Try a different search term or subject code filter."
                   : "Upload a PDF or add a Google Drive link to make it securely viewable in the student dashboard."}
+              </span>
+            </div>
+          )}
+        </section>
+      ) : activeTab === "student_uploads" ? (
+        /* Student Uploaded Files Tab */
+        <section className="admin-student-uploads-section">
+          <div className="student-admin-toolbar" style={{ marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+            <div>
+              <h2 style={{ fontSize: "16px", fontWeight: 700, margin: 0 }}>Student Uploaded Files ({studentUploads.length})</h2>
+              <p style={{ margin: "2px 0 0", fontSize: "12.5px", color: "var(--muted)" }}>
+                View coursework files uploaded by students. Admins can view documents and delete them manually from cloud storage.
+              </p>
+            </div>
+          </div>
+
+          {filteredStudentUploads.length ? (
+            <div className="requests-table-container">
+              <table className="requests-table">
+                <thead>
+                  <tr>
+                    <th>STUDENT</th>
+                    <th>ASSIGNMENT / COURSE</th>
+                    <th>UPLOADED FILE</th>
+                    <th>SUBMISSION DATE</th>
+                    <th>STATUS / GRADE</th>
+                    <th style={{ textAlign: "right" }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStudentUploads.map((sub) => {
+                    const student = students[sub.student_id];
+                    const assignment = assignmentsList.find((a) => a.id === sub.assignment_id);
+                    const course = courses.find((c) => c.id === assignment?.course_id);
+                    const rawFileName = sub.file_path ? sub.file_path.split("/").pop() : "File";
+                    const cleanFileName = rawFileName.replace(/^[a-f0-9-]{36}_?/, "");
+                    const studentInitial = (student?.full_name || student?.email || "S").slice(0, 1).toUpperCase();
+
+                    return (
+                      <tr key={sub.id}>
+                        <td>
+                          <div className="request-student-cell">
+                            <span className="student-avatar">{studentInitial}</span>
+                            <div>
+                              <strong>{student?.full_name || "Student"}</strong>
+                              <small>{student?.email || "No email"}</small>
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <strong style={{ fontSize: "13px" }}>{assignment?.title || "Coursework Assignment"}</strong>
+                          {course && (
+                            <small style={{ display: "block", color: "var(--muted)" }}>
+                              {course.code} · {course.name}
+                            </small>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <FileText size={15} style={{ color: "var(--blue)" }} />
+                            <span style={{ fontSize: "13px", fontWeight: 600 }}>{cleanFileName}</span>
+                          </div>
+                          <small style={{ color: "var(--muted)", fontSize: "11px" }}>{sub.submission_type || "File Upload"}</small>
+                        </td>
+                        <td>
+                          <small style={{ color: "var(--muted)" }}>
+                            {new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(sub.submitted_at))}
+                          </small>
+                        </td>
+                        <td>
+                          {sub.grade !== null && sub.grade !== undefined ? (
+                            <span className="badge green" style={{ fontSize: "11px", fontWeight: 700 }}>
+                              Grade: {sub.grade} pts
+                            </span>
+                          ) : (
+                            <span className="badge amber" style={{ fontSize: "11px" }}>
+                              Pending Grade
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <div style={{ display: "inline-flex", gap: "6px", alignItems: "center" }}>
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => handleOpenViewer({
+                                title: cleanFileName,
+                                subtitle: `${student?.full_name || "Student"} · ${assignment?.title || "Submission"}`,
+                                file_path: sub.file_path,
+                              })}
+                              title="Preview student document"
+                            >
+                              <Eye size={12} /> View
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              style={{ background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" }}
+                              onClick={() => handleDeleteStudentUpload(sub)}
+                              disabled={busy}
+                              title="Manually delete student uploaded file"
+                            >
+                              <Trash2 size={12} /> Delete Manually
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="card portal-empty">
+              <Upload size={24} />
+              <strong>No student uploaded files</strong>
+              <span>
+                {studentUploads.length
+                  ? "No files match your search filter."
+                  : "When students upload files for assignments or coursework, they will appear here and can be deleted manually."}
               </span>
             </div>
           )}
