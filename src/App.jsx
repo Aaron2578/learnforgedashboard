@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -11,6 +11,7 @@ import {
   CircleAlert,
   ClipboardCheck,
   Clock3,
+  Code2,
   Download,
   Database,
   FileSpreadsheet,
@@ -36,6 +37,8 @@ import AdminDriveView from "./portal/AdminDriveView.jsx";
 import TrainerPortal from "./portal/TrainerPortal.jsx";
 import StudentPortal from "./portal/StudentPortal.jsx";
 
+const OnlineCompiler = lazy(() => import("./components/OnlineCompiler.jsx"));
+
 const STORAGE_KEY = "learnforge-dashboard-v1";
 const LEGACY_STORAGE_KEY = "northstar-institute-dashboard-v1";
 
@@ -52,6 +55,7 @@ const NAV_ITEMS = [
   { label: "Assignments", icon: FileSpreadsheet },
   { label: "Tests", icon: CheckCircle2 },
   { group: "Instruction" },
+  { label: "Code Lab", icon: Code2 },
   { label: "Trainer Dashboard", icon: GraduationCap },
   { label: "Student Dashboard", icon: BookOpen },
   { group: "Community" },
@@ -628,6 +632,20 @@ function App({ user, profile, supabase, onSignOut }) {
   function renderAdminDriveView() {
     return <AdminDriveView key={activeView} supabase={supabase} user={user} query={query} onToast={setToast} />;
   }
+  function renderCodeLabView() {
+    return (
+      <>
+        <PageHeading
+          eyebrow="IT Practice Environment"
+          title="Code Lab & Online Compiler"
+          description="Practice and demonstrate Python, Java, C/C++, SQL, Data Analytics, React JSX, Web Dev, Unit Testing, and BI Visuals."
+        />
+        <Suspense fallback={<div className="card portal-loading">Loading IT Code Lab…</div>}>
+          <OnlineCompiler roleLabel="Administrator" supabase={supabase} />
+        </Suspense>
+      </>
+    );
+  }
   function renderTrainerPortalView() {
     return (
       <TrainerPortal
@@ -659,6 +677,7 @@ function App({ user, profile, supabase, onSignOut }) {
     Trainers: renderAdminManagementView,
     Courses: renderAdminManagementView,
     Syllabus: renderAdminManagementView,
+    "Code Lab": renderCodeLabView,
     "Drive & Files": renderAdminDriveView,
     Attendance: renderAdminManagementView,
     Tasks: renderAdminManagementView,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  Code2,
   Copy,
   Download,
   ExternalLink,
@@ -47,6 +48,9 @@ import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
+import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
+
+const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
 const TRAINER_NAV = [
   { label: "Overview", icon: LayoutDashboard },
@@ -56,6 +60,7 @@ const TRAINER_NAV = [
   { label: "Tests", icon: ClipboardList },
   { label: "Gradebook", icon: BarChart3 },
   { label: "Syllabus", icon: GraduationCap },
+  { label: "Code Lab", icon: Code2 },
   { label: "Materials & Drive", icon: HardDrive },
   { label: "Messages", icon: MessageSquare },
   { label: "Students", icon: Users },
@@ -433,6 +438,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   }, [courses, activeTrainerId, activeTrainer]);
 
   const myTrainerCourseIds = useMemo(() => new Set(myTrainerCourses.map((c) => c.id)), [myTrainerCourses]);
+  const trainerItCourses = useMemo(() => myTrainerCourses.filter(isItCourse), [myTrainerCourses]);
+  const trainerHasItLab = trainerItCourses.length > 0 || myTrainerCourses.length === 0;
+  const trainerRecommendedModes = useMemo(
+    () => getCourseLabRecommendations(trainerItCourses),
+    [trainerItCourses]
+  );
+  const visibleTrainerNav = useMemo(
+    () => (trainerHasItLab ? TRAINER_NAV : TRAINER_NAV.filter((item) => item.label !== "Code Lab")),
+    [trainerHasItLab]
+  );
 
   // Synchronize course dropdown selections when active trainer changes
   useEffect(() => {
@@ -4769,7 +4784,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         <div className="nav-label">Trainer Workspace</div>
 
         <nav className="side-nav">
-          {TRAINER_NAV.map((item) => (
+          {visibleTrainerNav.map((item) => (
             <button
               key={item.label}
               className={`nav-link ${activeTab === item.label ? "active" : ""}`}
@@ -4982,6 +4997,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             renderGradebook()
           ) : activeTab === "Syllabus" ? (
             renderSyllabus()
+          ) : activeTab === "Code Lab" && trainerHasItLab ? (
+            <Suspense fallback={<div className="card portal-loading">Loading IT Code Lab…</div>}>
+              <OnlineCompiler
+                enrolledItCourses={trainerItCourses}
+                recommendedModes={trainerRecommendedModes}
+                roleLabel="Trainer"
+                supabase={supabase}
+              />
+            </Suspense>
           ) : activeTab === "Materials & Drive" ? (
             renderMaterialsAndDrive()
           ) : activeTab === "Tests" ? (

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3,
+  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3, Code2,
   Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Trash2, Unlock, Upload, Users, X,
@@ -9,6 +9,9 @@ import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
+import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
+
+const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -17,6 +20,7 @@ const STUDENT_NAV = [
   { label: "Tests", icon: ClipboardList },
   { label: "Attendance", icon: Clock3 },
   { label: "Syllabus", icon: FileSpreadsheet },
+  { label: "Code Lab", icon: Code2 },
   { label: "Drive & Files", icon: HardDrive },
   { label: "Courses", icon: GraduationCap },
   { label: "Updates", icon: Mail },
@@ -386,6 +390,25 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const submissionByAssignment = useMemo(() => new Map(submissions.map((item) => [item.assignment_id, item])), [submissions]);
   const attemptByTest = useMemo(() => new Map(attempts.map((item) => [item.assessment_id, item])), [attempts]);
   const coursesById = useMemo(() => Object.fromEntries(courses.map((c) => [c.id, c])), [courses]);
+  const enrolledItCourses = useMemo(
+    () => courses.filter((c) => enrolledCourseIds.has(c.id) && isItCourse(c)),
+    [courses, enrolledCourseIds]
+  );
+  const hasItLabAccess = enrolledItCourses.length > 0;
+  const recommendedLabModes = useMemo(
+    () => getCourseLabRecommendations(enrolledItCourses),
+    [enrolledItCourses]
+  );
+  const visibleStudentNav = useMemo(
+    () => (hasItLabAccess ? STUDENT_NAV : STUDENT_NAV.filter((item) => item.label !== "Code Lab")),
+    [hasItLabAccess]
+  );
+
+  useEffect(() => {
+    if (!loading && activeView === "Code Lab" && !hasItLabAccess) {
+      setActiveView("My learning");
+    }
+  }, [loading, activeView, hasItLabAccess]);
   const requestByMaterial = useMemo(
     () => new Map((downloadRequests || []).filter((r) => r.material_id).map((r) => [r.material_id, r])),
     [downloadRequests]
@@ -1504,7 +1527,17 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
             )}
           </div>
 
-          <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+            {isItCourse(course) && (
+              <button
+                type="button"
+                className="button primary compact"
+                onClick={() => navigate("Code Lab")}
+                title={`Open interactive IT Code Lab for ${course.name}`}
+              >
+                <Code2 size={13} /> Open Code Lab
+              </button>
+            )}
             <button
               type="button"
               className="button compact"
@@ -2317,6 +2350,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     Tests: ["Coursework", "Tests", "Complete your online tests and see your score immediately."],
     Courses: ["My campus", "Courses", "Courses your administrator has enrolled you in."],
     Syllabus: ["Academic syllabus", "Course Syllabus", "Access comprehensive course outlines, syllabus documents, and learning roadmaps."],
+    "Code Lab": ["IT Practice Environment", "Code Lab & Compiler", "Run Python, Java, C/C++, SQL, Data Analytics charts, React JSX, HTML/CSS/JS, Unit Tests, and BI visuals."],
     Tasks: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
     Notes: ["Academic coursework", "My Tasks", "Review tasks, practice exercises, and project milestones assigned to you."],
     Attendance: ["My campus", "Attendance", "Your recorded attendance."],
@@ -2332,7 +2366,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       {mobileNavOpen && <button className="drawer-close icon-button" type="button" aria-label="Close navigation menu" onClick={() => setMobileNavOpen(false)}><X size={16} /></button>}
       <div className="brand" style={{ cursor: "pointer" }} onClick={() => navigate("My learning")}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>LearnForge</strong><small>Student portal</small></span></div>
       <div className="nav-label">My campus</div>
-      <nav className="side-nav">{STUDENT_NAV.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
+      <nav className="side-nav">{visibleStudentNav.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="student-support"><ShieldCheck size={16} /><span><strong>Your work is private</strong><small>Only you and your institution can view your submissions.</small></span></div>
       <div className="profile">
@@ -2490,7 +2524,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         <div className="page-heading"><div><div className="eyebrow">{heading[0]}</div><h1>{heading[1]}</h1><p>{heading[2]}</p></div>{activeView === "Messages" && <button className="button primary" onClick={() => { setSelectedConversation(""); setNewSubject(""); }}><Plus size={14} />New message</button>}</div>
         {error && <div className="portal-alert error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
         {notice && <div className="portal-alert success" role="status"><CheckCircle2 size={15} />{notice}<button type="button" onClick={() => setNotice("")}>Dismiss</button></div>}
-        {loading ? <div className="card portal-loading">Loading coursework for {activeStudent?.full_name || "student"}…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Syllabus" ? renderSyllabus() : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
+        {loading ? <div className="card portal-loading">Loading coursework for {activeStudent?.full_name || "student"}…</div> : activeView === "Drive & Files" ? renderMaterials() : activeView === "Assignments" ? renderAssignments() : activeView === "Tests" ? renderTests() : activeView === "Courses" ? renderCourses() : activeView === "Syllabus" ? renderSyllabus() : activeView === "Code Lab" && hasItLabAccess ? <Suspense fallback={<div className="card portal-loading">Loading IT Code Lab…</div>}><OnlineCompiler key={activeStudentId} enrolledItCourses={enrolledItCourses} recommendedModes={recommendedLabModes} roleLabel="Student" supabase={supabase} /></Suspense> : activeView === "Tasks" || activeView === "Notes" ? renderNotes() : activeView === "Attendance" ? renderAttendance() : activeView === "Updates" ? renderUpdates() : activeView === "Messages" ? renderMessages() : renderOverview()}
       </div>
     </main>
 
