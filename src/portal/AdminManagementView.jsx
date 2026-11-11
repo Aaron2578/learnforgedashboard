@@ -15,7 +15,7 @@ import StudentAccessModal from "../components/StudentAccessModal";
 import CreateTrainerModal from "../components/CreateTrainerModal";
 import AssignTrainerStudentsModal from "../components/AssignTrainerStudentsModal";
 import { cleanAllFileStorage } from "../lib/storageCleanup.js";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, resolveStorageSignedUrl } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback, updateAttendanceWithFallback } from "../lib/attendanceUtils.js";
 
 const headings = {
@@ -913,26 +913,16 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
   }
 
   async function openMaterialDoc(material) {
-    let previewUrl = material.drive_url;
-    if (material.file_path) {
-      if (material.file_path.startsWith("data:") || material.file_path.startsWith("http")) {
-        previewUrl = material.file_path;
-      } else {
-        let bucket = "course-materials";
-        let cleanPath = material.file_path.replace(/^course-materials:|^assignment-files:/, "");
-        if (material.file_path.startsWith("assignment-files:")) bucket = "assignment-files";
-        try {
-          const { data } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 3600);
-          if (data?.signedUrl) previewUrl = data.signedUrl;
-        } catch {}
-      }
-    }
+    const previewUrl = await resolveStorageSignedUrl(supabase, material.file_path, material.drive_url);
     if (previewUrl) {
       const course = courses.find((c) => c.id === material.course_id);
       setViewingNoteDoc({
         title: material.title,
         subtitle: course ? `${course.code} · Official Course Syllabus` : "Syllabus Document",
         url: previewUrl,
+        directDownloadUrl: previewUrl,
+        fileName: material.file_name || material.file_path || "",
+        fileType: material.file_type || "",
       });
     } else {
       if (onToast) onToast("Could not generate a preview link for this syllabus.");
@@ -3522,6 +3512,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
             title={viewingNoteDoc.title}
             subtitle={viewingNoteDoc.subtitle}
             url={viewingNoteDoc.url}
+            directDownloadUrl={viewingNoteDoc.directDownloadUrl}
+            fileName={viewingNoteDoc.fileName}
+            fileType={viewingNoteDoc.fileType}
             userEmail={user.email}
             isSuperuser={true}
             onClose={() => setViewingNoteDoc(null)}
@@ -3725,6 +3718,9 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
         title={viewingNoteDoc.title}
         subtitle={viewingNoteDoc.subtitle}
         url={viewingNoteDoc.url}
+        directDownloadUrl={viewingNoteDoc.directDownloadUrl}
+        fileName={viewingNoteDoc.fileName}
+        fileType={viewingNoteDoc.fileType}
         userEmail={user.email}
         isSuperuser={true}
         onClose={() => setViewingNoteDoc(null)}

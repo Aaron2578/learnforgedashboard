@@ -55,9 +55,40 @@ export function getDriveDownloadExportUrl(url) {
   if (presMatch) return `https://docs.google.com/presentation/d/${presMatch[1]}/export/pdf`;
 
   // Google Drive File ID -> direct download
-  const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  const fileMatch = trimmed.match(/drive\.google\.com\/file\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
   if (fileMatch) return `https://drive.google.com/uc?export=download&id=${fileMatch[1]}`;
 
   return trimmed;
+}
+
+export async function resolveStorageSignedUrl(supabase, filePath, fallbackUrl = "") {
+  const finalUrl = fallbackUrl || "";
+  if (!filePath) return finalUrl;
+
+  if (filePath.startsWith("data:") || filePath.startsWith("http")) {
+    return filePath;
+  }
+
+  let bucket = "course-materials";
+  let cleanPath = filePath;
+  if (filePath.startsWith("course-materials:")) {
+    cleanPath = filePath.replace("course-materials:", "");
+  } else if (filePath.startsWith("assignment-files:")) {
+    bucket = "assignment-files";
+    cleanPath = filePath.replace("assignment-files:", "");
+  }
+
+  try {
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 3600);
+    if (!error && data?.signedUrl) return data.signedUrl;
+
+    const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
+    const { data: fallbackData } = await supabase.storage.from(otherBucket).createSignedUrl(cleanPath, 3600);
+    if (fallbackData?.signedUrl) return fallbackData.signedUrl;
+  } catch (err) {
+    console.warn("Could not resolve signed storage URL:", err?.message || err);
+  }
+
+  return finalUrl;
 }
 

@@ -4,7 +4,6 @@ import {
   Shield,
   Download,
   Lock,
-  Unlock,
   Clock,
   Eye,
   AlertCircle,
@@ -12,69 +11,93 @@ import {
   FileText,
   CheckCircle2,
 } from "lucide-react";
+import { getDriveDownloadExportUrl } from "../lib/driveUtils.js";
+
+function getFileExtension(text = "") {
+  const clean = text.split(/[?#]/)[0].trim().toLowerCase();
+  const match = clean.match(/\.([a-z0-9]{1,8})$/);
+  return match ? match[1] : "";
+}
+
+function isNonInlineOfficeOrArchive(nameOrUrl = "", mimeType = "") {
+  const ext = getFileExtension(nameOrUrl);
+  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar", "7z", "tar"].includes(ext)) {
+    return true;
+  }
+  return /msword|wordprocessingml|spreadsheetml|presentationml|application\/zip|x-zip/i.test(mimeType || "");
+}
+
+function isImageFile(nameOrUrl = "", mimeType = "") {
+  const ext = getFileExtension(nameOrUrl);
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return true;
+  return /^image\//i.test(mimeType || "");
+}
+
+function isPdfFile(nameOrUrl = "", mimeType = "") {
+  const ext = getFileExtension(nameOrUrl);
+  if (ext === "pdf") return true;
+  return /application\/pdf/i.test(mimeType || "");
+}
 
 /**
- * Transforms various Google Drive / Docs / Forms URLs into clean embeddable preview URLs
+ * Transforms various Google Drive / Docs / Forms & PDF URLs into clean embeddable preview URLs
  */
-export function getEmbedUrl(rawUrl) {
+export function getEmbedUrl(rawUrl, forcePdfToolbarHint = false) {
   if (!rawUrl) return "";
   const url = rawUrl.trim();
 
-  // Direct Data URLs (Base64 PDF / document)
-  if (url.startsWith("data:")) {
+  // Data URLs or Blob URLs
+  if (url.startsWith("data:") || url.startsWith("blob:")) {
+    if (forcePdfToolbarHint && url.startsWith("blob:") && !url.includes("#")) {
+      return `${url}#toolbar=0&navpanes=0&scrollbar=0`;
+    }
     return url;
   }
 
-  // Google Drive Folder embed
+  // Google Drive Folder embed (handles /u/0/ or /a/domain/)
   const driveFolder = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/i);
   if (driveFolder) {
     return `https://drive.google.com/embeddedfolderview?id=${driveFolder[1]}#grid`;
   }
 
-  // Google Drive File preview
-  const driveFile = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  // Google Drive File preview (handles /file/d/ and /file/u/0/d/)
+  const driveFile = url.match(/drive\.google\.com\/file\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
   if (driveFile) {
     return `https://drive.google.com/file/d/${driveFile[1]}/preview`;
   }
 
-  // Google Drive open?id=
-  const driveId = url.match(/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/i);
-  if (driveId) {
-    return `https://drive.google.com/file/d/${driveId[1]}/preview`;
+  // Google Drive open?id= or uc?id= (anywhere in query string)
+  const driveQuery = url.match(/drive\.google\.com\/(?:open|uc)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
+  if (driveQuery) {
+    return `https://drive.google.com/file/d/${driveQuery[1]}/preview`;
   }
 
-  // Google Drive uc?id=
-  const driveUc = url.match(/drive\.google\.com\/uc\?.*id=([a-zA-Z0-9_-]+)/i);
-  if (driveUc) {
-    return `https://drive.google.com/file/d/${driveUc[1]}/preview`;
-  }
-
-  // Google Docs
-  const doc = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/i);
+  // Google Docs (handles optional /a/domain/ and /u/0/)
+  const doc = url.match(/docs\.google\.com\/(?:a\/[^/]+\/)?document\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
   if (doc) {
     return `https://docs.google.com/document/d/${doc[1]}/preview`;
   }
 
   // Google Sheets
-  const sheet = url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/i);
+  const sheet = url.match(/docs\.google\.com\/(?:a\/[^/]+\/)?spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
   if (sheet) {
     return `https://docs.google.com/spreadsheets/d/${sheet[1]}/preview`;
   }
 
   // Google Slides
-  const slide = url.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9_-]+)/i);
+  const slide = url.match(/docs\.google\.com\/(?:a\/[^/]+\/)?presentation\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
   if (slide) {
     return `https://docs.google.com/presentation/d/${slide[1]}/preview`;
   }
 
   // Google Forms (Quizzes / Tests)
-  const form = url.match(/docs\.google\.com\/forms\/d\/(e\/[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)\/(viewform|edit)?/i);
+  const form = url.match(/docs\.google\.com\/(?:a\/[^/]+\/)?forms\/(?:u\/\d+\/)?d\/(e\/[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)/i);
   if (form) {
     return `https://docs.google.com/forms/d/${form[1]}/viewform?embedded=true`;
   }
 
   // PDF direct URLs: add toolbar=0 to hide browser download / print controls
-  if (url.toLowerCase().endsWith(".pdf") || url.includes("/course-materials/") || url.includes("/assignment-files/")) {
+  if (forcePdfToolbarHint || /\.pdf(?:$|[?#])/i.test(url)) {
     const separator = url.includes("#") ? "&" : "#";
     return `${url}${separator}toolbar=0&navpanes=0&scrollbar=0`;
   }
@@ -87,6 +110,8 @@ export default function SecureDocumentViewer({
   subtitle,
   url,
   directDownloadUrl,
+  fileName = "",
+  fileType = "",
   userEmail,
   isSuperuser = false,
   isTrainer = false,
@@ -100,45 +125,129 @@ export default function SecureDocumentViewer({
   const [requestReason, setRequestReason] = useState("");
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
-  // Convert Base64 data: URLs to safe Blob URLs so Chrome & Edge never block them in iframes or window.open
+  // Convert Base64 data: URLs and Supabase Storage signed URLs into safe same-origin Blob URLs
+  // so Chrome/Edge never block framing due to storage CSP/X-Frame headers.
   const [blobUrl, setBlobUrl] = useState(null);
+  const [resolvedMime, setResolvedMime] = useState(fileType || "");
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
-    if (url && url.startsWith("data:")) {
-      try {
-        const parts = url.split(",");
-        const mimeMatch = parts[0].match(/:(.*?);/);
-        const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
-        const byteString = atob(parts[1]);
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) {
-          ia[i] = byteString.charCodeAt(i);
-        }
-        const blob = new Blob([ab], { type: mime });
-        const createdBlobUrl = URL.createObjectURL(blob);
-        setBlobUrl(createdBlobUrl);
-        return () => {
-          URL.revokeObjectURL(createdBlobUrl);
-        };
-      } catch (err) {
-        console.warn("Could not convert data URL to Blob URL:", err);
-      }
-    } else {
+    let active = true;
+    let createdUrl = null;
+    const controller = new AbortController();
+
+    async function preparePreview() {
       setBlobUrl(null);
+      setResolvedMime(fileType || "");
+
+      if (!url) return;
+
+      // Case 1: Inline base64 data URL -> convert to Blob URL
+      if (url.startsWith("data:")) {
+        try {
+          const parts = url.split(",");
+          const mimeMatch = parts[0].match(/:(.*?);/);
+          const mime = mimeMatch ? mimeMatch[1] : (fileType || "application/pdf");
+          const byteString = atob(parts[1]);
+          const ab = new ArrayBuffer(byteString.length);
+          const ia = new Uint8Array(ab);
+          for (let i = 0; i < byteString.length; i += 1) {
+            ia[i] = byteString.charCodeAt(i);
+          }
+          const blob = new Blob([ab], { type: mime });
+          createdUrl = URL.createObjectURL(blob);
+          if (active) {
+            setResolvedMime(mime);
+            setBlobUrl(createdUrl);
+          }
+        } catch (err) {
+          console.warn("Could not convert data URL to Blob URL:", err);
+        }
+        return;
+      }
+
+      // Case 2: Supabase Storage URL -> fetch into same-origin typed Blob URL
+      if (/supabase\.co\/storage\/v1\/object\//i.test(url)) {
+        if (isNonInlineOfficeOrArchive(fileName || url, fileType)) {
+          return;
+        }
+        setLoadingPreview(true);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const rawBlob = await res.blob();
+          const serverType = res.headers.get("content-type") || rawBlob.type || fileType || "";
+          const isPdf = isPdfFile(fileName || url, serverType);
+          const effectiveMime = isPdf ? "application/pdf" : (serverType.split(";")[0] || "application/octet-stream");
+
+          if (isNonInlineOfficeOrArchive(fileName || url, effectiveMime)) {
+            if (active) setResolvedMime(effectiveMime);
+            return;
+          }
+
+          const typedBlob = rawBlob.type === effectiveMime ? rawBlob : new Blob([rawBlob], { type: effectiveMime });
+          createdUrl = URL.createObjectURL(typedBlob);
+          if (active) {
+            setResolvedMime(effectiveMime);
+            setBlobUrl(createdUrl);
+          }
+        } catch (err) {
+          if (err?.name !== "AbortError") {
+            console.warn("Falling back to direct storage preview URL:", err?.message || err);
+          }
+        } finally {
+          if (active) setLoadingPreview(false);
+        }
+      }
     }
-  }, [url]);
+
+    preparePreview();
+
+    return () => {
+      active = false;
+      controller.abort();
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [url, fileName, fileType]);
+
+  const effectiveHintName = fileName || url || "";
+  const isOfficeDoc = isNonInlineOfficeOrArchive(effectiveHintName, resolvedMime);
+  const isImage = !isOfficeDoc && isImageFile(effectiveHintName, resolvedMime);
+  const isPdf = isPdfFile(effectiveHintName, resolvedMime);
 
   const activeUrl = blobUrl || url;
-  const embedUrl = getEmbedUrl(activeUrl);
-  const isGoogleSource = /drive\.google\.com|docs\.google\.com|forms\.gle/i.test(url || "");
+  const embedUrl = isOfficeDoc ? "" : getEmbedUrl(activeUrl, isPdf);
   const canDownload = isSuperuser || isTrainer || downloadStatus === "approved";
 
   function handleOpenInNewTab() {
-    const target = blobUrl || directDownloadUrl || url || embedUrl;
+    const target = blobUrl || directDownloadUrl || embedUrl || url;
     if (target) {
       window.open(target, "_blank", "noopener,noreferrer");
     }
+  }
+
+  function handleDownloadAction() {
+    if (onDownload) {
+      onDownload();
+      return;
+    }
+    const target = blobUrl || directDownloadUrl || (url ? getDriveDownloadExportUrl(url) : "");
+    if (!target) return;
+    const link = document.createElement("a");
+    link.href = target;
+    if (fileName) {
+      link.download = fileName;
+    } else if (blobUrl && title) {
+      const cleanTitle = title.replace(/[^a-zA-Z0-9._-]+/g, "_");
+      link.download = isPdf && !cleanTitle.toLowerCase().endsWith(".pdf") ? `${cleanTitle}.pdf` : cleanTitle;
+    }
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   async function handleSendRequest(e) {
@@ -182,7 +291,7 @@ export default function SecureDocumentViewer({
               <button
                 className="button primary secure-download-btn"
                 type="button"
-                onClick={onDownload}
+                onClick={handleDownloadAction}
                 title="Download verified and approved by admin"
               >
                 <Download size={14} />
@@ -242,17 +351,19 @@ export default function SecureDocumentViewer({
               </button>
             )}
 
-            {/* Direct Open in New Tab Button for all viewers if browser restricts iframe preview */}
-            <button
-              className="button compact"
-              type="button"
-              onClick={handleOpenInNewTab}
-              title="Open document directly in a new browser tab"
-              style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
-            >
-              <ExternalLink size={13} />
-              <span>Open in New Tab</span>
-            </button>
+            {/* Direct Open in New Tab Button */}
+            {!isOfficeDoc && (
+              <button
+                className="button compact"
+                type="button"
+                onClick={handleOpenInNewTab}
+                title="Open document directly in a new browser tab"
+                style={{ minHeight: "34px", padding: "0 10px", fontSize: "12px", gap: "6px" }}
+              >
+                <ExternalLink size={13} />
+                <span>Open in New Tab</span>
+              </button>
+            )}
 
             {/* Close Modal Button */}
             <button
@@ -284,7 +395,7 @@ export default function SecureDocumentViewer({
 
         {/* Viewer Viewport with Watermark Overlay */}
         <div className="secure-viewer-viewport">
-          {/* Subtle anti-leak watermark overlay with student email */}
+          {/* Subtle anti-leak watermark overlay */}
           {userEmail && (
             <div className="secure-watermark-overlay" aria-hidden="true">
               {Array.from({ length: 12 }).map((_, idx) => (
@@ -297,12 +408,48 @@ export default function SecureDocumentViewer({
             </div>
           )}
 
-          {/* Embedded Content - standard un-sandboxed iframe enables Google Drive & Docs preview */}
-          {embedUrl ? (
+          {loadingPreview ? (
+            <div className="secure-viewer-empty" style={{ flex: 1 }}>
+              <span className="compiler-spinner" style={{ width: "26px", height: "26px" }} />
+              <strong>Loading protected document…</strong>
+              <p>Preparing secure in-dashboard preview.</p>
+            </div>
+          ) : isOfficeDoc ? (
+            <div className="secure-viewer-empty" style={{ flex: 1 }}>
+              <FileText size={32} />
+              <strong>{fileName || title || "Document File"}</strong>
+              <p style={{ maxWidth: "460px" }}>
+                Word, Excel, PowerPoint, and archive files cannot be rendered natively inside a browser frame.
+              </p>
+              <div style={{ display: "flex", gap: "10px", marginTop: "8px", flexWrap: "wrap", justifyContent: "center" }}>
+                {canDownload ? (
+                  <button className="button primary" type="button" onClick={handleDownloadAction}>
+                    <Download size={14} /> Download File to View
+                  </button>
+                ) : onRequestDownload ? (
+                  <button className="button primary" type="button" onClick={() => setShowRequestDialog(true)}>
+                    <Lock size={14} /> Request Download Access
+                  </button>
+                ) : (
+                  <button className="button primary" type="button" onClick={handleOpenInNewTab}>
+                    <ExternalLink size={14} /> Open File
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : isImage && activeUrl ? (
+            <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px", overflow: "auto", background: "#0f172a" }}>
+              <img
+                src={activeUrl}
+                alt={title || "Document preview"}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "8px" }}
+              />
+            </div>
+          ) : embedUrl ? (
             <>
               <iframe
                 src={embedUrl}
-                title={title}
+                title={title || "Document Preview"}
                 className="secure-viewer-frame"
                 allow="autoplay; encrypted-media; fullscreen"
                 loading="eager"
@@ -310,6 +457,7 @@ export default function SecureDocumentViewer({
               <div
                 className="secure-viewer-bottom-bar"
                 style={{
+                  width: "100%",
                   padding: "8px 16px",
                   background: "#f8fafc",
                   borderTop: "1px solid var(--line)",
@@ -320,6 +468,8 @@ export default function SecureDocumentViewer({
                   color: "var(--muted)",
                   flexWrap: "wrap",
                   gap: "8px",
+                  flexShrink: 0,
+                  zIndex: 12,
                 }}
               >
                 <span>Having trouble reading the document in this frame?</span>
@@ -344,7 +494,7 @@ export default function SecureDocumentViewer({
               </div>
             </>
           ) : (
-            <div className="secure-viewer-empty">
+            <div className="secure-viewer-empty" style={{ flex: 1 }}>
               <AlertCircle size={28} />
               <strong>No preview URL available</strong>
               <p>This file or link could not be loaded directly.</p>
@@ -420,4 +570,3 @@ export default function SecureDocumentViewer({
     </div>
   );
 }
-

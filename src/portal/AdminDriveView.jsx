@@ -688,6 +688,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
         subtitle: material.category + (material.course_id ? ` · ${courses.find((c) => c.id === material.course_id)?.code || ""}` : " · Campus-wide"),
         url: previewUrl,
         directDownloadUrl: downloadUrl,
+        fileName: material.file_name || material.file_path || "",
+        fileType: material.file_type || "",
       });
     } catch (err) {
       setError(`Could not open file preview: ${err.message}`);
@@ -1879,6 +1881,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast }) 
           subtitle={viewingMaterial.subtitle}
           url={viewingMaterial.url}
           directDownloadUrl={viewingMaterial.directDownloadUrl}
+          fileName={viewingMaterial.fileName}
+          fileType={viewingMaterial.fileType}
           userEmail={user.email}
           isSuperuser={true}
           onDownload={() => {

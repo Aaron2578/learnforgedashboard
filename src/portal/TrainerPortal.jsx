@@ -46,7 +46,7 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 
@@ -1110,6 +1110,22 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openDocumentViewer({ title, subtitle, url, filePath, fileName, fileType }) {
+    const resolvedUrl = await resolveStorageSignedUrl(supabase, filePath, url);
+    if (!resolvedUrl) {
+      setError("Could not generate a preview link for this document.");
+      return;
+    }
+    setViewingDoc({
+      title,
+      subtitle,
+      url: resolvedUrl,
+      directDownloadUrl: resolvedUrl,
+      fileName: fileName || filePath || "",
+      fileType: fileType || "",
+    });
   }
 
   async function handleUpdateMaterial(materialId, form) {
@@ -3609,11 +3625,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     className="button primary compact"
                     type="button"
                     onClick={() =>
-                      setViewingDoc({
+                      openDocumentViewer({
                         title: item.title,
                         subtitle: course ? `${course.code} · Syllabus` : "Syllabus",
                         url: item.drive_url,
                         filePath: item.file_path,
+                        fileName: item.file_name,
+                        fileType: item.file_type,
                       })
                     }
                   >
@@ -3867,11 +3885,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                         className="button primary compact"
                         type="button"
                         onClick={() =>
-                          setViewingDoc({
+                          openDocumentViewer({
                             title: mat.title,
                             subtitle: course ? `${course.code} · ${mat.category}` : mat.category,
                             url: mat.drive_url,
                             filePath: mat.file_path,
+                            fileName: mat.file_name,
+                            fileType: mat.file_type,
                           })
                         }
                       >
@@ -6191,15 +6211,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           title={viewingDoc.title}
           subtitle={viewingDoc.subtitle}
           url={viewingDoc.url}
-          filePath={viewingDoc.filePath}
+          directDownloadUrl={viewingDoc.directDownloadUrl}
+          fileName={viewingDoc.fileName}
+          fileType={viewingDoc.fileType}
           userEmail={user?.email}
           isSuperuser={false}
           isTrainer={true}
           downloadStatus="approved"
           onClose={() => setViewingDoc(null)}
           onDownload={() => {
-            if (viewingDoc.url) {
-              const dl = getDriveDownloadExportUrl(viewingDoc.url);
+            const target = viewingDoc.directDownloadUrl || viewingDoc.url;
+            if (target) {
+              const dl = getDriveDownloadExportUrl(target);
               window.open(dl, "_blank");
             }
           }}

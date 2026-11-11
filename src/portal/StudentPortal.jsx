@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 
@@ -460,47 +460,17 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const currentQuestions = questions.filter((item) => item.assessment_id === selectedTest);
   const currentAttempt = attemptByTest.get(selectedTest);
 
-  async function openSecureViewer({ title, subtitle, url, filePath, materialId, testId }) {
+  async function openSecureViewer({ title, subtitle, url, filePath, fileName, fileType, materialId, testId }) {
     let finalUrl = url;
     let directDownload = null;
 
     if (filePath) {
-      if (filePath.startsWith("data:") || filePath.startsWith("http")) {
-        finalUrl = filePath;
-        directDownload = filePath;
+      finalUrl = await resolveStorageSignedUrl(supabase, filePath, url);
+      if (finalUrl) {
+        directDownload = finalUrl;
       } else {
-        let bucket = "course-materials";
-        let cleanPath = filePath;
-        if (filePath.startsWith("course-materials:")) {
-          cleanPath = filePath.replace("course-materials:", "");
-        } else if (filePath.startsWith("assignment-files:")) {
-          bucket = "assignment-files";
-          cleanPath = filePath.replace("assignment-files:", "");
-        }
-
-        let signedData = null;
-        let { data, error: signedError } = await supabase.storage
-          .from(bucket)
-          .createSignedUrl(cleanPath, 3600);
-
-        if (!signedError && data?.signedUrl) {
-          signedData = data;
-        } else {
-          // Try other bucket fallback
-          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
-          const { data: fallbackData } = await supabase.storage
-            .from(otherBucket)
-            .createSignedUrl(cleanPath, 3600);
-          signedData = fallbackData;
-        }
-
-        if (signedData?.signedUrl) {
-          finalUrl = signedData.signedUrl;
-          directDownload = signedData.signedUrl;
-        } else {
-          setError("Could not generate a secure preview URL for this document.");
-          return;
-        }
+        setError("Could not generate a secure preview URL for this document.");
+        return;
       }
     }
 
@@ -515,6 +485,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       subtitle,
       url: finalUrl,
       directDownloadUrl: directDownload,
+      fileName: fileName || filePath || "",
+      fileType: fileType || "",
       materialId,
       testId,
       downloadStatus: existingRequest?.status || null,
@@ -1401,6 +1373,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                         subtitle: item.category + (course ? ` · ${course.code}` : " · Campus-wide"),
                         url: item.drive_url,
                         filePath: item.file_path,
+                        fileName: item.file_name,
+                        fileType: item.file_type,
                         materialId: item.id,
                       })
                     }
@@ -1854,6 +1828,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                             subtitle: `${course.code} · Official Syllabus`,
                             url: mat.drive_url,
                             filePath: mat.file_path,
+                            fileName: mat.file_name,
+                            fileType: mat.file_type,
                             materialId: mat.id,
                           })
                         }
@@ -2150,6 +2126,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                             subtitle: course ? `${course.code} · ${course.name}` : "Lecture Notes",
                             url: mat.drive_url,
                             filePath: mat.file_path,
+                            fileName: mat.file_name,
+                            fileType: mat.file_type,
                             materialId: mat.id,
                           })
                         }
@@ -2534,6 +2512,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         subtitle={viewingDocument.subtitle}
         url={viewingDocument.url}
         directDownloadUrl={viewingDocument.directDownloadUrl}
+        fileName={viewingDocument.fileName}
+        fileType={viewingDocument.fileType}
         userEmail={effectiveUser?.email || user?.email}
         isSuperuser={false}
         downloadStatus={viewingDocument.downloadStatus}
