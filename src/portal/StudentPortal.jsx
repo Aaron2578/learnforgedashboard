@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 
@@ -218,7 +218,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       enrollmentResult,
       assignmentRecipientsResult,
     ] = await Promise.all([
-      supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
+      supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, question_file_path, question_file_name, question_file_type, question_url, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", studentId),
       supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", studentId),
@@ -460,7 +460,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const currentQuestions = questions.filter((item) => item.assessment_id === selectedTest);
   const currentAttempt = attemptByTest.get(selectedTest);
 
-  async function openSecureViewer({ title, subtitle, url, filePath, fileName, fileType, materialId, testId }) {
+  async function openSecureViewer({ title, subtitle, url, filePath, fileName, fileType, materialId, testId, downloadStatusOverride = null }) {
     let finalUrl = url;
     let directDownload = null;
 
@@ -489,7 +489,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       fileType: fileType || "",
       materialId,
       testId,
-      downloadStatus: existingRequest?.status || null,
+      downloadStatus: downloadStatusOverride || existingRequest?.status || null,
     });
   }
 
@@ -864,6 +864,83 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
               </div>
 
               {assignment.description && <p className="portal-description">{assignment.description}</p>}
+
+              {/* Instructor Question Paper / Reference File */}
+              {(assignment.question_file_path || assignment.question_url) && (
+                <div
+                  style={{
+                    marginTop: "12px",
+                    padding: "12px 14px",
+                    background: "#eef2ff",
+                    border: "1px solid #c7d2fe",
+                    borderRadius: "8px",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "10px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: "200px" }}>
+                    <Paperclip size={15} style={{ color: "#4f46e5", flexShrink: 0 }} />
+                    <div>
+                      <strong style={{ display: "block", fontSize: "13px", color: "#312e81" }}>
+                        {assignment.question_file_name || "Assignment Question Document"}
+                      </strong>
+                      <small style={{ color: "#4338ca", fontSize: "11.5px" }}>
+                        Provided by instructor for your assignment questions
+                      </small>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="button primary compact"
+                      onClick={() =>
+                        openSecureViewer({
+                          title: assignment.question_file_name || `${assignment.title} · Questions`,
+                          subtitle: coursesById[assignment.course_id]
+                            ? `${coursesById[assignment.course_id].code} · Question Sheet`
+                            : "Assignment Question Sheet",
+                          url: assignment.question_url,
+                          filePath: assignment.question_file_path,
+                          fileName: assignment.question_file_name,
+                          fileType: assignment.question_file_type,
+                          downloadStatusOverride: "approved",
+                        })
+                      }
+                    >
+                      <Eye size={13} /> View Questions
+                    </button>
+                    {assignment.question_file_path && (
+                      <button
+                        type="button"
+                        className="button compact"
+                        onClick={() =>
+                          triggerDocumentDownload(
+                            supabase,
+                            assignment.question_file_path,
+                            assignment.question_file_name || "assignment_questions",
+                            assignment.question_url
+                          ).catch((err) => setError(err.message))
+                        }
+                      >
+                        <Download size={13} /> Download File
+                      </button>
+                    )}
+                    {assignment.question_url && (
+                      <a
+                        className="button compact"
+                        href={assignment.question_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink size={13} /> Open Link
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Submission Receipt */}
               {submission && (

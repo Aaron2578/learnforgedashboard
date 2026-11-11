@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ArrowRight, Award, BookOpen, CalendarClock, CheckCircle2, ClipboardList,
   Clock, Clock3, Download, ExternalLink, Eye, EyeOff, FileText, Mail, MapPin, MessageSquare,
-  Pencil, Plus, Send, Trash2, Users, X,
+  Paperclip, Pencil, Plus, Send, Trash2, Users, X,
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
+import { uploadDocumentAttachment, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditAssignmentModal from "../components/EditAssignmentModal";
 import EditTestModal from "../components/EditTestModal";
@@ -51,15 +52,39 @@ function AdminAssignmentForm({ onCancel, onCreate, busy, students }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [due, setDue] = useState("");
+  const [questionFile, setQuestionFile] = useState(null);
+  const [questionUrl, setQuestionUrl] = useState("");
   const [recipientIds, setRecipientIds] = useState(() => students.map((s) => s.id));
   return <form className="card admin-create-form" onSubmit={(event) => {
     event.preventDefault();
-    onCreate({ title: title.trim(), description: description.trim(), due, recipientIds });
+    onCreate({ title: title.trim(), description: description.trim(), due, recipientIds, questionFile, questionUrl: questionUrl.trim() });
   }}>
-    <div className="panel-heading"><div><h2>Publish an assignment</h2><p>Students can submit a written response or a document.</p></div></div>
+    <div className="panel-heading"><div><h2>Publish an assignment</h2><p>Students can view attached question papers and submit a written response or document.</p></div></div>
     <label className="form-field"><span>Assignment title</span><input required maxLength={150} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Lab report: cell structure" /></label>
     <label className="form-field"><span>Instructions</span><textarea rows="4" maxLength={10000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Explain what students need to submit." /></label>
     <label className="form-field"><span>Due date (optional)</span><input type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} /></label>
+    <label className="form-field">
+      <span>Question Paper / Attachment (PDF, DOCX, etc. — optional)</span>
+      <input
+        type="file"
+        accept=".pdf,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx,.csv,.zip,.png,.jpg,.jpeg,.webp"
+        onChange={(event) => setQuestionFile(event.target.files?.[0] || null)}
+      />
+      {questionFile && (
+        <small style={{ color: "#4f46e5", marginTop: "4px", display: "block" }}>
+          Attached: {questionFile.name}
+        </small>
+      )}
+    </label>
+    <label className="form-field">
+      <span>External Question / Reference Link (optional)</span>
+      <input
+        type="url"
+        value={questionUrl}
+        onChange={(event) => setQuestionUrl(event.target.value)}
+        placeholder="https://drive.google.com/..."
+      />
+    </label>
     <StudentRecipients students={students} selected={recipientIds} onChange={setRecipientIds} />
     <div className="form-actions"><button className="button" type="button" onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy}><Plus size={14} />{busy ? "Publishing…" : "Publish assignment"}</button></div>
   </form>;
@@ -128,7 +153,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setError("");
     if (view === "Assignments") {
       const [assignmentResult, submissionResult, studentResult, recipientResult] = await Promise.all([
-        supabase.from("assignments").select("id, title, description, due_at, created_at").order("created_at", { ascending: false }),
+        supabase.from("assignments").select("id, title, description, due_at, created_at, question_file_path, question_file_name, question_file_type, question_url").order("created_at", { ascending: false }),
         supabase.from("assignment_submissions").select("id, assignment_id, student_id, answer_text, file_path, submitted_at, grade, feedback, graded_at").order("submitted_at", { ascending: false }),
         supabase.from("profiles").select("id, full_name, email").eq("role", "student").eq("is_approved", true),
         supabase.from("assignment_recipients").select("assignment_id, student_id"),
@@ -241,6 +266,45 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
   const selectedThread = conversations.find((thread) => thread.id === selectedConversation);
   const threadMessages = messages.filter((message) => message.conversation_id === selectedConversation);
 
+  async function handleOpenQuestionPreview(assignment) {
+    setError("");
+    try {
+      const url = await resolveStorageSignedUrl(
+        supabase,
+        assignment.question_file_path,
+        assignment.question_url || ""
+      );
+      if (!url) {
+        setError("No question document URL available to preview.");
+        return;
+      }
+      setPreviewTest({
+        title: assignment.title,
+        subtitle: "Assignment Question Document",
+        external_url: url,
+        directDownloadUrl: url,
+        fileName: assignment.question_file_name || "Question Paper",
+        fileType: assignment.question_file_type || "",
+      });
+    } catch (err) {
+      setError(err.message || "Could not open question document.");
+    }
+  }
+
+  async function handleDownloadQuestionFile(assignment) {
+    setError("");
+    try {
+      await triggerDocumentDownload(
+        supabase,
+        assignment.question_file_path,
+        assignment.question_file_name || "question-document",
+        assignment.question_url || ""
+      );
+    } catch (err) {
+      setError(err.message || "Could not download question document.");
+    }
+  }
+
   async function createAssignment(form) {
     if (!form.recipientIds.length) {
       setError("Select at least one approved student for this assignment.");
@@ -248,12 +312,26 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     }
     setBusy(true);
     setError("");
+    let questionAttachment = null;
+    if (form.questionFile) {
+      try {
+        questionAttachment = await uploadDocumentAttachment(supabase, form.questionFile, "assignment_questions");
+      } catch (uploadErr) {
+        setError(uploadErr.message || "Failed to upload question document.");
+        setBusy(false);
+        return;
+      }
+    }
     const { data: assignment, error: insertError } = await supabase.from("assignments").insert({
       title: form.title,
       description: form.description,
       due_at: form.due ? new Date(form.due).toISOString() : null,
       created_by: user.id,
       published: true,
+      question_file_path: questionAttachment?.filePath || null,
+      question_file_name: questionAttachment?.fileName || null,
+      question_file_type: questionAttachment?.fileType || null,
+      question_url: form.questionUrl || null,
     }).select("id").single();
     if (insertError) setError(insertError.message);
     else {
@@ -482,10 +560,18 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(true);
     setError("");
     try {
+      let questionAttachment = form.existingQuestionFile || null;
+      if (form.questionFile) {
+        questionAttachment = await uploadDocumentAttachment(supabase, form.questionFile, "assignment_questions");
+      }
       const { error: updateError } = await supabase.from("assignments").update({
         title: form.title.trim(),
         description: form.description.trim(),
         due_at: form.due ? new Date(form.due).toISOString() : null,
+        question_file_path: questionAttachment?.filePath || null,
+        question_file_name: questionAttachment?.fileName || null,
+        question_file_type: questionAttachment?.fileType || null,
+        question_url: form.questionUrl?.trim() || null,
       }).eq("id", assignmentId);
       if (updateError) throw updateError;
 
@@ -650,6 +736,60 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
 
         return <article className="card admin-assignment-card" key={assignment.id}>
           <div className="panel-heading"><div className="admin-assignment-title"><span className="portal-item-icon assignment"><BookOpen size={16} /></span><span><h2>{assignment.title}</h2><p>{assignment.description || "No additional instructions."}</p><small><CalendarClock size={12} />Due {prettyDate(assignment.due_at)} · {rows.length} submitted · {fullRoster.length} assigned</small></span></div><div className="heading-actions"><button className="button compact" type="button" onClick={() => setEditingAssignment(assignment)}><Pencil size={13} /> Edit</button><button className="button" type="button" disabled={busy} onClick={() => sendReminder(assignment, assignmentRecipients[assignment.id], "Assignment")}><Mail size={14} />Remind</button><button className="quiet-icon danger-icon" type="button" onClick={() => deleteAssignment(assignment)} aria-label={`Delete ${assignment.title}`}><Trash2 size={15} /></button></div></div>
+          {(assignment.question_file_path || assignment.question_url) && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+                padding: "10px 12px",
+                marginBottom: "12px",
+                borderRadius: "8px",
+                background: "rgba(99, 102, 241, 0.06)",
+                border: "1px solid rgba(99, 102, 241, 0.2)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}>
+                <Paperclip size={15} />
+                <span>
+                  <strong>Question Paper:</strong>{" "}
+                  {assignment.question_file_name || "External Question Link"}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {assignment.question_file_path && (
+                  <>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => handleOpenQuestionPreview(assignment)}
+                    >
+                      <Eye size={13} /> Preview
+                    </button>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => handleDownloadQuestionFile(assignment)}
+                    >
+                      <Download size={13} /> Download
+                    </button>
+                  </>
+                )}
+                {assignment.question_url && (
+                  <a
+                    className="button compact"
+                    href={assignment.question_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ExternalLink size={13} /> Open Link
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           {fullRoster.length ? <div className="submission-list">{fullRoster.map((student) => {
             const submission = rows.find((s) => s.student_id === student.id);
             const draftKey = submission?.id || `${assignment.id}-${student.id}`;
@@ -1000,8 +1140,11 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     {previewTest && (
       <SecureDocumentViewer
         title={previewTest.title}
-        subtitle="Online Assessment Preview"
+        subtitle={previewTest.subtitle || "Online Assessment Preview"}
         url={previewTest.external_url}
+        directDownloadUrl={previewTest.directDownloadUrl}
+        fileName={previewTest.fileName}
+        fileType={previewTest.fileType}
         userEmail={user.email}
         isSuperuser={true}
         onClose={() => setPreviewTest(null)}

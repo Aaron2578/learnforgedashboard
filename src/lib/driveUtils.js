@@ -92,3 +92,67 @@ export async function resolveStorageSignedUrl(supabase, filePath, fallbackUrl = 
   return finalUrl;
 }
 
+const MAX_QUESTION_FILE_SIZE = 20 * 1024 * 1024;
+
+export async function uploadDocumentAttachment(supabase, file, prefix = "assignment_questions") {
+  if (!file) return null;
+  if (file.size > MAX_QUESTION_FILE_SIZE) {
+    throw new Error("Question attachment must be 20 MB or smaller.");
+  }
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const objectPath = `${prefix}/${Date.now()}_${safeName}`;
+
+  const { error: primaryErr } = await supabase.storage
+    .from("course-materials")
+    .upload(objectPath, file);
+
+  if (!primaryErr) {
+    return {
+      filePath: `course-materials:${objectPath}`,
+      fileName: file.name,
+      fileType: file.type || "",
+    };
+  }
+
+  // Fallback to assignment-files bucket if course-materials rejects
+  const { error: fallbackErr } = await supabase.storage
+    .from("assignment-files")
+    .upload(objectPath, file);
+
+  if (fallbackErr) {
+    throw new Error(primaryErr.message || fallbackErr.message || "File upload failed.");
+  }
+
+  return {
+    filePath: `assignment-files:${objectPath}`,
+    fileName: file.name,
+    fileType: file.type || "",
+  };
+}
+
+export async function triggerDocumentDownload(supabase, filePath, fileName = "", fallbackUrl = "") {
+  const url = await resolveStorageSignedUrl(supabase, filePath, fallbackUrl);
+  if (!url) throw new Error("No download link could be generated for this file.");
+
+  if (/supabase\.co\/storage\/v1\/object\//i.test(url)) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = fileName || "document";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+        return;
+      }
+    } catch {}
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+

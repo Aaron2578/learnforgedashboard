@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpen, CalendarClock, X } from "lucide-react";
+import { BookOpen, CalendarClock, Paperclip, Trash2, X } from "lucide-react";
 
 export default function EditAssignmentModal({
   assignment,
@@ -23,6 +23,17 @@ export default function EditAssignmentModal({
     }
   });
   const [recipientIds, setRecipientIds] = useState(() => currentRecipients || []);
+  const [questionFile, setQuestionFile] = useState(null);
+  const [existingQuestionFile, setExistingQuestionFile] = useState(() =>
+    assignment.question_file_path
+      ? {
+          filePath: assignment.question_file_path,
+          fileName: assignment.question_file_name || "Question document",
+          fileType: assignment.question_file_type || "",
+        }
+      : null
+  );
+  const [questionUrl, setQuestionUrl] = useState(assignment.question_url || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -61,6 +72,9 @@ export default function EditAssignmentModal({
         description: description.trim(),
         due,
         recipientIds,
+        questionFile,
+        existingQuestionFile,
+        questionUrl: questionUrl.trim(),
       });
     } catch (err) {
       setError(err.message || "Failed to update assignment.");
@@ -128,6 +142,62 @@ export default function EditAssignmentModal({
               type="datetime-local"
               value={due}
               onChange={(e) => setDue(e.target.value)}
+            />
+          </label>
+
+          <div className="form-field" style={{ marginTop: "12px" }}>
+            <span>Question Paper / Attachment (PDF, DOCX, etc.)</span>
+            {existingQuestionFile && !questionFile && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                  padding: "8px 10px",
+                  marginBottom: "8px",
+                  borderRadius: "8px",
+                  background: "rgba(99, 102, 241, 0.08)",
+                  border: "1px solid rgba(99, 102, 241, 0.25)",
+                  fontSize: "13px",
+                }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <Paperclip size={14} />
+                  Current file: <strong>{existingQuestionFile.fileName}</strong>
+                </span>
+                <button
+                  type="button"
+                  className="button compact"
+                  onClick={() => setExistingQuestionFile(null)}
+                  title="Remove existing file"
+                >
+                  <Trash2 size={13} /> Remove
+                </button>
+              </div>
+            )}
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx,.csv,.zip,.png,.jpg,.jpeg,.webp"
+              onChange={(e) => setQuestionFile(e.target.files?.[0] || null)}
+            />
+            {questionFile && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "6px", fontSize: "12px", color: "#4f46e5" }}>
+                <span>New file selected: <strong>{questionFile.name}</strong></span>
+                <button type="button" className="button compact" onClick={() => setQuestionFile(null)}>
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
+
+          <label className="form-field" style={{ marginTop: "12px" }}>
+            <span>External Question / Reference Link (optional)</span>
+            <input
+              type="url"
+              value={questionUrl}
+              onChange={(e) => setQuestionUrl(e.target.value)}
+              placeholder="https://drive.google.com/..."
             />
           </label>
 

@@ -46,7 +46,7 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
-import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl } from "../lib/driveUtils.js";
+import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, uploadDocumentAttachment, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 
@@ -139,6 +139,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [assignmentDueDate, setAssignmentDueDate] = useState("");
   const [assignmentTotalMarks, setAssignmentTotalMarks] = useState(100);
   const [assignmentTargetStudentIds, setAssignmentTargetStudentIds] = useState([]);
+  const [assignmentQuestionFile, setAssignmentQuestionFile] = useState(null);
+  const [assignmentQuestionUrl, setAssignmentQuestionUrl] = useState("");
+  const [assignmentExistingQuestionFile, setAssignmentExistingQuestionFile] = useState(null);
   const [assignmentCourseFilter, setAssignmentCourseFilter] = useState("all");
   const [showSubmissionsModal, setShowSubmissionsModal] = useState(false);
   const [selectedAssignmentForSubmissions, setSelectedAssignmentForSubmissions] = useState(null);
@@ -834,6 +837,58 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // ----------------------------------------------------
   // Actions: Assignments & Submissions
   // ----------------------------------------------------
+  function resetAssignmentModalState() {
+    setShowAssignmentModal(false);
+    setEditingAssignment(null);
+    setAssignmentTitle("");
+    setAssignmentDesc("");
+    setAssignmentCourseId("");
+    setAssignmentDueDate("");
+    setAssignmentTotalMarks(100);
+    setAssignmentTargetStudentIds([]);
+    setAssignmentQuestionFile(null);
+    setAssignmentQuestionUrl("");
+    setAssignmentExistingQuestionFile(null);
+  }
+
+  function openCreateAssignmentModal(switchTab = false) {
+    setEditingAssignment(null);
+    setAssignmentTitle("");
+    setAssignmentDesc("");
+    setAssignmentCourseId(myTrainerCourses[0]?.id || "");
+    setAssignmentDueDate("");
+    setAssignmentTotalMarks(100);
+    setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
+    setAssignmentQuestionFile(null);
+    setAssignmentQuestionUrl("");
+    setAssignmentExistingQuestionFile(null);
+    setShowAssignmentModal(true);
+    if (switchTab) setActiveTab("Assignments");
+  }
+
+  function openEditAssignmentModal(assignment, recips = []) {
+    setEditingAssignment(assignment);
+    setAssignmentTitle(assignment.title || "");
+    setAssignmentDesc(assignment.description || "");
+    setAssignmentCourseId(assignment.course_id || "");
+    setAssignmentDueDate(assignment.due_at ? assignment.due_at.slice(0, 16) : "");
+    setAssignmentTotalMarks(assignment.total_marks || 100);
+    const currentRecips = recips.map((r) => r.student_id);
+    setAssignmentTargetStudentIds(currentRecips.length > 0 ? currentRecips : Array.from(myAssignedStudentIds));
+    setAssignmentQuestionFile(null);
+    setAssignmentQuestionUrl(assignment.question_url || "");
+    setAssignmentExistingQuestionFile(
+      assignment.question_file_path
+        ? {
+            path: assignment.question_file_path,
+            name: assignment.question_file_name || "Attached Question Document",
+            type: assignment.question_file_type || "",
+          }
+        : null
+    );
+    setShowAssignmentModal(true);
+  }
+
   async function handleSaveAssignment(e) {
     e.preventDefault();
     if (!assignmentTitle.trim()) {
@@ -849,6 +904,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         ? assignmentTargetStudentIds 
         : Array.from(myAssignedStudentIds);
 
+      let qFilePath = assignmentExistingQuestionFile?.path || null;
+      let qFileName = assignmentExistingQuestionFile?.name || null;
+      let qFileType = assignmentExistingQuestionFile?.type || null;
+
+      if (assignmentQuestionFile) {
+        const uploaded = await uploadDocumentAttachment(supabase, assignmentQuestionFile, "assignment_questions");
+        if (uploaded) {
+          qFilePath = uploaded.filePath;
+          qFileName = uploaded.fileName;
+          qFileType = uploaded.fileType;
+        }
+      }
+
+      const qUrl = assignmentQuestionUrl.trim() || null;
+
       if (editingAssignment) {
         const { error: updateErr } = await supabase
           .from("assignments")
@@ -858,6 +928,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             course_id: assignmentCourseId || null,
             total_marks: Number(assignmentTotalMarks) || 100,
             due_at: dueIso,
+            question_file_path: qFilePath,
+            question_file_name: qFileName,
+            question_file_type: qFileType,
+            question_url: qUrl,
           })
           .eq("id", editingAssignment.id);
 
@@ -884,6 +958,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             trainer_id: activeTrainerId,
             total_marks: Number(assignmentTotalMarks) || 100,
             due_at: dueIso,
+            question_file_path: qFilePath,
+            question_file_name: qFileName,
+            question_file_type: qFileType,
+            question_url: qUrl,
             published: true,
             created_by: user.id,
           })
@@ -904,14 +982,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         setToast(`Assignment "${assignmentTitle}" posted and assigned to ${targetStudents.length} student(s)!`);
       }
 
-      setShowAssignmentModal(false);
-      setEditingAssignment(null);
-      setAssignmentTitle("");
-      setAssignmentDesc("");
-      setAssignmentCourseId("");
-      setAssignmentDueDate("");
-      setAssignmentTotalMarks(100);
-      setAssignmentTargetStudentIds([]);
+      resetAssignmentModalState();
       loadTrainerData(false);
     } catch (err) {
       setError(err.message || "Failed to save assignment.");
@@ -1649,17 +1720,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 className="button"
                 style={{ background: "rgba(255, 255, 255, 0.15)", color: "#ffffff", border: "1px solid rgba(255, 255, 255, 0.25)" }}
                 type="button"
-                onClick={() => {
-                  setEditingAssignment(null);
-                  setAssignmentTitle("");
-                  setAssignmentDesc("");
-                  setAssignmentCourseId(myTrainerCourses[0]?.id || "");
-                  setAssignmentDueDate("");
-                  setAssignmentTotalMarks(100);
-                  setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
-                  setShowAssignmentModal(true);
-                  setActiveTab("Assignments");
-                }}
+                onClick={() => openCreateAssignmentModal(true)}
               >
                 <BookOpen size={15} /> Create Assignment
               </button>
@@ -1803,17 +1864,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               <button
                 className="card"
                 type="button"
-                onClick={() => {
-                  setEditingAssignment(null);
-                  setAssignmentTitle("");
-                  setAssignmentDesc("");
-                  setAssignmentCourseId(myTrainerCourses[0]?.id || "");
-                  setAssignmentDueDate("");
-                  setAssignmentTotalMarks(100);
-                  setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
-                  setShowAssignmentModal(true);
-                  setActiveTab("Assignments");
-                }}
+                onClick={() => openCreateAssignmentModal(true)}
                 style={{
                   padding: "16px",
                   textAlign: "left",
@@ -2991,16 +3042,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             <button
               className="button primary"
               type="button"
-              onClick={() => {
-                setEditingAssignment(null);
-                setAssignmentTitle("");
-                setAssignmentDesc("");
-                setAssignmentCourseId(myTrainerCourses[0]?.id || "");
-                setAssignmentDueDate("");
-                setAssignmentTotalMarks(100);
-                setAssignmentTargetStudentIds(Array.from(myAssignedStudentIds));
-                setShowAssignmentModal(true);
-              }}
+              onClick={() => openCreateAssignmentModal(false)}
             >
               <Plus size={15} /> Create Assignment
             </button>
@@ -3114,6 +3156,62 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     </span>
                   </div>
 
+                  {(assignment.question_file_path || assignment.question_url) && (
+                    <div
+                      style={{
+                        marginBottom: "12px",
+                        padding: "10px 12px",
+                        background: "#eef2ff",
+                        border: "1px solid #c7d2fe",
+                        borderRadius: "8px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px", fontWeight: 700, color: "#3730a3" }}>
+                        <Paperclip size={13} />
+                        <span>{assignment.question_file_name || "Attached Question Document"}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="button compact"
+                          style={{ background: "#fff", fontSize: "11.5px", minHeight: "28px" }}
+                          onClick={() =>
+                            openDocumentViewer({
+                              title: assignment.question_file_name || `${assignment.title} · Questions`,
+                              subtitle: course ? `${course.code} · Question Sheet` : "Assignment Question Paper",
+                              url: assignment.question_url,
+                              filePath: assignment.question_file_path,
+                              fileName: assignment.question_file_name,
+                              fileType: assignment.question_file_type,
+                            })
+                          }
+                        >
+                          <Eye size={12} /> Preview Questions
+                        </button>
+                        {assignment.question_file_path && (
+                          <button
+                            type="button"
+                            className="button compact"
+                            style={{ background: "#fff", fontSize: "11.5px", minHeight: "28px" }}
+                            onClick={() =>
+                              triggerDocumentDownload(
+                                supabase,
+                                assignment.question_file_path,
+                                assignment.question_file_name || "question_paper",
+                                assignment.question_url
+                              )
+                            }
+                          >
+                            <Download size={12} /> Download File
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {subs.length > 0 && (
                     <div style={{ marginTop: "8px", padding: "8px 12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "12px" }}>
                       <strong style={{ color: "var(--ink)", display: "block", marginBottom: "4px" }}>
@@ -3158,17 +3256,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     className="button compact"
                     type="button"
                     title="Edit assignment"
-                    onClick={() => {
-                      setEditingAssignment(assignment);
-                      setAssignmentTitle(assignment.title || "");
-                      setAssignmentDesc(assignment.description || "");
-                      setAssignmentCourseId(assignment.course_id || "");
-                      setAssignmentDueDate(assignment.due_at ? assignment.due_at.slice(0, 16) : "");
-                      setAssignmentTotalMarks(assignment.total_marks || 100);
-                      const currentRecips = recips.map((r) => r.student_id);
-                      setAssignmentTargetStudentIds(currentRecips.length > 0 ? currentRecips : Array.from(myAssignedStudentIds));
-                      setShowAssignmentModal(true);
-                    }}
+                    onClick={() => openEditAssignmentModal(assignment, recips)}
                   >
                     <Pencil size={13} />
                   </button>
@@ -5805,6 +5893,62 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   onChange={(e) => setAssignmentDesc(e.target.value)}
                 />
               </label>
+
+              {/* Question Sheet Upload (PDF / DOCX / Reference Link) */}
+              <div style={{ marginTop: "12px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                <strong style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px", color: "var(--ink)", marginBottom: "8px" }}>
+                  <Paperclip size={14} style={{ color: "var(--blue)" }} />
+                  <span>Attach Question Paper / File (PDF, DOCX, ZIP — Optional)</span>
+                </strong>
+
+                {assignmentExistingQuestionFile && !assignmentQuestionFile && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 10px", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: "6px", marginBottom: "8px", fontSize: "12px" }}>
+                    <span style={{ color: "#3730a3", fontWeight: 600 }}>
+                      Current file: {assignmentExistingQuestionFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      className="button compact"
+                      style={{ fontSize: "11px", minHeight: "24px", padding: "2px 8px" }}
+                      onClick={() => setAssignmentExistingQuestionFile(null)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+
+                <label className="form-field">
+                  <span>Upload PDF or Word Question File (up to 20 MB)</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt,.zip,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    onChange={(e) => setAssignmentQuestionFile(e.target.files?.[0] || null)}
+                  />
+                  {assignmentQuestionFile && (
+                    <small style={{ color: "#15803d", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "4px" }}>
+                      <span>Selected: {assignmentQuestionFile.name} ({(assignmentQuestionFile.size / 1024).toFixed(0)} KB)</span>
+                      <button
+                        type="button"
+                        className="text-link"
+                        style={{ fontSize: "11px" }}
+                        onClick={() => setAssignmentQuestionFile(null)}
+                      >
+                        Clear
+                      </button>
+                    </small>
+                  )}
+                </label>
+
+                <label className="form-field" style={{ marginTop: "8px" }}>
+                  <span>Or Question Document Link (Google Drive / External URL)</span>
+                  <input
+                    type="url"
+                    placeholder="https://drive.google.com/file/d/... (optional)"
+                    value={assignmentQuestionUrl}
+                    onChange={(e) => setAssignmentQuestionUrl(e.target.value)}
+                  />
+                </label>
+              </div>
 
               {/* Target Students */}
               <div style={{ marginTop: "14px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
