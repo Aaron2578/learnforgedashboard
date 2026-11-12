@@ -534,10 +534,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     return students.filter((s) => myAssignedStudentIds.has(s.id));
   }, [students, myAssignedStudentIds]);
 
-  // Assessments for this trainer's courses or created by this trainer
+  // Assessments for this trainer's courses, trainer_id, created_by, or targeted to trainer's students
   const myTrainerAssessments = useMemo(() => {
-    return assessments.filter((a) => myTrainerCourseIds.has(a.course_id) || a.created_by === activeTrainerId);
-  }, [assessments, myTrainerCourseIds, activeTrainerId]);
+    return assessments.filter(
+      (a) =>
+        a.trainer_id === activeTrainerId ||
+        a.created_by === activeTrainerId ||
+        myTrainerCourseIds.has(a.course_id) ||
+        assessmentRecipients.some(
+          (r) => r.assessment_id === a.id && myAssignedStudentIds.has(r.student_id)
+        )
+    );
+  }, [assessments, myTrainerCourseIds, activeTrainerId, assessmentRecipients, myAssignedStudentIds]);
 
   // Assignments strictly for this trainer's courses or created by this trainer
   const myTrainerAssignments = useMemo(() => {
@@ -1377,7 +1385,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           track_tab_switches: isBuiltIn ? testProctorSettings.trackTabSwitches !== false : false,
           max_tab_switches: isBuiltIn ? Number(testProctorSettings.maxTabSwitches) || 3 : 3,
           passing_percentage: isBuiltIn ? Number(testProctorSettings.passingPercentage) || 50 : 50,
-          show_marks: isBuiltIn ? Boolean(testProctorSettings.showMarks) : false,
+          show_marks: isBuiltIn ? Boolean(testProctorSettings.showMarks) : true,
           published: true,
           created_by: user.id,
         })
@@ -3642,6 +3650,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                           <div style={{ fontSize: "11.5px", color: "var(--muted)" }}>
                             {avgTestScore !== null ? `Avg: ${avgTestScore}%` : "No tests completed"}
                           </div>
+                          {attempts.length > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "3px", marginTop: "5px" }}>
+                              {attempts.slice(0, 3).map((att) => {
+                                const tObj = myTrainerAssessments.find((a) => a.id === att.assessment_id);
+                                return (
+                                  <span key={att.id} className="badge green" style={{ fontSize: "10.5px", padding: "1px 6px" }}>
+                                    {tObj?.title ? `${tObj.title.slice(0, 18)}: ` : ""}{att.score}/{att.max_score} ({Math.round((att.score / (att.max_score || 100)) * 100)}%)
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       </td>
 
@@ -4423,8 +4443,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               testRecipients.some((r) => r.student_id === s.id)
             ).length;
 
+            const canViewAllAttemptsForTest =
+              test.trainer_id === activeTrainerId ||
+              test.created_by === activeTrainerId ||
+              myTrainerCourseIds.has(test.course_id);
             const testAttemptsForMyStudents = assessmentAttempts.filter(
-              (att) => att.assessment_id === test.id && myAssignedStudentIds.has(att.student_id)
+              (att) =>
+                att.assessment_id === test.id &&
+                (myAssignedStudentIds.has(att.student_id) || canViewAllAttemptsForTest)
             );
 
             return (
@@ -4494,10 +4520,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                         {testAttemptsForMyStudents.map((att) => {
                           const s = studentsById[att.student_id];
+                          const pct = Math.round((att.score / (att.max_score || 100)) * 100);
                           return (
                             <div key={att.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", fontSize: "12px", flexWrap: "wrap" }}>
                               <div>
-                                <span style={{ fontWeight: 600, color: "var(--ink)" }}>{s?.full_name || s?.email || "Student"}</span>
+                                <span style={{ fontWeight: 600, color: "var(--ink)" }}>{s?.full_name || att.student_name || s?.email || "Student"}</span>
                                 {!test.external_url && (
                                   <small style={{ display: "block", color: "var(--muted)", fontSize: "11px" }}>
                                     {formatSeconds(att.time_taken_seconds)} · Switches: {att.tab_switch_count ?? 0} · {att.camera_status || "Off"}
@@ -4505,8 +4532,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                                 )}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                <span className="badge green" style={{ fontSize: "11px", padding: "1px 6px" }}>
-                                  {att.score} / {att.max_score} pts ({Math.round((att.score / (att.max_score || 100)) * 100)}%)
+                                <span className={`badge ${pct >= (test.passing_percentage || 50) ? "green" : "rose"}`} style={{ fontSize: "11px", padding: "1px 6px" }}>
+                                  {att.score} / {att.max_score} pts ({pct}%)
                                 </span>
                                 {!test.external_url && (
                                   <button

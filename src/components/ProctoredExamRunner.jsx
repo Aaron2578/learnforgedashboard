@@ -118,6 +118,13 @@ export default function ProctoredExamRunner({
     stageRef.current = stage;
   }, [stage]);
 
+  // Guard against starting a second attempt if an existing submitted attempt is loaded
+  useEffect(() => {
+    if (!previewMode && initialAttempt && stage === "precheck") {
+      setStage("result");
+    }
+  }, [previewMode, initialAttempt, stage]);
+
   // Candidate identity (Step 1)
   const [studentName, setStudentName] = useState(studentProfile?.full_name || "");
 
@@ -151,12 +158,16 @@ export default function ProctoredExamRunner({
 
   // Result Review state
   const [reviewFilter, setReviewFilter] = useState("all"); // "all" | "correct" | "incorrect" | "unanswered"
-  const [resultSummary, setResultSummary] = useState(() => {
-    if (initialStage !== "review" || !initialAttempt) return null;
+  const [resultSummary, setResultSummary] = useState(null);
+
+  const fallbackAttemptSummary = useMemo(() => {
+    if (!initialAttempt) return null;
     const reviewQuestions = initialReviewData?.questions || orderedQuestions;
     const attemptAnswers = initialAttempt.answers || {};
     const review = buildReviewItems(reviewQuestions, attemptAnswers);
-    const showMarks = previewMode ? true : Boolean(initialReviewData?.show_marks ?? assessment?.show_marks);
+    const showMarks = previewMode
+      ? true
+      : Boolean(initialReviewData?.show_marks ?? assessment?.show_marks ?? true);
     const maxScore = Number(initialAttempt.max_score) || totalPointsPossible;
     const score = Number(initialAttempt.score) || 0;
     const pct =
@@ -186,7 +197,19 @@ export default function ProctoredExamRunner({
       proctoringLog: Array.isArray(initialAttempt.proctoring_log) ? initialAttempt.proctoring_log : [],
       review: showMarks ? review : [],
     };
-  });
+  }, [
+    assessment,
+    initialAttempt,
+    initialReviewData,
+    maxTabSwitches,
+    orderedQuestions,
+    passingPercentage,
+    previewMode,
+    requireCamera,
+    studentProfile?.full_name,
+    totalPointsPossible,
+    trackTabSwitches,
+  ]);
 
   const appendLog = useCallback((event, detail = "") => {
     const entry = {
@@ -1080,7 +1103,7 @@ export default function ProctoredExamRunner({
   // =====================================================
   // STAGE 3: INSTANT RESULT & REVIEW DASHBOARD
   // =====================================================
-  const summary = resultSummary;
+  const summary = resultSummary || fallbackAttemptSummary;
   const reviewList = summary?.review || [];
   const filteredReview = reviewList.filter((item) => {
     if (reviewFilter === "correct") return item.isCorrect;

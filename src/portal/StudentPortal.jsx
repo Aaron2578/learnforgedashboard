@@ -1137,6 +1137,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
 
   function renderTests() {
     if (currentTest && (activeTestMode === "exam" || activeTestMode === "review")) {
+      const effectiveMode = currentAttempt ? "review" : activeTestMode;
       return (
         <ProctoredExamRunner
           assessment={currentTest}
@@ -1144,9 +1145,9 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
           studentProfile={{
             full_name: activeStudent?.full_name || "",
           }}
-          initialAttempt={activeTestMode === "review" ? currentAttempt || activeReviewData?.attempt : null}
+          initialAttempt={effectiveMode === "review" ? currentAttempt || activeReviewData?.attempt : null}
           initialReviewData={activeReviewData}
-          initialStage={activeTestMode === "review" ? "review" : "precheck"}
+          initialStage={effectiveMode === "review" ? "review" : "precheck"}
           previewMode={Boolean(isAdminPreview)}
           supabase={supabase}
           onSubmitted={async (summary) => {
@@ -1170,6 +1171,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       const attempt = attemptByTest.get(test.id);
       const closed = isPast(test.due_at);
       const count = questions.filter((question) => question.assessment_id === test.id).length;
+      const canShowMarks = Boolean(test.show_marks) || !test.external_url;
       return <article className="card portal-item" key={test.id}>
         <div className="portal-item-heading">
           <span className="portal-item-icon test"><ClipboardList size={17} /></span>
@@ -1181,7 +1183,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
             </small>
           </span>
           <span className={`portal-status ${attempt ? "submitted" : closed ? "overdue" : "pending"}`}>
-            {attempt ? "Completed" : closed ? "Closed" : "Ready"}
+            {attempt ? "Attended (1/1)" : closed ? "Closed" : "Ready · 1 Attempt"}
           </span>
         </div>
 
@@ -1215,15 +1217,15 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
           <div className="test-completion-card">
             <div className="test-score-header">
               <span className="cohort-status-pill completed">
-                <CheckCircle2 size={13} /> Completed
+                <CheckCircle2 size={13} /> Attended &amp; Submitted (1/1 Allowed)
               </span>
               <span className="submission-date">Submitted {dateLabel(attempt.submitted_at)}</span>
             </div>
-            {test.show_marks ? (
+            {canShowMarks ? (
               <div className="test-score" style={{ marginTop: "6px" }}>
                 <CheckCircle2 size={15} />
                 <strong>Score: {attempt.score} / {attempt.max_score} ({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</strong>
-                <span className="marks-verified-tag">Marks Released</span>
+                <span className="marks-verified-tag">Visible to Student &amp; Teacher</span>
               </div>
             ) : (
               <div className="test-marks-pending">
@@ -1245,7 +1247,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                   onClick={() => handleOpenCompletedReview(test)}
                 >
                   <Eye size={13} />
-                  <span>{test.show_marks ? "View Result & Answer Review" : "View Proctoring Summary"}</span>
+                  <span>{canShowMarks ? "View Marks & Answer Review" : "View Proctoring Summary"}</span>
                 </button>
               </div>
             )}
