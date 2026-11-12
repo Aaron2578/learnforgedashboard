@@ -1213,7 +1213,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       const attempt = attemptByTest.get(test.id);
       const closed = isPast(test.due_at);
       const count = questions.filter((question) => question.assessment_id === test.id).length;
-      const canShowMarks = Boolean(test.show_marks) || !test.external_url;
+      const canShowMarks = Boolean(test.show_marks);
       return <article className="card portal-item" key={test.id}>
         <div className="portal-item-heading">
           <span className="portal-item-icon test"><ClipboardList size={17} /></span>

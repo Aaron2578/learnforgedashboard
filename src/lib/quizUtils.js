@@ -491,9 +491,7 @@ export function buildScoreCardSummary({
       ? Boolean(attempt.passed)
       : percentage >= passingPercentage;
   const isExternal = Boolean(assessment?.external_url);
-  const showMarks = previewMode
-    ? true
-    : Boolean(assessment?.show_marks) || !isExternal;
+  const showMarks = previewMode ? true : Boolean(assessment?.show_marks);
   const review =
     showMarks && !isExternal && Array.isArray(reviewQuestions) && reviewQuestions.length > 0
       ? buildReviewItems(reviewQuestions, attempt?.answers || {})

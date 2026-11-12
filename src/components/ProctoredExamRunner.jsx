@@ -139,7 +139,9 @@ export default function ProctoredExamRunner({
     return buildScoreCardSummary({
       assessment: {
         ...assessment,
-        show_marks: initialReviewData?.show_marks ?? assessment?.show_marks ?? true,
+        show_marks: initialReviewData
+          ? Boolean(initialReviewData.show_marks)
+          : Boolean(assessment?.show_marks),
       },
       attempt: initialAttempt,
       studentProfile,
@@ -337,16 +339,18 @@ export default function ProctoredExamRunner({
         const showMarks = Boolean(payload?.show_marks);
         const reviewQuestions = Array.isArray(payload?.review_questions) ? payload.review_questions : [];
         const review = showMarks ? buildReviewItems(reviewQuestions, finalAnswers) : [];
-        const score = Number(payload?.score) || 0;
-        const maxScore = Number(payload?.max_score) || totalPointsPossible;
-        const percentage =
-          payload?.percentage !== undefined && payload?.percentage !== null
-            ? Number(payload.percentage)
-            : Math.round((score / Math.max(1, maxScore)) * 10000) / 100;
-        const passed =
-          payload?.passed !== undefined && payload?.passed !== null
-            ? Boolean(payload.passed)
-            : percentage >= passingPercentage;
+        const score = showMarks ? Number(payload?.score) || 0 : null;
+        const maxScore = showMarks ? Number(payload?.max_score) || totalPointsPossible : null;
+        const percentage = !showMarks
+          ? null
+          : payload?.percentage !== undefined && payload?.percentage !== null
+          ? Number(payload.percentage)
+          : Math.round((score / Math.max(1, maxScore)) * 10000) / 100;
+        const passed = !showMarks
+          ? null
+          : payload?.passed !== undefined && payload?.passed !== null
+          ? Boolean(payload.passed)
+          : percentage >= passingPercentage;
 
         const summary = {
           attemptId: payload?.attempt_id || "",
@@ -1083,21 +1087,23 @@ export default function ProctoredExamRunner({
           </div>
 
           <div className="proctor-export-actions">
-            <button
-              type="button"
-              className="button primary compact"
-              disabled={pdfDownloading}
-              onClick={async () => {
-                setPdfDownloading(true);
-                try {
-                  await downloadScoreCardPdf(summary);
-                } finally {
-                  setPdfDownloading(false);
-                }
-              }}
-            >
-              <Download size={14} /> {pdfDownloading ? "Generating PDF…" : "Download Score Card (PDF)"}
-            </button>
+            {summary?.showMarks && (
+              <button
+                type="button"
+                className="button primary compact"
+                disabled={pdfDownloading}
+                onClick={async () => {
+                  setPdfDownloading(true);
+                  try {
+                    await downloadScoreCardPdf(summary);
+                  } finally {
+                    setPdfDownloading(false);
+                  }
+                }}
+              >
+                <Download size={14} /> {pdfDownloading ? "Generating PDF…" : "Download Score Card (PDF)"}
+              </button>
+            )}
             <button
               type="button"
               className="button compact"
