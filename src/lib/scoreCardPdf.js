@@ -29,33 +29,120 @@ function buildReferenceCode(summary) {
   for (let i = 0; i < raw.length; i++) {
     hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
   }
-  return `LF-${hash.toString(36).toUpperCase().padStart(7, "0")}`;
+  return `LF-CERT-${hash.toString(36).toUpperCase().padStart(7, "0")}`;
 }
 
-function drawFooter(doc, pageNumber, totalPages, refCode) {
-  const pageWidth = 210;
-  const pageHeight = 297;
-  doc.setDrawColor(226, 232, 240);
-  doc.setLineWidth(0.3);
-  doc.line(14, pageHeight - 16, pageWidth - 14, pageHeight - 16);
+/**
+ * Draws the exact LearnForge logo mark from public/favicon.svg
+ * (rounded indigo square + white graduation cap + tassel) in crisp vector coordinates.
+ */
+function drawLearnForgeLogo(doc, x, y, size = 14) {
+  const s = size / 32; // favicon.svg uses a 32x32 viewBox
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`LearnForge Academic Portal  |  Official Score Card  |  Ref: ${refCode}`, 14, pageHeight - 10);
-  doc.text(`Page ${pageNumber} of ${totalPages}`, pageWidth - 14, pageHeight - 10, { align: "right" });
+  // Rounded indigo square background (#4f46e5)
+  doc.setFillColor(79, 70, 229);
+  doc.roundedRect(x, y, size, size, 8 * s, 8 * s, "F");
+
+  // Subtle gold inner border highlight
+  doc.setDrawColor(165, 180, 252);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(x + 0.5, y + 0.5, size - 1, size - 1, 7.2 * s, 7.2 * s, "S");
+
+  // Graduation cap diamond: M16 6 L6 11 L16 16 L26 11 Z
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(255, 255, 255);
+  doc.setLineWidth(0.35);
+  doc.triangle(
+    x + 16 * s,
+    y + 6 * s,
+    x + 6 * s,
+    y + 11 * s,
+    x + 16 * s,
+    y + 16 * s,
+    "FD"
+  );
+  doc.triangle(
+    x + 16 * s,
+    y + 6 * s,
+    x + 26 * s,
+    y + 11 * s,
+    x + 16 * s,
+    y + 16 * s,
+    "FD"
+  );
+
+  // Cap lower band / crown: U-shaped stroke from (10,13.5) -> (10,20.5) -> curve -> (22,20.5) -> (22,13.5)
+  doc.setDrawColor(255, 255, 255);
+  doc.setLineWidth(1.5 * s);
+  doc.line(x + 10 * s, y + 13.5 * s, x + 10 * s, y + 20.5 * s);
+  doc.line(x + 22 * s, y + 13.5 * s, x + 22 * s, y + 20.5 * s);
+  doc.lines(
+    [[0, 0, 2.5 * s, 4 * s, 6 * s, 4 * s], [3.5 * s, 0, 6 * s, -2 * s, 6 * s, -4 * s]],
+    x + 10 * s,
+    y + 20.5 * s
+  );
+
+  // Side tassel (M26 11 V19)
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(1.4 * s);
+  doc.line(x + 26 * s, y + 11 * s, x + 26 * s, y + 19.2 * s);
+  doc.setFillColor(245, 158, 11);
+  doc.circle(x + 26 * s, y + 19.8 * s, 1.3 * s, "F");
+}
+
+function drawGoldCertificateSeal(doc, cx, cy, passed) {
+  const outerR = 13.5;
+  const points = 24;
+
+  // Starburst outer gold/amber rosette
+  doc.setFillColor(passed ? 245 : 148, passed ? 158 : 163, passed ? 11 : 184);
+  for (let i = 0; i < points; i++) {
+    const a1 = (i * 2 * Math.PI) / points;
+    const a2 = ((i + 0.5) * 2 * Math.PI) / points;
+    const a3 = ((i + 1) * 2 * Math.PI) / points;
+    doc.triangle(
+      cx + Math.cos(a1) * (outerR - 1.6),
+      cy + Math.sin(a1) * (outerR - 1.6),
+      cx + Math.cos(a2) * (outerR + 1.2),
+      cy + Math.sin(a2) * (outerR + 1.2),
+      cx + Math.cos(a3) * (outerR - 1.6),
+      cy + Math.sin(a3) * (outerR - 1.6),
+      "F"
+    );
+  }
+
+  // Navy & Indigo Inner Medallion
+  doc.setFillColor(15, 23, 42);
+  doc.circle(cx, cy, outerR - 2.3, "F");
+  doc.setDrawColor(251, 191, 36);
+  doc.setLineWidth(0.45);
+  doc.circle(cx, cy, outerR - 3.3, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(6.2);
+  doc.setTextColor(251, 191, 36);
+  doc.text("LEARNFORGE", cx, cy - 2.6, { align: "center" });
+
+  doc.setFontSize(7.2);
+  doc.setTextColor(255, 255, 255);
+  doc.text(passed ? "CERTIFIED" : "RECORDED", cx, cy + 1.4, { align: "center" });
+
+  doc.setFontSize(5.2);
+  doc.setTextColor(203, 213, 225);
+  doc.text(passed ? "PASS VERIFIED" : "OFFICIAL SCORE", cx, cy + 5, { align: "center" });
 }
 
 export async function downloadScoreCardPdf(summary) {
   if (!summary) return;
 
   const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
 
-  const pageWidth = 210;
-  const pageHeight = 297;
-  const margin = 14;
-  const contentWidth = pageWidth - margin * 2;
+  // Single-page Landscape A4 Certificate & Official Score Card (297mm x 210mm)
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const W = 297;
+  const H = 210;
+  const M = 14;
+  const innerW = W - M * 2;
   const refCode = buildReferenceCode(summary);
 
   const score = Number(summary.score) || 0;
@@ -64,367 +151,330 @@ export async function downloadScoreCardPdf(summary) {
     summary.percentage !== undefined && summary.percentage !== null
       ? Number(summary.percentage)
       : Math.round((score / maxScore) * 10000) / 100;
-  const passingPercentage = Number(summary.passingPercentage) || 50;
+  const passingPercentage = Math.max(1, Math.min(100, Number(summary.passingPercentage) || 50));
   const passed =
     summary.passed !== undefined && summary.passed !== null
       ? Boolean(summary.passed)
       : percentage >= passingPercentage;
   const showMarks = summary.showMarks !== false;
 
-  // Outer Institutional Frame
-  doc.setDrawColor(203, 213, 225);
-  doc.setLineWidth(0.4);
-  doc.rect(7, 7, pageWidth - 14, pageHeight - 14);
-  doc.setDrawColor(79, 70, 229);
-  doc.setLineWidth(0.25);
-  doc.rect(9.5, 9.5, pageWidth - 19, pageHeight - 19);
+  const reviewItems = Array.isArray(summary.review) ? summary.review : [];
+  const totalQ = reviewItems.length;
+  const correctQ = reviewItems.filter((r) => r.isCorrect).length;
+  const incorrectQ = reviewItems.filter((r) => !r.isCorrect && !r.isUnanswered).length;
+  const unansweredQ = reviewItems.filter((r) => r.isUnanswered).length;
 
-  // Header Banner (Navy + Indigo + Gold Accent)
-  doc.setFillColor(15, 23, 42);
-  doc.rect(10, 10, pageWidth - 20, 32, "F");
-  doc.setFillColor(79, 70, 229);
-  doc.rect(10, 40.5, pageWidth - 20, 2, "F");
-  doc.setFillColor(245, 158, 11);
-  doc.rect(10, 42.5, 48, 1, "F");
+  // Background paper tint
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, W, H, "F");
 
-  // LearnForge Emblem Circle + LF Monogram
-  doc.setFillColor(79, 70, 229);
-  doc.circle(23, 26, 7.5, "F");
-  doc.setDrawColor(255, 255, 255);
+  // Ornate Double Certificate Borders (Navy + Indigo + Gold Accent)
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(1.2);
+  doc.rect(6, 6, W - 12, H - 12);
+
+  doc.setDrawColor(217, 119, 6); // Warm gold inner rule
   doc.setLineWidth(0.5);
-  doc.circle(23, 26, 6.2, "S");
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10.5);
-  doc.setTextColor(255, 255, 255);
-  doc.text("LF", 23, 27.6, { align: "center" });
+  doc.rect(8.5, 8.5, W - 17, H - 17);
 
-  // Brand Title & Subtitle
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(17);
-  doc.setTextColor(255, 255, 255);
-  doc.text("LEARNFORGE", 34, 24);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(203, 213, 225);
-  doc.text("Academic Assessment & Proctoring Portal", 34, 30);
+  doc.setDrawColor(79, 70, 229); // Subtle indigo hairline
+  doc.setLineWidth(0.25);
+  doc.rect(10.5, 10.5, W - 21, H - 21);
 
-  // Right Banner Badge
-  doc.setFillColor(30, 41, 59);
-  doc.roundedRect(pageWidth - 68, 16.5, 54, 17, 2.5, 2.5, "F");
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.5);
-  doc.setTextColor(248, 250, 252);
-  doc.text("OFFICIAL SCORE CARD", pageWidth - 41, 23.5, { align: "center" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(165, 180, 252);
-  doc.text(`Ref: ${refCode}`, pageWidth - 41, 29.5, { align: "center" });
-
-  let y = 52;
-
-  // Candidate & Assessment Info Box
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(226, 232, 240);
-  doc.setLineWidth(0.35);
-  doc.roundedRect(margin, y, contentWidth, 34, 2.5, 2.5, "FD");
-
-  const leftColX = margin + 5;
-  const rightColX = margin + contentWidth / 2 + 4;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text("STUDENT NAME", leftColX, y + 6.5);
-  doc.text("ASSESSMENT TITLE", rightColX, y + 6.5);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(15, 23, 42);
-  doc.text(sanitizePdfText(summary.studentName || "Student"), leftColX, y + 12, {
-    maxWidth: contentWidth / 2 - 8,
+  // Ornamental gold corner brackets
+  const corners = [
+    [10.5, 10.5, 1, 1],
+    [W - 10.5, 10.5, -1, 1],
+    [10.5, H - 10.5, 1, -1],
+    [W - 10.5, H - 10.5, -1, -1],
+  ];
+  doc.setDrawColor(245, 158, 11);
+  doc.setLineWidth(1.1);
+  corners.forEach(([cx, cy, dx, dy]) => {
+    doc.line(cx, cy, cx + 10 * dx, cy);
+    doc.line(cx, cy, cx, cy + 10 * dy);
   });
-  const titleLines = doc.splitTextToSize(sanitizePdfText(summary.examTitle || "Assessment"), contentWidth / 2 - 8);
-  doc.text(titleLines.slice(0, 2), rightColX, y + 12);
+
+  // Top Header Band
+  doc.setFillColor(15, 23, 42);
+  doc.rect(10.5, 10.5, W - 21, 29, "F");
+  doc.setFillColor(79, 70, 229);
+  doc.rect(10.5, 38.2, W - 21, 1.8, "F");
+  doc.setFillColor(245, 158, 11);
+  doc.rect(10.5, 40, W - 21, 0.8, "F");
+
+  // LearnForge Logo Mark (exact match to favicon.svg) + Brand Name
+  drawLearnForgeLogo(doc, 17, 17, 15.5);
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(summary.studentEmail ? "STUDENT EMAIL" : "COURSE / PROGRAM", leftColX, y + 21.5);
-  doc.text("SUBMITTED ON", rightColX, y + 21.5);
+  doc.setFontSize(17.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text("LEARNFORGE", 36.5, 24);
 
   doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(199, 210, 254);
+  doc.text("ACADEMIC ASSESSMENT & PROCTORING ACADEMY", 36.5, 29.8);
+
+  // Right Header Certificate Badge
+  doc.setFillColor(30, 41, 59);
+  doc.setDrawColor(245, 158, 11);
+  doc.setLineWidth(0.35);
+  doc.roundedRect(W - 88, 15.5, 71, 18.5, 2.5, 2.5, "FD");
+
+  doc.setFont("helvetica", "bold");
   doc.setFontSize(9.5);
-  doc.setTextColor(51, 65, 85);
+  doc.setTextColor(251, 191, 36);
+  doc.text(passed && showMarks ? "CERTIFICATE OF PASS" : "OFFICIAL SCORE CARD", W - 52.5, 22.8, {
+    align: "center",
+  });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(226, 232, 240);
+  doc.text(`Certificate ID: ${refCode}`, W - 52.5, 29.2, { align: "center" });
+
+  // Center Certificate Citation Block
+  let y = 51;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(79, 70, 229);
   doc.text(
-    sanitizePdfText(summary.studentEmail || summary.courseName || "LearnForge Assessment Program"),
-    leftColX,
-    y + 27,
-    { maxWidth: contentWidth / 2 - 8 }
+    passed && showMarks
+      ? "CERTIFICATE OF ACHIEVEMENT & OFFICIAL SCORE CARD"
+      : "OFFICIAL ASSESSMENT SCORE REPORT",
+    W / 2,
+    y,
+    { align: "center" }
   );
+
+  y += 6.5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text("This is proudly presented to", W / 2, y, { align: "center" });
+
+  y += 10.5;
+  doc.setFont("times", "bold");
+  doc.setFontSize(25);
+  doc.setTextColor(15, 23, 42);
+  const displayName = sanitizePdfText(summary.studentName || "Student");
+  doc.text(displayName, W / 2, y, { align: "center", maxWidth: innerW - 30 });
+
+  // Gold accent underline beneath candidate name
+  const nameWidth = Math.min(130, Math.max(68, doc.getTextWidth(displayName) + 18));
+  doc.setDrawColor(245, 158, 11);
+  doc.setLineWidth(0.6);
+  doc.line(W / 2 - nameWidth / 2, y + 2.5, W / 2 + nameWidth / 2, y + 2.5);
+
+  y += 8.5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(71, 85, 105);
+  const verbPhrase = !showMarks
+    ? "for completing the online assessment"
+    : passed
+    ? "for successfully qualifying and passing the assessment"
+    : "for completing the proctored online assessment";
+  doc.text(verbPhrase, W / 2, y, { align: "center" });
+
+  y += 7.5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14.5);
+  doc.setTextColor(67, 56, 202);
+  doc.text(sanitizePdfText(summary.examTitle || "Assessment"), W / 2, y, {
+    align: "center",
+    maxWidth: innerW - 24,
+  });
+
+  y += 5.5;
+  const subMetaParts = [];
+  if (summary.courseName) subMetaParts.push(`Course: ${sanitizePdfText(summary.courseName)}`);
+  if (summary.studentEmail) subMetaParts.push(`Email: ${sanitizePdfText(summary.studentEmail)}`);
   const submittedLabel = summary.submittedAt
-    ? new Date(summary.submittedAt).toLocaleString("en-IN", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
+    ? new Date(summary.submittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
     : new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
-  doc.text(sanitizePdfText(submittedLabel), rightColX, y + 27);
+  subMetaParts.push(`Date: ${sanitizePdfText(submittedLabel)}`);
 
-  y += 41;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(subMetaParts.join("   |   "), W / 2, y, { align: "center", maxWidth: innerW - 16 });
 
-  // Score KPI Cards (4 Tiles)
-  const cardGap = 3.5;
-  const cardWidth = (contentWidth - cardGap * 3) / 4;
-  const cardHeight = 25;
+  // Score Card KPI Panel (4 side-by-side luxury cards)
+  y += 7;
+  const cardGap = 4.5;
+  const cardW = (innerW - cardGap * 3) / 4;
+  const cardH = 26;
+
+  const accuracyLine =
+    totalQ > 0
+      ? `${correctQ}/${totalQ} Correct (${incorrectQ} Wrong${unansweredQ ? `, ${unansweredQ} Skipped` : ""})`
+      : summary.isExternal
+      ? "Official Recorded Grade"
+      : "Single Attempt Scored";
 
   const kpis = [
     {
-      label: "MARKS OBTAINED",
-      value: showMarks ? `${score} / ${maxScore}` : "Pending",
-      sub:
-        showMarks && Array.isArray(summary.review) && summary.review.length > 0
-          ? `${summary.review.filter((r) => r.isCorrect).length} of ${summary.review.length} correct`
-          : "Official Score",
+      label: "SCORE OBTAINED",
+      value: showMarks ? `${score} / ${maxScore}` : "Recorded",
+      sub: accuracyLine,
       bg: [248, 250, 252],
-      border: [226, 232, 240],
-      valColor: [15, 23, 42],
+      border: [203, 213, 225],
+      color: [15, 23, 42],
     },
     {
       label: "PERCENTAGE",
       value: showMarks ? `${percentage}%` : "-",
-      sub: `Pass Mark: ${passingPercentage}%`,
+      sub: `Passing Threshold: ${passingPercentage}%`,
       bg: [238, 242, 255],
-      border: [199, 210, 254],
-      valColor: [67, 56, 202],
+      border: [165, 180, 252],
+      color: [67, 56, 202],
     },
     {
-      label: "RESULT STATUS",
-      value: !showMarks ? "SUBMITTED" : passed ? "PASSED" : "FAILED",
-      sub: !showMarks ? "Awaiting release" : passed ? "Criteria Met" : "Below Pass Mark",
+      label: "FINAL RESULT",
+      value: !showMarks ? "SUBMITTED" : passed ? "PASSED" : "NOT PASSED",
+      sub: !showMarks
+        ? "Pending Evaluation"
+        : passed
+        ? "Qualified - Certificate Awarded"
+        : `Minimum ${passingPercentage}% Required`,
       bg: !showMarks ? [248, 250, 252] : passed ? [236, 253, 245] : [255, 241, 242],
-      border: !showMarks ? [226, 232, 240] : passed ? [167, 243, 208] : [254, 205, 211],
-      valColor: !showMarks ? [51, 65, 85] : passed ? [6, 95, 70] : [159, 18, 57],
+      border: !showMarks ? [203, 213, 225] : passed ? [16, 185, 129] : [244, 63, 94],
+      color: !showMarks ? [51, 65, 85] : passed ? [6, 95, 70] : [159, 18, 57],
     },
     {
       label: "TIME TAKEN",
-      value: summary.timeTakenSeconds > 0 ? formatSeconds(summary.timeTakenSeconds) : "Recorded",
-      sub: summary.isExternal ? "External Test" : "Proctored Session",
+      value: summary.timeTakenSeconds > 0 ? formatSeconds(summary.timeTakenSeconds) : "Verified",
+      sub: summary.isExternal ? "External Assessment" : "Attempt: 1 of 1 Allowed",
       bg: [248, 250, 252],
-      border: [226, 232, 240],
-      valColor: [15, 23, 42],
+      border: [203, 213, 225],
+      color: [15, 23, 42],
     },
   ];
 
   kpis.forEach((kpi, idx) => {
-    const cx = margin + idx * (cardWidth + cardGap);
+    const cx = M + idx * (cardW + cardGap);
     doc.setFillColor(...kpi.bg);
     doc.setDrawColor(...kpi.border);
-    doc.setLineWidth(0.35);
-    doc.roundedRect(cx, y, cardWidth, cardHeight, 2, 2, "FD");
+    doc.setLineWidth(0.45);
+    doc.roundedRect(cx, y, cardW, cardH, 2.5, 2.5, "FD");
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text(kpi.label, cx + 3.5, y + 6);
+    doc.text(kpi.label, cx + cardW / 2, y + 6, { align: "center" });
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(12.5);
-    doc.setTextColor(...kpi.valColor);
-    doc.text(sanitizePdfText(kpi.value), cx + 3.5, y + 14.5, { maxWidth: cardWidth - 7 });
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(sanitizePdfText(kpi.sub), cx + 3.5, y + 21, { maxWidth: cardWidth - 7 });
-  });
-
-  y += cardHeight + 7;
-
-  // Percentage Bar
-  if (showMarks) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(51, 65, 85);
-    doc.text("OVERALL PERFORMANCE PROGRESS", margin, y);
-    doc.text(`${percentage}%`, pageWidth - margin, y, { align: "right" });
-
-    y += 2.5;
-    doc.setFillColor(226, 232, 240);
-    doc.roundedRect(margin, y, contentWidth, 4.5, 1.5, 1.5, "F");
-
-    const clampedPct = Math.max(0, Math.min(100, percentage));
-    if (clampedPct > 0) {
-      if (passed) doc.setFillColor(16, 185, 129);
-      else doc.setFillColor(244, 63, 94);
-      doc.roundedRect(margin, y, Math.max(3, (contentWidth * clampedPct) / 100), 4.5, 1.5, 1.5, "F");
-    }
-    y += 10;
-  }
-
-  // Proctoring & Session Summary Section
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(margin, y, contentWidth, 21, 2, 2, "FD");
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(79, 70, 229);
-  doc.text("ASSESSMENT INTEGRITY & PROCTORING RECORD", margin + 4, y + 5.8);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.setTextColor(51, 65, 85);
-  const switchSummary = summary.isExternal
-    ? "External Assessment"
-    : summary.trackTabSwitches !== false
-    ? `${summary.tabSwitchCount ?? 0} / ${summary.maxTabSwitches ?? 3}`
-    : "Tracking Disabled";
-
-  doc.text(`Submission Mode: ${sanitizePdfText(buildSubmissionReasonLabel(summary.submissionReason))}`, margin + 4, y + 12);
-  doc.text(`Screen / Tab Switches: ${sanitizePdfText(switchSummary)}`, margin + 4, y + 17.2);
-  doc.text(
-    `Camera Status: ${sanitizePdfText(summary.cameraStatus || (summary.isExternal ? "N/A" : "Not Required"))}`,
-    margin + contentWidth / 2 + 4,
-    y + 12
-  );
-  doc.text("Attempt Policy: Single Attempt Verified (1/1)", margin + contentWidth / 2 + 4, y + 17.2);
-
-  y += 28;
-
-  // Detailed Question-by-Question Score Breakdown (if available)
-  const reviewItems = showMarks && Array.isArray(summary.review) ? summary.review : [];
-  if (reviewItems.length > 0) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`Question-by-Question Answer Summary (${reviewItems.length} Questions)`, margin, y);
-    y += 4.5;
-
-    const colQ = margin;
-    const colPrompt = margin + 10;
-    const colAns = margin + 96;
-    const colCorrect = margin + 134;
-    const colStatus = margin + 170;
-
-    const drawTableHeader = (headerY) => {
-      doc.setFillColor(15, 23, 42);
-      doc.rect(margin, headerY, contentWidth, 7, "F");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(7.5);
-      doc.setTextColor(255, 255, 255);
-      doc.text("#", colQ + 2, headerY + 4.7);
-      doc.text("QUESTION", colPrompt, headerY + 4.7);
-      doc.text("YOUR ANSWER", colAns, headerY + 4.7);
-      doc.text("CORRECT ANSWER", colCorrect, headerY + 4.7);
-      doc.text("SCORE", colStatus, headerY + 4.7);
-      return headerY + 7;
-    };
-
-    y = drawTableHeader(y);
-
-    reviewItems.forEach((item, index) => {
-      const qLines = doc.splitTextToSize(sanitizePdfText(item.question), 83);
-      const selLines = doc.splitTextToSize(sanitizePdfText(item.selectedAnswer || "Unanswered"), 35);
-      const corLines = doc.splitTextToSize(sanitizePdfText(item.correctAnswer || "-"), 33);
-      const lineCount = Math.max(qLines.length, selLines.length, corLines.length, 1);
-      const rowHeight = Math.max(7, lineCount * 3.8 + 3);
-
-      if (y + rowHeight > pageHeight - 28) {
-        doc.addPage();
-        doc.setDrawColor(203, 213, 225);
-        doc.setLineWidth(0.4);
-        doc.rect(7, 7, pageWidth - 14, pageHeight - 14);
-        y = 18;
-        y = drawTableHeader(y);
-      }
-
-      if (index % 2 === 1) {
-        doc.setFillColor(248, 250, 252);
-        doc.rect(margin, y, contentWidth, rowHeight, "F");
-      }
-      doc.setDrawColor(226, 232, 240);
-      doc.setLineWidth(0.2);
-      doc.line(margin, y + rowHeight, margin + contentWidth, y + rowHeight);
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8);
-      doc.setTextColor(71, 85, 105);
-      doc.text(`${index + 1}`, colQ + 2, y + 4.5);
-
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(15, 23, 42);
-      doc.text(qLines, colPrompt, y + 4.5);
-
-      doc.setTextColor(item.isCorrect ? 6 : item.isUnanswered ? 146 : 159, item.isCorrect ? 95 : item.isUnanswered ? 64 : 18, item.isCorrect ? 70 : item.isUnanswered ? 14 : 57);
-      doc.text(selLines, colAns, y + 4.5);
-
-      doc.setTextColor(6, 95, 70);
-      doc.text(corLines, colCorrect, y + 4.5);
-
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(item.isCorrect ? 6 : 159, item.isCorrect ? 95 : 18, item.isCorrect ? 70 : 57);
-      doc.text(`${item.pointsEarned}/${item.points}`, colStatus, y + 4.5);
-
-      y += rowHeight;
+    doc.setFontSize(13.5);
+    doc.setTextColor(...kpi.color);
+    doc.text(sanitizePdfText(kpi.value), cx + cardW / 2, y + 14.8, {
+      align: "center",
+      maxWidth: cardW - 6,
     });
 
-    y += 8;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.2);
+    doc.setTextColor(100, 116, 139);
+    doc.text(sanitizePdfText(kpi.sub), cx + cardW / 2, y + 21.8, {
+      align: "center",
+      maxWidth: cardW - 6,
+    });
+  });
+
+  // Compact Score Progress Bar + Proctoring Verification Strip
+  y += cardH + 5.5;
+  if (showMarks) {
+    doc.setFillColor(226, 232, 240);
+    doc.roundedRect(M, y, innerW, 3.6, 1.5, 1.5, "F");
+    const clamped = Math.max(0, Math.min(100, percentage));
+    if (clamped > 0) {
+      if (passed) doc.setFillColor(16, 185, 129);
+      else doc.setFillColor(244, 63, 94);
+      doc.roundedRect(M, y, Math.max(4, (innerW * clamped) / 100), 3.6, 1.5, 1.5, "F");
+    }
+    // Pass threshold tick mark on progress bar
+    const passX = M + (innerW * passingPercentage) / 100;
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.line(passX, y - 0.8, passX, y + 4.4);
+    y += 7;
   }
 
-  // Verification Stamp & Authorized LearnForge Sign-Off
-  if (y + 26 > pageHeight - 20) {
-    doc.addPage();
-    doc.setDrawColor(203, 213, 225);
-    doc.setLineWidth(0.4);
-    doc.rect(7, 7, pageWidth - 14, pageHeight - 14);
-    y = 24;
-  }
+  // Integrity & Proctoring Verification Bar
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(0.35);
+  doc.roundedRect(M, y, innerW, 11.5, 2, 2, "FD");
 
-  const sealY = Math.max(y + 4, pageHeight - 44);
-  doc.setDrawColor(79, 70, 229);
-  doc.setLineWidth(0.5);
-  doc.circle(margin + 13, sealY + 9, 10, "S");
-  doc.setLineWidth(0.25);
-  doc.circle(margin + 13, sealY + 9, 8.2, "S");
+  const switchText = summary.isExternal
+    ? "External Assessment Mode"
+    : summary.trackTabSwitches !== false
+    ? `${summary.tabSwitchCount ?? 0} / ${summary.maxTabSwitches ?? 3}`
+    : "Disabled";
+  const camText = summary.isExternal ? "N/A" : summary.cameraStatus || "Not Required";
+  const reasonText = buildSubmissionReasonLabel(summary.submissionReason);
+
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(6.2);
+  doc.setFontSize(7.5);
   doc.setTextColor(79, 70, 229);
-  doc.text("LEARNFORGE", margin + 13, sealY + 7.5, { align: "center" });
-  doc.text("VERIFIED", margin + 13, sealY + 11.2, { align: "center" });
+  doc.text("VERIFIED SESSION:", M + 4, y + 7);
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(15, 23, 42);
-  doc.text("Issued by LearnForge Academy", margin + 28, sealY + 7);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
+  doc.setTextColor(51, 65, 85);
   doc.text(
-    "This computer-generated Score Card officially certifies the assessment result recorded in LearnForge.",
-    margin + 28,
-    sealY + 12,
-    { maxWidth: 96 }
+    sanitizePdfText(
+      `Submission: ${reasonText}   |   Tab Switches: ${switchText}   |   Camera: ${camText}   |   Attempt: Single Verified Submission`
+    ),
+    M + 35,
+    y + 7,
+    { maxWidth: innerW - 40 }
   );
 
+  // Bottom Certificate Signatures & Official LearnForge Gold Seal
+  const footerLineY = H - 22;
+
+  // Left Signature Block
   doc.setDrawColor(148, 163, 184);
-  doc.setLineWidth(0.35);
-  doc.line(pageWidth - margin - 46, sealY + 10, pageWidth - margin, sealY + 10);
+  doc.setLineWidth(0.4);
+  doc.line(M + 6, footerLineY, M + 74, footerLineY);
+  doc.setFont("times", "italic");
+  doc.setFontSize(12);
+  doc.setTextColor(30, 41, 59);
+  doc.text("LearnForge Academic Board", M + 40, footerLineY - 2.5, { align: "center" });
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(15, 23, 42);
-  doc.text("LearnForge Examination Cell", pageWidth - margin - 23, sealY + 14.5, { align: "center" });
+  doc.text("Academic Program Director", M + 40, footerLineY + 4.2, { align: "center" });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(100, 116, 139);
-  doc.text(`Issued ${new Date().toLocaleDateString("en-IN", { dateStyle: "medium" })}`, pageWidth - margin - 23, sealY + 18.5, {
-    align: "center",
-  });
+  doc.text("LearnForge Academy", M + 40, footerLineY + 8, { align: "center" });
 
-  // Add Footers to Every Page
-  const totalPages = doc.getNumberOfPages();
-  for (let p = 1; p <= totalPages; p++) {
-    doc.setPage(p);
-    drawFooter(doc, p, totalPages, refCode);
-  }
+  // Center Gold Certified Seal
+  drawGoldCertificateSeal(doc, W / 2, H - 26, passed || !showMarks);
+
+  // Right Signature / Issue Details Block
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.4);
+  doc.line(W - M - 74, footerLineY, W - M - 6, footerLineY);
+  doc.setFont("times", "italic");
+  doc.setFontSize(12);
+  doc.setTextColor(30, 41, 59);
+  doc.text("Examination Controller", W - M - 40, footerLineY - 2.5, { align: "center" });
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text("Authorized Assessment Cell", W - M - 40, footerLineY + 4.2, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Issued: ${new Date().toLocaleDateString("en-IN", { dateStyle: "medium" })}  |  ${refCode}`,
+    W - M - 40,
+    footerLineY + 8,
+    { align: "center" }
+  );
 
   const slug = safeSlug(`${summary.examTitle}-${summary.studentName || "student"}`);
   doc.save(`learnforge-scorecard-${slug}.pdf`);
