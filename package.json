@@ -23,6 +23,7 @@
     "@uiw/react-codemirror": "^4.25.12",
     "dotenv": "^16.6.1",
     "JSCPP": "^2.0.9",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

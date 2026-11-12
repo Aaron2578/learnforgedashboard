@@ -22,12 +22,15 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  buildReviewItems,
+  buildScoreCardSummary,
   buildSubmissionReasonLabel,
   exportExamResultCsv,
   exportExamResultJson,
   formatSeconds,
   formatTimerClock,
 } from "../lib/quizUtils.js";
+import { downloadScoreCardPdf } from "../lib/scoreCardPdf.js";
 
 function WebcamVideo({ stream, className = "" }) {
   const videoRef = useRef(null);
@@ -51,42 +54,11 @@ function nowTimeIso() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function buildReviewItems(rawQuestions = [], answersObj = {}) {
-  const sorted = [...rawQuestions].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  return sorted.map((q, idx) => {
-    const opts = Array.isArray(q.options) ? q.options : [];
-    const rawSel = answersObj?.[q.id];
-    const selectedIndex =
-      rawSel !== undefined && rawSel !== null && Number.isInteger(Number(rawSel))
-        ? Number(rawSel)
-        : null;
-    const correctIndex = Number.isInteger(q.correct_index) ? q.correct_index : null;
-    const isUnanswered = selectedIndex === null || opts[selectedIndex] === undefined;
-    const isCorrect = !isUnanswered && correctIndex !== null && selectedIndex === correctIndex;
-    const points = Number(q.points) || 1;
-    return {
-      id: q.id,
-      externalId: q.external_id || idx + 1,
-      index: idx,
-      question: q.prompt || q.question || "",
-      options: opts,
-      points,
-      pointsEarned: isCorrect ? points : 0,
-      selectedIndex,
-      selectedAnswer: isUnanswered ? null : opts[selectedIndex],
-      correctIndex,
-      correctAnswer: correctIndex !== null ? opts[correctIndex] ?? null : null,
-      explanation: q.explanation || "",
-      isUnanswered,
-      isCorrect,
-    };
-  });
-}
-
 export default function ProctoredExamRunner({
   assessment,
   questions = [],
   studentProfile = {},
+  courseName = "",
   initialAttempt = null,
   initialReviewData = null,
   initialStage = "precheck", // "precheck" | "review"
@@ -159,57 +131,23 @@ export default function ProctoredExamRunner({
   // Result Review state
   const [reviewFilter, setReviewFilter] = useState("all"); // "all" | "correct" | "incorrect" | "unanswered"
   const [resultSummary, setResultSummary] = useState(null);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
 
   const fallbackAttemptSummary = useMemo(() => {
     if (!initialAttempt) return null;
     const reviewQuestions = initialReviewData?.questions || orderedQuestions;
-    const attemptAnswers = initialAttempt.answers || {};
-    const review = buildReviewItems(reviewQuestions, attemptAnswers);
-    const showMarks = previewMode
-      ? true
-      : Boolean(initialReviewData?.show_marks ?? assessment?.show_marks ?? true);
-    const maxScore = Number(initialAttempt.max_score) || totalPointsPossible;
-    const score = Number(initialAttempt.score) || 0;
-    const pct =
-      initialAttempt.percentage !== undefined && initialAttempt.percentage !== null
-        ? Number(initialAttempt.percentage)
-        : Math.round((score / Math.max(1, maxScore)) * 10000) / 100;
-    const passed =
-      initialAttempt.passed !== undefined && initialAttempt.passed !== null
-        ? Boolean(initialAttempt.passed)
-        : pct >= passingPercentage;
-    return {
-      examTitle: assessment?.title || "Proctored Assessment",
-      studentName: initialAttempt.student_name || studentProfile?.full_name || "Student",
-      submittedAt: initialAttempt.submitted_at,
-      score,
-      maxScore,
-      percentage: pct,
-      passingPercentage,
-      passed,
-      timeTakenSeconds: Number(initialAttempt.time_taken_seconds) || 0,
-      submissionReason: initialAttempt.submission_reason || "manual",
-      trackTabSwitches,
-      tabSwitchCount: Number(initialAttempt.tab_switch_count) || 0,
-      maxTabSwitches,
-      cameraStatus: initialAttempt.camera_status || (requireCamera ? "Active" : "Not Required"),
-      showMarks,
-      proctoringLog: Array.isArray(initialAttempt.proctoring_log) ? initialAttempt.proctoring_log : [],
-      review: showMarks ? review : [],
-    };
-  }, [
-    assessment,
-    initialAttempt,
-    initialReviewData,
-    maxTabSwitches,
-    orderedQuestions,
-    passingPercentage,
-    previewMode,
-    requireCamera,
-    studentProfile?.full_name,
-    totalPointsPossible,
-    trackTabSwitches,
-  ]);
+    return buildScoreCardSummary({
+      assessment: {
+        ...assessment,
+        show_marks: initialReviewData?.show_marks ?? assessment?.show_marks ?? true,
+      },
+      attempt: initialAttempt,
+      studentProfile,
+      courseName,
+      reviewQuestions,
+      previewMode,
+    });
+  }, [assessment, courseName, initialAttempt, initialReviewData, orderedQuestions, previewMode, studentProfile]);
 
   const appendLog = useCallback((event, detail = "") => {
     const entry = {
@@ -351,8 +289,11 @@ export default function ProctoredExamRunner({
           const percentage = Math.round((score / maxScore) * 10000) / 100;
           const passed = percentage >= passingPercentage;
           const summary = {
+            attemptId: "preview",
             examTitle: assessment?.title || "Proctored Assessment",
+            courseName,
             studentName: studentName.trim() || "Preview Candidate",
+            studentEmail: studentProfile?.email || "",
             submittedAt: new Date().toISOString(),
             score,
             maxScore,
@@ -408,8 +349,11 @@ export default function ProctoredExamRunner({
             : percentage >= passingPercentage;
 
         const summary = {
+          attemptId: payload?.attempt_id || "",
           examTitle: assessment?.title || "Proctored Assessment",
+          courseName,
           studentName: payload?.student_name || studentName.trim(),
+          studentEmail: studentProfile?.email || "",
           submittedAt: payload?.submitted_at || new Date().toISOString(),
           score,
           maxScore,
@@ -1141,6 +1085,21 @@ export default function ProctoredExamRunner({
           <div className="proctor-export-actions">
             <button
               type="button"
+              className="button primary compact"
+              disabled={pdfDownloading}
+              onClick={async () => {
+                setPdfDownloading(true);
+                try {
+                  await downloadScoreCardPdf(summary);
+                } finally {
+                  setPdfDownloading(false);
+                }
+              }}
+            >
+              <Download size={14} /> {pdfDownloading ? "Generating PDF…" : "Download Score Card (PDF)"}
+            </button>
+            <button
+              type="button"
               className="button compact"
               onClick={() => exportExamResultJson(summary)}
             >
@@ -1148,7 +1107,7 @@ export default function ProctoredExamRunner({
             </button>
             <button
               type="button"
-              className="button primary compact"
+              className="button compact"
               onClick={() => exportExamResultCsv(summary)}
             >
               <FileSpreadsheet size={14} /> Export CSV

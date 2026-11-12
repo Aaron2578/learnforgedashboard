@@ -438,3 +438,88 @@ export async function updateAssessmentRecord(supabase, testId, form) {
     await syncAssessmentQuestions(supabase, testId, form.questions);
   }
 }
+
+export function buildReviewItems(rawQuestions = [], answersObj = {}) {
+  const sorted = [...rawQuestions].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  return sorted.map((q, idx) => {
+    const opts = Array.isArray(q.options) ? q.options : [];
+    const rawSel = answersObj?.[q.id];
+    const selectedIndex =
+      rawSel !== undefined && rawSel !== null && Number.isInteger(Number(rawSel))
+        ? Number(rawSel)
+        : null;
+    const correctIndex = Number.isInteger(q.correct_index) ? q.correct_index : null;
+    const isUnanswered = selectedIndex === null || opts[selectedIndex] === undefined;
+    const isCorrect = !isUnanswered && correctIndex !== null && selectedIndex === correctIndex;
+    const points = Number(q.points) || 1;
+    return {
+      id: q.id,
+      externalId: q.external_id || idx + 1,
+      index: idx,
+      question: q.prompt || q.question || "",
+      options: opts,
+      points,
+      pointsEarned: isCorrect ? points : 0,
+      selectedIndex,
+      selectedAnswer: isUnanswered ? null : opts[selectedIndex],
+      correctIndex,
+      correctAnswer: correctIndex !== null ? opts[correctIndex] ?? null : null,
+      explanation: q.explanation || "",
+      isUnanswered,
+      isCorrect,
+    };
+  });
+}
+
+export function buildScoreCardSummary({
+  assessment,
+  attempt,
+  studentProfile = {},
+  courseName = "",
+  reviewQuestions = [],
+  previewMode = false,
+}) {
+  const maxScore = Math.max(1, Number(attempt?.max_score) || 100);
+  const score = Number(attempt?.score) || 0;
+  const passingPercentage = Math.max(1, Math.min(100, Number(assessment?.passing_percentage) || 50));
+  const percentage =
+    attempt?.percentage !== undefined && attempt?.percentage !== null
+      ? Number(attempt.percentage)
+      : Math.round((score / maxScore) * 10000) / 100;
+  const passed =
+    attempt?.passed !== undefined && attempt?.passed !== null
+      ? Boolean(attempt.passed)
+      : percentage >= passingPercentage;
+  const isExternal = Boolean(assessment?.external_url);
+  const showMarks = previewMode
+    ? true
+    : Boolean(assessment?.show_marks) || !isExternal;
+  const review =
+    showMarks && !isExternal && Array.isArray(reviewQuestions) && reviewQuestions.length > 0
+      ? buildReviewItems(reviewQuestions, attempt?.answers || {})
+      : [];
+
+  return {
+    attemptId: attempt?.id || "",
+    examTitle: assessment?.title || "LearnForge Assessment",
+    courseName,
+    studentName: attempt?.student_name || studentProfile?.full_name || studentProfile?.email || "Student",
+    studentEmail: studentProfile?.email || "",
+    submittedAt: attempt?.submitted_at || new Date().toISOString(),
+    score,
+    maxScore,
+    percentage,
+    passingPercentage,
+    passed,
+    timeTakenSeconds: Number(attempt?.time_taken_seconds) || 0,
+    submissionReason: attempt?.submission_reason || "manual",
+    trackTabSwitches: !isExternal && assessment?.track_tab_switches !== false,
+    tabSwitchCount: Number(attempt?.tab_switch_count) || 0,
+    maxTabSwitches: Math.max(1, Number(assessment?.max_tab_switches) || 3),
+    cameraStatus: attempt?.camera_status || (assessment?.require_camera ? "Active" : "Not Required"),
+    isExternal,
+    showMarks,
+    proctoringLog: Array.isArray(attempt?.proctoring_log) ? attempt.proctoring_log : [],
+    review,
+  };
+}

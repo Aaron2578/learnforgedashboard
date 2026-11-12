@@ -11,7 +11,8 @@ import ProctoredExamRunner from "../components/ProctoredExamRunner";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
-import { formatSeconds } from "../lib/quizUtils.js";
+import { buildScoreCardSummary, formatSeconds } from "../lib/quizUtils.js";
+import { downloadScoreCardPdf } from "../lib/scoreCardPdf.js";
 
 const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
@@ -141,6 +142,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const [selectedTest, setSelectedTest] = useState("");
   const [activeTestMode, setActiveTestMode] = useState(""); // "" | "exam" | "review"
   const [activeReviewData, setActiveReviewData] = useState(null);
+  const [downloadingScoreCardId, setDownloadingScoreCardId] = useState("");
   const [submissionDraft, setSubmissionDraft] = useState(null);
   const [submissionModeByAssignment, setSubmissionModeByAssignment] = useState({});
   const [driveSubTab, setDriveSubTab] = useState("materials");
@@ -223,7 +225,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, question_file_path, question_file_name, question_file_type, question_url, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", studentId),
-      supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, duration_minutes, require_camera, allow_camera_off, track_tab_switches, max_tab_switches, passing_percentage, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
+      supabase.from("assessments").select("id, title, description, course_id, due_at, external_url, file_path, show_marks, duration_minutes, require_camera, allow_camera_off, track_tab_switches, max_tab_switches, passing_percentage, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assessment_attempts").select("id, assessment_id, answers, score, max_score, submitted_at, student_name, roll_number, time_taken_seconds, tab_switch_count, camera_status, submission_reason, proctoring_log, percentage, passed").eq("student_id", studentId),
       supabase.from("conversations").select("id, subject, created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
       supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room").order("name"),
@@ -797,6 +799,44 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     }
   }
 
+  async function handleDownloadScoreCard(test, attempt) {
+    if (!test || !attempt) return;
+    setDownloadingScoreCardId(test.id);
+    setError("");
+    try {
+      let reviewQuestions = [];
+      if (!test.external_url) {
+        try {
+          const { data } = await supabase.rpc("get_assessment_review", {
+            p_assessment_id: test.id,
+          });
+          if (Array.isArray(data?.questions)) {
+            reviewQuestions = data.questions;
+          }
+        } catch {
+          // fallback cleanly to summary without question table if unavailable
+        }
+      }
+      const courseName = test.course_id ? coursesById[test.course_id]?.name || "" : "";
+      const summary = buildScoreCardSummary({
+        assessment: test,
+        attempt,
+        studentProfile: {
+          full_name: activeStudent?.full_name || "",
+          email: activeStudent?.email || "",
+        },
+        courseName,
+        reviewQuestions,
+      });
+      await downloadScoreCardPdf(summary);
+      setNotice(`LearnForge Score Card PDF downloaded for "${test.title}".`);
+    } catch (err) {
+      setError(err.message || "Could not generate Score Card PDF.");
+    } finally {
+      setDownloadingScoreCardId("");
+    }
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
     const body = messageDraft.trim();
@@ -1144,7 +1184,9 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
           questions={currentQuestions}
           studentProfile={{
             full_name: activeStudent?.full_name || "",
+            email: activeStudent?.email || "",
           }}
+          courseName={currentTest.course_id ? coursesById[currentTest.course_id]?.name || "" : ""}
           initialAttempt={effectiveMode === "review" ? currentAttempt || activeReviewData?.attempt : null}
           initialReviewData={activeReviewData}
           initialStage={effectiveMode === "review" ? "review" : "precheck"}
@@ -1233,23 +1275,61 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                 <span>Marks pending evaluation · Will be released by administrator</span>
               </div>
             )}
-            {!test.external_url && (
+            {!test.external_url ? (
               <div className="proctor-attempt-card-footer">
                 <div className="proctor-attempt-meta">
                   <span><Clock3 size={12} /> {formatSeconds(attempt.time_taken_seconds)}</span>
                   <span><Monitor size={12} /> Switches: {attempt.tab_switch_count ?? 0}</span>
                   <span><Camera size={12} /> {attempt.camera_status || "Not Required"}</span>
                 </div>
-                <button
-                  type="button"
-                  className="button primary compact"
-                  disabled={busy}
-                  onClick={() => handleOpenCompletedReview(test)}
-                >
-                  <Eye size={13} />
-                  <span>{canShowMarks ? "View Marks & Answer Review" : "View Proctoring Summary"}</span>
-                </button>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  {canShowMarks && (
+                    <button
+                      type="button"
+                      className="button primary compact"
+                      disabled={downloadingScoreCardId === test.id}
+                      onClick={() => handleDownloadScoreCard(test, attempt)}
+                    >
+                      <Download size={13} />
+                      <span>
+                        {downloadingScoreCardId === test.id
+                          ? "Generating PDF…"
+                          : "Download Score Card (PDF)"}
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="button compact"
+                    disabled={busy}
+                    onClick={() => handleOpenCompletedReview(test)}
+                  >
+                    <Eye size={13} />
+                    <span>{canShowMarks ? "View Marks & Answer Review" : "View Proctoring Summary"}</span>
+                  </button>
+                </div>
               </div>
+            ) : (
+              canShowMarks && (
+                <div className="proctor-attempt-card-footer">
+                  <div className="proctor-attempt-meta">
+                    <span>LearnForge Verified Score Record</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="button primary compact"
+                    disabled={downloadingScoreCardId === test.id}
+                    onClick={() => handleDownloadScoreCard(test, attempt)}
+                  >
+                    <Download size={13} />
+                    <span>
+                      {downloadingScoreCardId === test.id
+                        ? "Generating PDF…"
+                        : "Download Score Card (PDF)"}
+                    </span>
+                  </button>
+                </div>
+              )
             )}
           </div>
         ) : test.external_url ? (
