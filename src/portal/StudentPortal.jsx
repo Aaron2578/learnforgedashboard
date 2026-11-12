@@ -1,15 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardList, Clock3, Code2,
+  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Camera, Check, CheckCircle2, ClipboardList, Clock3, Code2,
   Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
-  Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Paperclip, Plus, Send,
+  Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Monitor, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Trash2, Unlock, Upload, Users, X,
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
+import ProctoredExamRunner from "../components/ProctoredExamRunner";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
+import { formatSeconds } from "../lib/quizUtils.js";
 
 const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
@@ -137,7 +139,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const [messages, setMessages] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState("");
   const [selectedTest, setSelectedTest] = useState("");
-  const [answers, setAnswers] = useState({});
+  const [activeTestMode, setActiveTestMode] = useState(""); // "" | "exam" | "review"
+  const [activeReviewData, setActiveReviewData] = useState(null);
   const [submissionDraft, setSubmissionDraft] = useState(null);
   const [submissionModeByAssignment, setSubmissionModeByAssignment] = useState({});
   const [driveSubTab, setDriveSubTab] = useState("materials");
@@ -220,8 +223,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     ] = await Promise.all([
       supabase.from("assignments").select("id, title, description, due_at, course_id, total_marks, question_file_path, question_file_name, question_file_type, question_url, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
       supabase.from("assignment_submissions").select("id, assignment_id, answer_text, file_path, submission_type, submission_link, status, submitted_at, grade, feedback, graded_at").eq("student_id", studentId),
-      supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
-      supabase.from("assessment_attempts").select("id, assessment_id, score, max_score, submitted_at").eq("student_id", studentId),
+      supabase.from("assessments").select("id, title, description, due_at, external_url, file_path, show_marks, duration_minutes, require_camera, allow_camera_off, track_tab_switches, max_tab_switches, passing_percentage, created_at").eq("published", true).order("due_at", { ascending: true, nullsFirst: false }),
+      supabase.from("assessment_attempts").select("id, assessment_id, answers, score, max_score, submitted_at, student_name, roll_number, time_taken_seconds, tab_switch_count, camera_status, submission_reason, proctoring_log, percentage, passed").eq("student_id", studentId),
       supabase.from("conversations").select("id, subject, created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
       supabase.from("courses").select("id, name, code, description, department, instructor, schedule, room").order("name"),
       noteQuery,
@@ -243,7 +246,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     const loadedConversations = conversationResult.data ?? [];
     const [questionResult, messageResult] = await Promise.all([
       loadedTests.length
-        ? supabase.from("student_assessment_questions").select("id, assessment_id, prompt, options, points, sort_order").in("assessment_id", loadedTests.map((test) => test.id)).order("sort_order")
+        ? supabase.from("student_assessment_questions").select("id, assessment_id, external_id, prompt, options, points, sort_order").in("assessment_id", loadedTests.map((test) => test.id)).order("sort_order")
         : Promise.resolve({ data: [], error: null }),
       loadedConversations.length
         ? supabase.from("messages").select("id, conversation_id, sender_id, body, read_at, created_at").in("conversation_id", loadedConversations.map((conversation) => conversation.id)).order("created_at")
@@ -776,21 +779,22 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     }
   }
 
-  async function submitTest(event) {
-    event.preventDefault();
+  async function handleOpenCompletedReview(test) {
     setBusy(true);
     setError("");
-    const { data: result, error: submitError } = await supabase.rpc("submit_assessment", { p_assessment_id: selectedTest, p_answers: answers });
-    if (submitError) {
-      setError(submitError.message);
-    } else {
-      const attempt = Array.isArray(result) ? result[0] : result;
-      setNotice(`Test submitted. Your score is ${attempt.score} out of ${attempt.max_score}.`);
-      setSelectedTest("");
-      setAnswers({});
-      await loadPortal();
+    try {
+      const { data, error: revErr } = await supabase.rpc("get_assessment_review", {
+        p_assessment_id: test.id,
+      });
+      if (revErr) throw revErr;
+      setActiveReviewData(data);
+      setSelectedTest(test.id);
+      setActiveTestMode("review");
+    } catch (err) {
+      setError(err.message || "Could not load answer review.");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   async function sendMessage(event) {
@@ -1132,22 +1136,80 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   }
 
   function renderTests() {
-    if (currentTest && !currentAttempt) {
-      return <article className="card test-panel">
-        <button className="text-link" type="button" onClick={() => { setSelectedTest(""); setAnswers({}); }}>← All tests</button>
-        <div className="panel-heading test-heading"><div><div className="eyebrow">Online test</div><h2>{currentTest.title}</h2><p>{currentTest.description}</p></div><span className="day-label">{currentQuestions.length} questions</span></div>
-        {!currentQuestions.length ? <div className="form-error">This test does not have any questions yet. Contact your instructor.</div> : <form className="quiz-form" onSubmit={submitTest}>
-          {currentQuestions.map((question, index) => <fieldset className="quiz-question" key={question.id}><legend><span>{String(index + 1).padStart(2, "0")}</span>{question.prompt}<small>{question.points} {question.points === 1 ? "point" : "points"}</small></legend><div className="quiz-options">{question.options.map((option, optionIndex) => <label className="quiz-option" key={optionIndex}><input type="radio" name={question.id} required checked={answers[question.id] === optionIndex} onChange={() => setAnswers((current) => ({ ...current, [question.id]: optionIndex }))} /><span>{option}</span></label>)}</div></fieldset>)}
-          <div className="form-actions"><button className="button" type="button" onClick={() => { setSelectedTest(""); setAnswers({}); }}>Cancel</button><button className="button primary" disabled={busy || currentQuestions.some((question) => answers[question.id] === undefined)}><CheckCircle2 size={14} />{busy ? "Submitting…" : "Submit test"}</button></div>
-        </form>}
-      </article>;
+    if (currentTest && (activeTestMode === "exam" || activeTestMode === "review")) {
+      return (
+        <ProctoredExamRunner
+          assessment={currentTest}
+          questions={currentQuestions}
+          studentProfile={{
+            full_name: activeStudent?.full_name || "",
+          }}
+          initialAttempt={activeTestMode === "review" ? currentAttempt || activeReviewData?.attempt : null}
+          initialReviewData={activeReviewData}
+          initialStage={activeTestMode === "review" ? "review" : "precheck"}
+          previewMode={Boolean(isAdminPreview)}
+          supabase={supabase}
+          onSubmitted={async (summary) => {
+            setNotice(
+              summary.showMarks
+                ? `Exam submitted! Score: ${summary.score}/${summary.maxScore} (${summary.percentage}%).`
+                : "Exam submitted successfully."
+            );
+            await loadPortal();
+          }}
+          onClose={() => {
+            setSelectedTest("");
+            setActiveTestMode("");
+            setActiveReviewData(null);
+          }}
+        />
+      );
     }
+
     return <section className="portal-list">{filteredTests.map((test) => {
       const attempt = attemptByTest.get(test.id);
       const closed = isPast(test.due_at);
       const count = questions.filter((question) => question.assessment_id === test.id).length;
       return <article className="card portal-item" key={test.id}>
-        <div className="portal-item-heading"><span className="portal-item-icon test"><ClipboardList size={17} /></span><span className="portal-item-title"><strong>{test.title}</strong><small><CalendarClock size={12} />Due {dateLabel(test.due_at)} · {test.external_url ? "External test" : `${count} questions`}</small></span><span className={`portal-status ${attempt ? "submitted" : closed ? "overdue" : "pending"}`}>{attempt ? "Completed" : closed ? "Closed" : "Ready"}</span></div>
+        <div className="portal-item-heading">
+          <span className="portal-item-icon test"><ClipboardList size={17} /></span>
+          <span className="portal-item-title">
+            <strong>{test.title}</strong>
+            <small>
+              <CalendarClock size={12} />
+              Due {dateLabel(test.due_at)} · {test.external_url ? "External test link" : `${count} questions · ${test.duration_minutes || 30} mins`}
+            </small>
+          </span>
+          <span className={`portal-status ${attempt ? "submitted" : closed ? "overdue" : "pending"}`}>
+            {attempt ? "Completed" : closed ? "Closed" : "Ready"}
+          </span>
+        </div>
+
+        {!test.external_url && (
+          <div className="proctor-card-specs">
+            <span className="proctor-spec-chip">
+              <Clock3 size={12} /> {test.duration_minutes || 30}m Timer
+            </span>
+            <span className="proctor-spec-chip">
+              <Camera size={12} />{" "}
+              {test.require_camera
+                ? test.allow_camera_off
+                  ? "Webcam Required (Off Allowed)"
+                  : "Webcam Required (Locked ON)"
+                : "Webcam Not Required"}
+            </span>
+            <span className="proctor-spec-chip">
+              <Monitor size={12} />{" "}
+              {test.track_tab_switches !== false
+                ? `Max Tab Switches: ${test.max_tab_switches || 3}`
+                : "Tab Tracking Off"}
+            </span>
+            <span className="proctor-spec-chip">
+              <ShieldCheck size={12} /> Pass: {test.passing_percentage || 50}%
+            </span>
+          </div>
+        )}
+
         {test.description && <p className="portal-description">{test.description}</p>}
         {attempt ? (
           <div className="test-completion-card">
@@ -1161,12 +1223,30 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
               <div className="test-score" style={{ marginTop: "6px" }}>
                 <CheckCircle2 size={15} />
                 <strong>Score: {attempt.score} / {attempt.max_score} ({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</strong>
-                <span className="marks-verified-tag">Marks Released by Admin</span>
+                <span className="marks-verified-tag">Marks Released</span>
               </div>
             ) : (
               <div className="test-marks-pending">
                 <Lock size={13} />
                 <span>Marks pending evaluation · Will be released by administrator</span>
+              </div>
+            )}
+            {!test.external_url && (
+              <div className="proctor-attempt-card-footer">
+                <div className="proctor-attempt-meta">
+                  <span><Clock3 size={12} /> {formatSeconds(attempt.time_taken_seconds)}</span>
+                  <span><Monitor size={12} /> Switches: {attempt.tab_switch_count ?? 0}</span>
+                  <span><Camera size={12} /> {attempt.camera_status || "Not Required"}</span>
+                </div>
+                <button
+                  type="button"
+                  className="button primary compact"
+                  disabled={busy}
+                  onClick={() => handleOpenCompletedReview(test)}
+                >
+                  <Eye size={13} />
+                  <span>{test.show_marks ? "View Result & Answer Review" : "View Proctoring Summary"}</span>
+                </button>
               </div>
             )}
           </div>
@@ -1210,8 +1290,17 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
             )}
           </div>
         ) : (
-          <button className="button" type="button" disabled={closed} onClick={() => { setSelectedTest(test.id); setAnswers({}); }}>
-            {closed ? "Test closed" : "Start test"}
+          <button
+            className="button primary"
+            type="button"
+            disabled={closed}
+            onClick={() => {
+              setSelectedTest(test.id);
+              setActiveTestMode("exam");
+              setActiveReviewData(null);
+            }}
+          >
+            {closed ? "Test closed" : "Start Proctored Exam"}
             <ArrowRight size={14} />
           </button>
         )}

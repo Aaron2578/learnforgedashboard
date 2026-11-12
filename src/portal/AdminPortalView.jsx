@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ArrowRight, Award, BookOpen, CalendarClock, CheckCircle2, ClipboardList,
+  AlertCircle, ArrowRight, Award, BookOpen, CalendarClock, Camera, CheckCircle2, ClipboardList,
   Clock, Clock3, Download, ExternalLink, Eye, EyeOff, FileText, Mail, MapPin, MessageSquare,
-  Paperclip, Pencil, Plus, Send, Trash2, Users, X,
+  Monitor, Paperclip, Pencil, Play, Plus, Send, ShieldCheck, Trash2, Users, X,
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import { uploadDocumentAttachment, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
+import { formatSeconds, syncAssessmentQuestions, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditAssignmentModal from "../components/EditAssignmentModal";
 import EditTestModal from "../components/EditTestModal";
+import ProctoredQuizConfigPanel from "../components/ProctoredQuizConfigPanel";
+import ProctoredExamRunner from "../components/ProctoredExamRunner";
 
 function prettyDate(value, fallback = "No deadline") {
   if (!value) return fallback;
@@ -95,28 +98,63 @@ function AdminTestForm({ onCancel, onCreate, busy, students }) {
   const [description, setDescription] = useState("");
   const [testType, setTestType] = useState("built_in");
   const [externalUrl, setExternalUrl] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [options, setOptions] = useState(["", "", "", ""]);
-  const [correctIndex, setCorrectIndex] = useState(0);
+  const [rawJson, setRawJson] = useState("");
+  const [proctorSettings, setProctorSettings] = useState({
+    durationMinutes: 30,
+    requireCamera: false,
+    allowCameraOff: false,
+    trackTabSwitches: true,
+    maxTabSwitches: 3,
+    passingPercentage: 50,
+    showMarks: true,
+  });
   const [due, setDue] = useState("");
   const [recipientIds, setRecipientIds] = useState(() => students.map((s) => s.id));
-  function changeOption(index, value) {
-    setOptions((current) => current.map((option, currentIndex) => currentIndex === index ? value : option));
-  }
-  return <form className="card admin-create-form" onSubmit={(event) => {
+  const [localError, setLocalError] = useState("");
+
+  function handleSubmit(event) {
     event.preventDefault();
-    onCreate({ title: title.trim(), description: description.trim(), testType, externalUrl: externalUrl.trim(), prompt: prompt.trim(), options: options.map((option) => option.trim()), correctIndex, due, recipientIds });
-  }}>
-    <div className="panel-heading"><div><h2>Create a test</h2><p>Use a built-in multiple-choice test or an external test link.</p></div></div>
-    <label className="form-field"><span>Test title</span><input required maxLength={150} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Biology chapter 1 quiz" /></label>
+    setLocalError("");
+
+    let questions = [];
+    if (testType === "built_in") {
+      const check = validateAndNormalizeQuizJson(rawJson);
+      if (!check.valid) {
+        setLocalError(check.errors[0] || "Fix JSON validation errors before publishing.");
+        return;
+      }
+      questions = check.questions;
+    }
+
+    onCreate({
+      title: title.trim(),
+      description: description.trim(),
+      testType,
+      externalUrl: externalUrl.trim(),
+      questions,
+      proctoring: proctorSettings,
+      due,
+      recipientIds,
+    });
+  }
+
+  return <form className="card admin-create-form" onSubmit={handleSubmit}>
+    <div className="panel-heading"><div><h2>Create a test</h2><p>Configure a proctored JSON quiz with webcam/tab rules, or attach an external test link.</p></div></div>
+    {localError && <div className="portal-alert error" style={{ marginBottom: "12px" }}>{localError}<button type="button" onClick={() => setLocalError("")}>Dismiss</button></div>}
+    <label className="form-field"><span>Test title</span><input required maxLength={150} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Biology chapter 1 proctored quiz" /></label>
     <label className="form-field"><span>Instructions</span><textarea rows="2" maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Optional instructions for students" /></label>
-    <label className="form-field"><span>Test type</span><select value={testType} onChange={(event) => setTestType(event.target.value)}><option value="built_in">Built-in multiple choice</option><option value="external">External test link</option></select></label>
-    {testType === "external" ? <label className="form-field"><span>External test URL</span><input type="url" required pattern="https://.*" value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="https://…" /></label> : <>
-      <label className="form-field"><span>Question</span><textarea required rows="2" maxLength={1000} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Write the question" /></label>
-      <fieldset className="admin-options"><legend>Answer choices <small>Select the correct answer</small></legend>
-        {options.map((option, index) => <label className="admin-option" key={index}><input type="radio" name="correct-answer" checked={correctIndex === index} onChange={() => setCorrectIndex(index)} aria-label={`Mark choice ${index + 1} correct`} /><span>{String.fromCharCode(65 + index)}</span><input required maxLength={500} value={option} onChange={(event) => changeOption(index, event.target.value)} placeholder={`Choice ${index + 1}`} /></label>)}
-      </fieldset>
-    </>}
+    <label className="form-field"><span>Test delivery method</span><select value={testType} onChange={(event) => setTestType(event.target.value)}><option value="built_in">Proctored Built-in Quiz (JSON Question Bank)</option><option value="external">External test link (Google Forms / LMS)</option></select></label>
+    {testType === "external" ? <label className="form-field"><span>External test URL</span><input type="url" required pattern="https://.*" value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="https://…" /></label> : (
+      <ProctoredQuizConfigPanel
+        rawJson={rawJson}
+        onRawJsonChange={(val) => {
+          setLocalError("");
+          setRawJson(val);
+        }}
+        settings={proctorSettings}
+        onSettingsChange={setProctorSettings}
+      />
+    )}
     <label className="form-field"><span>Due date (optional)</span><input type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} /></label>
     <StudentRecipients students={students} selected={recipientIds} onChange={setRecipientIds} />
     <div className="form-actions"><button className="button" type="button" onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy}><Plus size={14} />{busy ? "Publishing…" : "Publish test"}</button></div>
@@ -141,6 +179,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
   const [editingAssignment, setEditingAssignment] = useState(null);
   const [editingTest, setEditingTest] = useState(null);
   const [previewTest, setPreviewTest] = useState(null);
+  const [previewQuiz, setPreviewQuiz] = useState(null);
   const [testCohortFilter, setTestCohortFilter] = useState({});
   const [gradingModal, setGradingModal] = useState(null);
   const [gradingSubmitting, setGradingSubmitting] = useState(false);
@@ -178,8 +217,8 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       }
     } else if (view === "Tests") {
       const [testResult, attemptResult, studentResult, recipientResult] = await Promise.all([
-        supabase.from("assessments").select("id, title, description, due_at, external_url, show_marks, created_at").order("created_at", { ascending: false }),
-        supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").order("submitted_at", { ascending: false }),
+        supabase.from("assessments").select("id, title, description, due_at, external_url, show_marks, duration_minutes, require_camera, allow_camera_off, track_tab_switches, max_tab_switches, passing_percentage, total_marks, created_at").order("created_at", { ascending: false }),
+        supabase.from("assessment_attempts").select("id, assessment_id, student_id, answers, score, max_score, submitted_at, student_name, roll_number, time_taken_seconds, tab_switch_count, camera_status, submission_reason, proctoring_log, percentage, passed").order("submitted_at", { ascending: false }),
         supabase.from("profiles").select("id, full_name, email").eq("role", "student").eq("is_approved", true),
         supabase.from("assessment_recipients").select("assessment_id, student_id"),
       ]);
@@ -357,6 +396,29 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(false);
   }
 
+  async function handleOpenQuizRunner(test, attemptOverride = null, studentOverride = null) {
+    setError("");
+    setBusy(true);
+    try {
+      const { data: qRows, error: qErr } = await supabase
+        .from("assessment_questions")
+        .select("id, assessment_id, external_id, prompt, options, correct_index, explanation, points, sort_order")
+        .eq("assessment_id", test.id)
+        .order("sort_order", { ascending: true });
+      if (qErr) throw qErr;
+      setPreviewQuiz({
+        test,
+        questions: qRows ?? [],
+        attempt: attemptOverride,
+        student: studentOverride,
+      });
+    } catch (err) {
+      setError(err.message || "Could not load quiz questions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createTest(form) {
     if (!form.recipientIds.length) {
       setError("Select at least one approved student for this test.");
@@ -368,7 +430,17 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
         setError("External test URLs must use HTTPS.");
         return;
       }
+    } else if (!form.questions?.length) {
+      setError("Add at least 1 valid multiple-choice question in the JSON editor.");
+      return;
     }
+
+    const proctoring = form.proctoring || {};
+    const totalPoints =
+      form.testType === "built_in"
+        ? form.questions.reduce((acc, q) => acc + (q.points || 1), 0)
+        : 100;
+
     setBusy(true);
     setError("");
     const { data: createdTest, error: insertError } = await supabase.from("assessments").insert({
@@ -376,6 +448,14 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       description: form.description,
       due_at: form.due ? new Date(form.due).toISOString() : null,
       external_url: form.testType === "external" ? form.externalUrl : null,
+      duration_minutes: Number(proctoring.durationMinutes) || 30,
+      require_camera: Boolean(proctoring.requireCamera),
+      allow_camera_off: Boolean(proctoring.requireCamera && proctoring.allowCameraOff),
+      track_tab_switches: proctoring.trackTabSwitches !== false,
+      max_tab_switches: Number(proctoring.maxTabSwitches) || 3,
+      passing_percentage: Number(proctoring.passingPercentage) || 50,
+      show_marks: proctoring.showMarks !== undefined ? Boolean(proctoring.showMarks) : true,
+      total_marks: totalPoints,
       created_by: user.id,
       published: true,
     }).select("id").single();
@@ -386,15 +466,11 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     }
     let questionError = null;
     if (form.testType === "built_in") {
-      const result = await supabase.from("assessment_questions").insert({
-        assessment_id: createdTest.id,
-        prompt: form.prompt,
-        options: form.options,
-        correct_index: form.correctIndex,
-        points: 1,
-        sort_order: 0,
-      });
-      questionError = result.error;
+      try {
+        await syncAssessmentQuestions(supabase, createdTest.id, form.questions);
+      } catch (qErr) {
+        questionError = qErr;
+      }
     }
     const { error: targetError } = questionError
       ? { error: null }
@@ -598,33 +674,30 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(true);
     setError("");
     try {
+      const proctoring = form.proctoring || {};
+      const totalPoints =
+        form.testType === "built_in" && Array.isArray(form.questions) && form.questions.length > 0
+          ? form.questions.reduce((acc, q) => acc + (q.points || 1), 0)
+          : 100;
+
       const { error: updateError } = await supabase.from("assessments").update({
         title: form.title.trim(),
         description: form.description.trim(),
         due_at: form.due ? new Date(form.due).toISOString() : null,
         external_url: form.testType === "external" ? form.externalUrl.trim() : null,
+        duration_minutes: Number(proctoring.durationMinutes) || 30,
+        require_camera: Boolean(proctoring.requireCamera),
+        allow_camera_off: Boolean(proctoring.requireCamera && proctoring.allowCameraOff),
+        track_tab_switches: proctoring.trackTabSwitches !== false,
+        max_tab_switches: Number(proctoring.maxTabSwitches) || 3,
+        passing_percentage: Number(proctoring.passingPercentage) || 50,
+        total_marks: totalPoints,
         show_marks: form.showMarks !== undefined ? Boolean(form.showMarks) : false,
       }).eq("id", testId);
       if (updateError) throw updateError;
 
-      if (form.testType === "built_in" && form.prompt) {
-        const { data: existingQ } = await supabase.from("assessment_questions").select("id").eq("assessment_id", testId).limit(1);
-        if (existingQ && existingQ.length > 0) {
-          await supabase.from("assessment_questions").update({
-            prompt: form.prompt,
-            options: form.options,
-            correct_index: form.correctIndex,
-          }).eq("id", existingQ[0].id);
-        } else {
-          await supabase.from("assessment_questions").insert({
-            assessment_id: testId,
-            prompt: form.prompt,
-            options: form.options,
-            correct_index: form.correctIndex,
-            points: 1,
-            sort_order: 0,
-          });
-        }
+      if (form.testType === "built_in" && Array.isArray(form.questions) && form.questions.length > 0) {
+        await syncAssessmentQuestions(supabase, testId, form.questions);
       }
 
       if (form.recipientIds) {
@@ -827,7 +900,21 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
         </article>;
       })}
       {!filteredAssignments.length && <div className="card portal-empty"><BookOpen size={22} /><strong>No assignments found</strong><span>Publish an assignment for your students to get started.</span></div>}
-    </section> : view === "Tests" ? <section className="admin-work-list">
+    </section> : view === "Tests" && previewQuiz ? (
+      <ProctoredExamRunner
+        assessment={previewQuiz.test}
+        questions={previewQuiz.questions}
+        studentProfile={
+          previewQuiz.student
+            ? { full_name: previewQuiz.student.full_name || previewQuiz.student.email }
+            : { full_name: user?.email?.split("@")[0] || "Admin Preview", roll_number: "ADMIN-PREVIEW" }
+        }
+        initialAttempt={previewQuiz.attempt || null}
+        initialStage={previewQuiz.attempt ? "review" : "precheck"}
+        previewMode={true}
+        onClose={() => setPreviewQuiz(null)}
+      />
+    ) : view === "Tests" ? <section className="admin-work-list">
       {filteredTests.map((test) => {
         const recipientIds = assessmentRecipients[test.id] ?? [];
         const eligible = recipientIds.length > 0
@@ -871,10 +958,38 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
                   <small>
                     <CalendarClock size={12} />
                     Due {prettyDate(test.due_at)} · {fullRoster.length} assigned / can attend
+                    {!test.external_url && (
+                      <>
+                        {" · "}
+                        {test.duration_minutes || 30}m Timer
+                        {" · "}
+                        {test.require_camera
+                          ? test.allow_camera_off
+                            ? "Camera Required (Off Permitted)"
+                            : "Camera Locked ON"
+                          : "Camera Off"}
+                        {" · "}
+                        {test.track_tab_switches !== false
+                          ? `Tab Limit: ${test.max_tab_switches || 3}`
+                          : "Tab Tracking Off"}
+                      </>
+                    )}
                   </small>
                 </div>
               </div>
               <div className="heading-actions">
+                {!test.external_url && (
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleOpenQuizRunner(test)}
+                    title="Launch & test this proctored quiz in Preview Mode"
+                  >
+                    <Play size={13} />
+                    <span>Launch / Preview Quiz</span>
+                  </button>
+                )}
                 {test.external_url && (
                   <button
                     className="button compact"
@@ -1029,10 +1144,20 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
 
                       <div className="cohort-student-score">
                         {isCompleted ? (
-                          <div className="test-score">
-                            <CheckCircle2 size={14} />
-                            <strong>{attempt.score} / {attempt.max_score}</strong>
-                            <small>({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</small>
+                          <div>
+                            <div className="test-score">
+                              <CheckCircle2 size={14} />
+                              <strong>{attempt.score} / {attempt.max_score}</strong>
+                              <small>({Math.round((attempt.score / (attempt.max_score || 100)) * 100)}%)</small>
+                            </div>
+                            {!test.external_url && (
+                              <div className="proctor-attempt-meta">
+                                {attempt.roll_number && <span>ID: {attempt.roll_number}</span>}
+                                <span><Clock size={11} /> {formatSeconds(attempt.time_taken_seconds)}</span>
+                                <span><Monitor size={11} /> Switches: {attempt.tab_switch_count ?? 0}</span>
+                                <span><Camera size={11} /> {attempt.camera_status || "Off"}</span>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <span className="no-score-label">—</span>
@@ -1049,23 +1174,37 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
 
                       <div className="cohort-student-actions">
                         {isCompleted ? (
-                          <button
-                            className="button compact"
-                            type="button"
-                            onClick={() =>
-                              setGradingModal({
-                                test,
-                                student,
-                                score: attempt.score,
-                                maxScore: attempt.max_score,
-                                isEdit: true,
-                              })
-                            }
-                            title="Edit exam score"
-                          >
-                            <Pencil size={12} />
-                            <span>Edit Score</span>
-                          </button>
+                          <>
+                            {!test.external_url && (
+                              <button
+                                className="button compact"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleOpenQuizRunner(test, attempt, student)}
+                                title="Inspect student answer review & proctoring log"
+                              >
+                                <ShieldCheck size={12} />
+                                <span>Review &amp; Log</span>
+                              </button>
+                            )}
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() =>
+                                setGradingModal({
+                                  test,
+                                  student,
+                                  score: attempt.score,
+                                  maxScore: attempt.max_score,
+                                  isEdit: true,
+                                })
+                              }
+                              title="Edit exam score"
+                            >
+                              <Pencil size={12} />
+                              <span>Edit Score</span>
+                            </button>
+                          </>
                         ) : (
                           <>
                             <button

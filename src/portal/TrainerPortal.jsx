@@ -5,6 +5,7 @@ import {
   BookOpen,
   CalendarCheck,
   CalendarClock,
+  Camera,
   Check,
   CheckCircle2,
   ClipboardList,
@@ -27,8 +28,10 @@ import {
   MapPin,
   Menu,
   MessageSquare,
+  Monitor,
   Paperclip,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -46,9 +49,12 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
+import ProctoredQuizConfigPanel from "../components/ProctoredQuizConfigPanel";
+import ProctoredExamRunner from "../components/ProctoredExamRunner";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, uploadDocumentAttachment, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
+import { formatSeconds, syncAssessmentQuestions, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
 
 const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
@@ -172,6 +178,18 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [testTotalMarks, setTestTotalMarks] = useState(100);
   const [testDuration, setTestDuration] = useState(60);
   const [testExternalUrl, setTestExternalUrl] = useState("");
+  const [testDeliveryType, setTestDeliveryType] = useState("built_in");
+  const [testRawJson, setTestRawJson] = useState("");
+  const [testProctorSettings, setTestProctorSettings] = useState({
+    durationMinutes: 30,
+    requireCamera: false,
+    allowCameraOff: false,
+    trackTabSwitches: true,
+    maxTabSwitches: 3,
+    passingPercentage: 50,
+    showMarks: true,
+  });
+  const [previewingTrainerQuiz, setPreviewingTrainerQuiz] = useState(null);
 
   // Gradebook State
   const [gradebookCourseFilter, setGradebookCourseFilter] = useState("all");
@@ -279,7 +297,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         supabase.from("assessments").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("assessment_recipients").select("assessment_id, student_id").then((r) => r.error ? { data: [] } : r),
         supabase.from("material_recipients").select("material_id, student_id").then((r) => r.error ? { data: [] } : r),
-        supabase.from("assessment_attempts").select("id, assessment_id, student_id, score, max_score, submitted_at").then((r) => r.error ? { data: [] } : r),
+        supabase.from("assessment_attempts").select("id, assessment_id, student_id, answers, score, max_score, submitted_at, student_name, roll_number, time_taken_seconds, tab_switch_count, camera_status, submission_reason, proctoring_log, percentage, passed").then((r) => r.error ? { data: [] } : r),
         supabase.from("assignments").select("*").order("created_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("assignment_submissions").select("*").order("submitted_at", { ascending: false }).then((r) => r.error ? { data: [] } : r),
         supabase.from("assignment_recipients").select("*").then((r) => r.error ? { data: [] } : r),
@@ -1280,19 +1298,63 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // ----------------------------------------------------
   // Actions: Tests & Quizzes
   // ----------------------------------------------------
+  async function handleTrainerOpenQuizPreview(test, attemptOverride = null, studentOverride = null) {
+    setError("");
+    setBusy(true);
+    try {
+      const { data: qRows, error: qErr } = await supabase
+        .from("assessment_questions")
+        .select("id, assessment_id, external_id, prompt, options, correct_index, explanation, points, sort_order")
+        .eq("assessment_id", test.id)
+        .order("sort_order", { ascending: true });
+      if (qErr) throw qErr;
+      setPreviewingTrainerQuiz({
+        test,
+        questions: qRows ?? [],
+        attempt: attemptOverride,
+        student: studentOverride,
+      });
+    } catch (err) {
+      setError(err.message || "Could not load quiz questions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleCreateTest(e) {
     e.preventDefault();
     if (!testTitle.trim()) {
       setError("Test title is required.");
       return;
     }
+
+    let validatedQuestions = [];
+    if (testDeliveryType === "external") {
+      if (!/^https?:\/\//i.test(testExternalUrl.trim())) {
+        setError("External exam link must start with https:// or http://.");
+        return;
+      }
+    } else {
+      const check = validateAndNormalizeQuizJson(testRawJson);
+      if (!check.valid) {
+        setError(check.errors[0] || "Fix JSON validation errors before publishing.");
+        return;
+      }
+      validatedQuestions = check.questions;
+    }
+
     setBusy(true);
     setError("");
 
     try {
-      const targetStudents = testTargetStudentIds.length > 0 
-        ? testTargetStudentIds 
+      const targetStudents = testTargetStudentIds.length > 0
+        ? testTargetStudentIds
         : Array.from(myAssignedStudentIds);
+
+      const isBuiltIn = testDeliveryType === "built_in";
+      const totalPoints = isBuiltIn
+        ? validatedQuestions.reduce((acc, q) => acc + (q.points || 1), 0)
+        : Number(testTotalMarks) || 100;
 
       const { data: newTest, error: testErr } = await supabase
         .from("assessments")
@@ -1301,9 +1363,19 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           description: testDescription.trim(),
           course_id: testCourseId || null,
           trainer_id: activeTrainerId,
-          total_marks: Number(testTotalMarks) || 100,
-          duration_minutes: Number(testDuration) || 60,
-          external_url: testExternalUrl.trim() || null,
+          total_marks: totalPoints,
+          duration_minutes: isBuiltIn
+            ? Number(testProctorSettings.durationMinutes) || 30
+            : Number(testDuration) || 60,
+          external_url: isBuiltIn ? null : testExternalUrl.trim(),
+          require_camera: isBuiltIn ? Boolean(testProctorSettings.requireCamera) : false,
+          allow_camera_off: isBuiltIn
+            ? Boolean(testProctorSettings.requireCamera && testProctorSettings.allowCameraOff)
+            : false,
+          track_tab_switches: isBuiltIn ? testProctorSettings.trackTabSwitches !== false : false,
+          max_tab_switches: isBuiltIn ? Number(testProctorSettings.maxTabSwitches) || 3 : 3,
+          passing_percentage: isBuiltIn ? Number(testProctorSettings.passingPercentage) || 50 : 50,
+          show_marks: isBuiltIn ? Boolean(testProctorSettings.showMarks) : false,
           published: true,
           created_by: user.id,
         })
@@ -1311,6 +1383,10 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
         .single();
 
       if (testErr) throw testErr;
+
+      if (isBuiltIn && newTest) {
+        await syncAssessmentQuestions(supabase, newTest.id, validatedQuestions);
+      }
 
       if (newTest && targetStudents.length > 0) {
         await supabase.from("assessment_recipients").insert(
@@ -1329,6 +1405,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setTestTotalMarks(100);
       setTestDuration(60);
       setTestExternalUrl("");
+      setTestDeliveryType("built_in");
+      setTestRawJson("");
       setTestTargetStudentIds([]);
       loadTrainerData(false);
     } catch (err) {
@@ -4181,6 +4259,24 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // Tab 5: Tests & Assessments
   // ----------------------------------------------------
   function renderTests() {
+    if (previewingTrainerQuiz) {
+      return (
+        <ProctoredExamRunner
+          assessment={previewingTrainerQuiz.test}
+          questions={previewingTrainerQuiz.questions}
+          studentProfile={
+            previewingTrainerQuiz.student
+              ? { full_name: previewingTrainerQuiz.student.full_name || previewingTrainerQuiz.student.email }
+              : { full_name: activeTrainer?.full_name || "Trainer Preview", roll_number: "TRAINER-PREVIEW" }
+          }
+          initialAttempt={previewingTrainerQuiz.attempt || null}
+          initialStage={previewingTrainerQuiz.attempt ? "review" : "precheck"}
+          previewMode={true}
+          onClose={() => setPreviewingTrainerQuiz(null)}
+        />
+      );
+    }
+
     const filteredTests = myTrainerAssessments.filter((a) => {
       if (!query.trim()) return true;
       const q = query.trim().toLowerCase();
@@ -4216,6 +4312,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 setTestTotalMarks(100);
                 setTestDuration(60);
                 setTestExternalUrl("");
+                setTestDeliveryType("built_in");
+                setTestRawJson("");
+                setTestProctorSettings({
+                  durationMinutes: 30,
+                  requireCamera: false,
+                  allowCameraOff: false,
+                  trackTabSwitches: true,
+                  maxTabSwitches: 3,
+                  passingPercentage: 50,
+                  showMarks: true,
+                });
                 setTestTargetStudentIds(Array.from(myAssignedStudentIds));
                 setShowCreateTestModal(true);
               }}
@@ -4310,28 +4417,67 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       <CalendarClock size={13} />
                       <span>Due {test.due_at ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(test.due_at)) : "Open deadline"}</span>
                     </div>
-                    {test.external_url && (
+                    {test.external_url ? (
                       <span className="badge" style={{ fontSize: "11px", background: "#fdf4ff", color: "#9333ea" }}>
                         External Exam Link
                       </span>
+                    ) : (
+                      <>
+                        <span className="proctor-spec-chip">
+                          <Clock3 size={11} /> {test.duration_minutes || 30}m
+                        </span>
+                        <span className="proctor-spec-chip">
+                          <Camera size={11} />{" "}
+                          {test.require_camera
+                            ? test.allow_camera_off
+                              ? "Cam (Off Allowed)"
+                              : "Cam Locked ON"
+                            : "No Cam"}
+                        </span>
+                        <span className="proctor-spec-chip">
+                          <Monitor size={11} />{" "}
+                          {test.track_tab_switches !== false
+                            ? `Tab Limit: ${test.max_tab_switches || 3}`
+                            : "Tab Tracking Off"}
+                        </span>
+                      </>
                     )}
                   </div>
 
                   {/* Student Submissions List for this test */}
                   {testAttemptsForMyStudents.length > 0 && (
-                    <div style={{ marginTop: "10px", padding: "10px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                    <div style={{ marginTop: "10px", padding: "10px", background: "var(--canvas)", borderRadius: "8px", border: "1px solid var(--line)" }}>
                       <strong style={{ fontSize: "11.5px", color: "var(--muted)", textTransform: "uppercase", display: "block", marginBottom: "6px" }}>
                         Recent Student Submissions ({testAttemptsForMyStudents.length})
                       </strong>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                         {testAttemptsForMyStudents.map((att) => {
                           const s = studentsById[att.student_id];
                           return (
-                            <div key={att.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
-                              <span style={{ fontWeight: 600, color: "var(--ink)" }}>{s?.full_name || s?.email || "Student"}</span>
-                              <span className="badge green" style={{ fontSize: "11px", padding: "1px 6px" }}>
-                                {att.score} / {att.max_score} pts ({Math.round((att.score / (att.max_score || 100)) * 100)}%)
-                              </span>
+                            <div key={att.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", fontSize: "12px", flexWrap: "wrap" }}>
+                              <div>
+                                <span style={{ fontWeight: 600, color: "var(--ink)" }}>{s?.full_name || s?.email || "Student"}</span>
+                                {!test.external_url && (
+                                  <small style={{ display: "block", color: "var(--muted)", fontSize: "11px" }}>
+                                    {formatSeconds(att.time_taken_seconds)} · Switches: {att.tab_switch_count ?? 0} · {att.camera_status || "Off"}
+                                  </small>
+                                )}
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <span className="badge green" style={{ fontSize: "11px", padding: "1px 6px" }}>
+                                  {att.score} / {att.max_score} pts ({Math.round((att.score / (att.max_score || 100)) * 100)}%)
+                                </span>
+                                {!test.external_url && (
+                                  <button
+                                    type="button"
+                                    className="button compact"
+                                    style={{ minHeight: "24px", padding: "2px 7px", fontSize: "11px" }}
+                                    onClick={() => handleTrainerOpenQuizPreview(test, att, s)}
+                                  >
+                                    Review
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -4340,7 +4486,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   )}
                 </div>
 
-                <div className="card-actions" style={{ display: "flex", gap: "8px", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                <div className="card-actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "14px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
                   <button
                     className="button primary compact"
                     type="button"
@@ -4357,7 +4503,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                     <Users size={13} /> Manage / Assign Students
                   </button>
 
-                  {test.external_url && (
+                  {test.external_url ? (
                     <button
                       className="button compact"
                       type="button"
@@ -4370,6 +4516,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       }
                     >
                       <Eye size={13} /> Preview
+                    </button>
+                  ) : (
+                    <button
+                      className="button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleTrainerOpenQuizPreview(test)}
+                    >
+                      <Play size={13} /> Preview Quiz
                     </button>
                   )}
 
@@ -6194,15 +6349,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       {/* Create Test Modal */}
       {showCreateTestModal && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShowCreateTestModal(false); }}>
-          <div className="modal" style={{ maxWidth: "580px" }}>
+          <div className="modal" style={{ maxWidth: testDeliveryType === "built_in" ? "820px" : "600px" }}>
             <div className="modal-heading">
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 <span className="portal-item-icon test" style={{ width: "38px", height: "38px", background: "#f5f3ff", color: "#7c3aed" }}>
                   <ClipboardList size={18} />
                 </span>
                 <div>
-                  <h2 style={{ margin: 0 }}>Create New Assessment / Test</h2>
-                  <p style={{ margin: 0 }}>Set up quizzes, practical evaluations, and exams for your students.</p>
+                  <h2 style={{ margin: 0 }}>Create New Assessment / Proctored Test</h2>
+                  <p style={{ margin: 0 }}>Build a proctored JSON quiz with camera/tab controls or link an external exam.</p>
                 </div>
               </div>
               <button type="button" className="quiet-icon" onClick={() => setShowCreateTestModal(false)}><X size={18} /></button>
@@ -6213,7 +6368,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 <span>Test / Assessment Title *</span>
                 <input
                   required
-                  placeholder="e.g. Midterm Evaluation, SAP FICO Final Exam"
+                  placeholder="e.g. Midterm Evaluation, SAP FICO Proctored Quiz"
                   value={testTitle}
                   onChange={(e) => setTestTitle(e.target.value)}
                 />
@@ -6236,49 +6391,71 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 </label>
 
                 <label className="form-field">
-                  <span>Total Marks</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="1000"
-                    value={testTotalMarks}
-                    onChange={(e) => setTestTotalMarks(e.target.value)}
-                  />
-                </label>
-              </div>
-
-              <div className="form-grid-2" style={{ marginTop: "12px" }}>
-                <label className="form-field">
-                  <span>Duration (Minutes)</span>
-                  <input
-                    type="number"
-                    min="5"
-                    max="360"
-                    value={testDuration}
-                    onChange={(e) => setTestDuration(e.target.value)}
-                  />
-                </label>
-
-                <label className="form-field">
-                  <span>External Exam Link (Optional)</span>
-                  <input
-                    type="url"
-                    placeholder="https://forms.google.com/..."
-                    value={testExternalUrl}
-                    onChange={(e) => setTestExternalUrl(e.target.value)}
-                  />
+                  <span>Delivery Method</span>
+                  <select
+                    value={testDeliveryType}
+                    onChange={(e) => setTestDeliveryType(e.target.value)}
+                  >
+                    <option value="built_in">Proctored Built-in Quiz (JSON Question Bank)</option>
+                    <option value="external">External Exam Link (Google Forms / LMS)</option>
+                  </select>
                 </label>
               </div>
 
               <label className="form-field" style={{ marginTop: "12px" }}>
                 <span>Test Description &amp; Instructions</span>
                 <textarea
-                  rows={3}
+                  rows={2}
                   placeholder="Enter assessment syllabus, rules, and evaluation guidelines..."
                   value={testDescription}
                   onChange={(e) => setTestDescription(e.target.value)}
                 />
               </label>
+
+              {testDeliveryType === "external" ? (
+                <div className="form-grid-3" style={{ marginTop: "12px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
+                  <label className="form-field">
+                    <span>Total Marks</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="1000"
+                      value={testTotalMarks}
+                      onChange={(e) => setTestTotalMarks(e.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>Duration (Minutes)</span>
+                    <input
+                      type="number"
+                      min="5"
+                      max="360"
+                      value={testDuration}
+                      onChange={(e) => setTestDuration(e.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>External Exam Link *</span>
+                    <input
+                      type="url"
+                      required
+                      placeholder="https://forms.google.com/..."
+                      value={testExternalUrl}
+                      onChange={(e) => setTestExternalUrl(e.target.value)}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div style={{ marginTop: "14px" }}>
+                  <ProctoredQuizConfigPanel
+                    rawJson={testRawJson}
+                    onRawJsonChange={setTestRawJson}
+                    settings={testProctorSettings}
+                    onSettingsChange={setTestProctorSettings}
+                    compact={true}
+                  />
+                </div>
+              )}
 
               <div style={{ marginTop: "14px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
