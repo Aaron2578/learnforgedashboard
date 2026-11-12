@@ -284,7 +284,7 @@ function safeFileSlug(text = "exam-result") {
 }
 
 export function exportExamResultJson(summary) {
-  const slug = safeFileSlug(`${summary.examTitle}-${summary.rollNumber || summary.studentName || "result"}`);
+  const slug = safeFileSlug(`${summary.examTitle}-${summary.studentName || "result"}`);
   triggerBlobDownload(`${slug}-result.json`, JSON.stringify(summary, null, 2), "application/json;charset=utf-8");
 }
 
@@ -301,7 +301,6 @@ export function exportExamResultCsv(summary) {
     ["Exam Result Summary"],
     ["Exam Title", summary.examTitle],
     ["Student Name", summary.studentName || ""],
-    ["Roll Number", summary.rollNumber || ""],
     ["Submitted At", summary.submittedAt || ""],
     ["Score", summary.showMarks ? `${summary.score} / ${summary.maxScore}` : "Hidden by Admin"],
     ["Percentage", summary.showMarks ? `${summary.percentage}%` : "Hidden by Admin"],
@@ -348,7 +347,7 @@ export function exportExamResultCsv(summary) {
   }
 
   const csvContent = lines.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n");
-  const slug = safeFileSlug(`${summary.examTitle}-${summary.rollNumber || summary.studentName || "result"}`);
+  const slug = safeFileSlug(`${summary.examTitle}-${summary.studentName || "result"}`);
   triggerBlobDownload(`${slug}-result.csv`, csvContent, "text/csv;charset=utf-8");
 }
 

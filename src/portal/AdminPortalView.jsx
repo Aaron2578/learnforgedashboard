@@ -884,7 +884,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
         studentProfile={
           previewQuiz.student
             ? { full_name: previewQuiz.student.full_name || previewQuiz.student.email }
-            : { full_name: user?.email?.split("@")[0] || "Admin Preview", roll_number: "ADMIN-PREVIEW" }
+            : { full_name: user?.email?.split("@")[0] || "Admin Preview" }
         }
         initialAttempt={previewQuiz.attempt || null}
         initialStage={previewQuiz.attempt ? "review" : "precheck"}
@@ -1129,7 +1129,6 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
                             </div>
                             {!test.external_url && (
                               <div className="proctor-attempt-meta">
-                                {attempt.roll_number && <span>ID: {attempt.roll_number}</span>}
                                 <span><Clock size={11} /> {formatSeconds(attempt.time_taken_seconds)}</span>
                                 <span><Monitor size={11} /> Switches: {attempt.tab_switch_count ?? 0}</span>
                                 <span><Camera size={11} /> {attempt.camera_status || "Off"}</span>

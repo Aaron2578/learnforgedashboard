@@ -120,7 +120,6 @@ export default function ProctoredExamRunner({
 
   // Candidate identity (Step 1)
   const [studentName, setStudentName] = useState(studentProfile?.full_name || "");
-  const [rollNumber, setRollNumber] = useState(studentProfile?.roll_number || "");
 
   // Webcam state
   const streamRef = useRef(null);
@@ -171,7 +170,6 @@ export default function ProctoredExamRunner({
     return {
       examTitle: assessment?.title || "Proctored Assessment",
       studentName: initialAttempt.student_name || studentProfile?.full_name || "Student",
-      rollNumber: initialAttempt.roll_number || "N/A",
       submittedAt: initialAttempt.submitted_at,
       score,
       maxScore,
@@ -332,7 +330,6 @@ export default function ProctoredExamRunner({
           const summary = {
             examTitle: assessment?.title || "Proctored Assessment",
             studentName: studentName.trim() || "Preview Candidate",
-            rollNumber: rollNumber.trim() || "PREVIEW",
             submittedAt: new Date().toISOString(),
             score,
             maxScore,
@@ -360,7 +357,6 @@ export default function ProctoredExamRunner({
           p_answers: finalAnswers,
           p_proctoring: {
             student_name: studentName.trim(),
-            roll_number: rollNumber.trim(),
             time_taken_seconds: elapsedSeconds,
             tab_switch_count: finalSwitchCount,
             camera_status: finalCameraStatus,
@@ -391,7 +387,6 @@ export default function ProctoredExamRunner({
         const summary = {
           examTitle: assessment?.title || "Proctored Assessment",
           studentName: payload?.student_name || studentName.trim(),
-          rollNumber: payload?.roll_number || rollNumber.trim(),
           submittedAt: payload?.submitted_at || new Date().toISOString(),
           score,
           maxScore,
@@ -428,7 +423,6 @@ export default function ProctoredExamRunner({
       orderedQuestions,
       passingPercentage,
       previewMode,
-      rollNumber,
       stopCameraStream,
       studentName,
       supabase,
@@ -520,7 +514,7 @@ export default function ProctoredExamRunner({
   }, [stage, trackTabSwitches, maxTabSwitches, appendLog, finalizeSubmit]);
 
   function handleStartExam() {
-    if (!studentName.trim() || !rollNumber.trim()) return;
+    if (!studentName.trim()) return;
     if (requireCamera && !cameraStream && !cameraBypassedInPreview) return;
 
     answersRef.current = {};
@@ -537,7 +531,7 @@ export default function ProctoredExamRunner({
         timestamp: nowTimeIso(),
         isoTime: new Date().toISOString(),
         event: "Exam Started",
-        detail: `Candidate: ${studentName.trim()} (${rollNumber.trim()}) · Camera: ${
+        detail: `Candidate: ${studentName.trim()} · Camera: ${
           cameraStream ? "Active" : requireCamera ? "Preview Bypass" : "Not Required"
         }`,
       },
@@ -575,7 +569,6 @@ export default function ProctoredExamRunner({
     const canBegin =
       orderedQuestions.length > 0 &&
       studentName.trim().length > 0 &&
-      rollNumber.trim().length > 0 &&
       (!requireCamera || Boolean(cameraStream) || cameraBypassedInPreview);
 
     return (
@@ -608,26 +601,15 @@ export default function ProctoredExamRunner({
               <h3>
                 <ShieldCheck size={16} /> Candidate Details
               </h3>
-              <div className="form-grid-2">
-                <label className="form-field">
-                  <span>Full Name *</span>
-                  <input
-                    required
-                    value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
-                    placeholder="Enter your full name"
-                  />
-                </label>
-                <label className="form-field">
-                  <span>Roll Number / Student ID *</span>
-                  <input
-                    required
-                    value={rollNumber}
-                    onChange={(e) => setRollNumber(e.target.value)}
-                    placeholder="e.g. LF-2026-042"
-                  />
-                </label>
-              </div>
+              <label className="form-field">
+                <span>Full Name *</span>
+                <input
+                  required
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  placeholder="Enter your full name"
+                />
+              </label>
             </div>
 
             <div className="proctor-rules-box">
@@ -786,7 +768,7 @@ export default function ProctoredExamRunner({
             <div>
               <h2>{assessment?.title}</h2>
               <small>
-                Candidate: <strong>{studentName}</strong> · Roll: <strong>{rollNumber}</strong>
+                Candidate: <strong>{studentName}</strong>
                 {previewMode ? " · Preview Mode" : ""}
               </small>
             </div>
@@ -1128,8 +1110,7 @@ export default function ProctoredExamRunner({
             <div className="eyebrow">Instant Exam Result &amp; Review Dashboard</div>
             <h2>{summary?.examTitle}</h2>
             <p>
-              Candidate: <strong>{summary?.studentName}</strong> · Roll Number:{" "}
-              <strong>{summary?.rollNumber}</strong> ·{" "}
+              Candidate: <strong>{summary?.studentName}</strong> ·{" "}
               {buildSubmissionReasonLabel(summary?.submissionReason)}
             </p>
           </div>

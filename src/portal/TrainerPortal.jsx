@@ -4308,7 +4308,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           studentProfile={
             previewingTrainerQuiz.student
               ? { full_name: previewingTrainerQuiz.student.full_name || previewingTrainerQuiz.student.email }
-              : { full_name: activeTrainer?.full_name || "Trainer Preview", roll_number: "TRAINER-PREVIEW" }
+              : { full_name: activeTrainer?.full_name || "Trainer Preview" }
           }
           initialAttempt={previewingTrainerQuiz.attempt || null}
           initialStage={previewingTrainerQuiz.attempt ? "review" : "precheck"}
