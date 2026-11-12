@@ -49,12 +49,13 @@ import {
 } from "lucide-react";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditMaterialModal from "../components/EditMaterialModal";
+import EditTestModal from "../components/EditTestModal";
 import ProctoredQuizConfigPanel from "../components/ProctoredQuizConfigPanel";
 import ProctoredExamRunner from "../components/ProctoredExamRunner";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, uploadDocumentAttachment, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
-import { formatSeconds, syncAssessmentQuestions, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
+import { formatSeconds, syncAssessmentQuestions, updateAssessmentRecord, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
 
 const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
 
@@ -190,6 +191,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     showMarks: true,
   });
   const [previewingTrainerQuiz, setPreviewingTrainerQuiz] = useState(null);
+  const [editingTrainerTest, setEditingTrainerTest] = useState(null);
 
   // Gradebook State
   const [gradebookCourseFilter, setGradebookCourseFilter] = useState("all");
@@ -1416,8 +1418,47 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     }
   }
 
-  async function handleDeleteTest(testId) {
-    if (!window.confirm("Delete this test? Any student attempts will also be removed.")) return;
+  async function handleUpdateTrainerTest(testId, form) {
+    setBusy(true);
+    setError("");
+    try {
+      await updateAssessmentRecord(supabase, testId, form);
+
+      if (Array.isArray(form.recipientIds)) {
+        const myIds = Array.from(myAssignedStudentIds);
+        if (myIds.length > 0) {
+          await supabase
+            .from("assessment_recipients")
+            .delete()
+            .eq("assessment_id", testId)
+            .in("student_id", myIds);
+        }
+        if (form.recipientIds.length > 0) {
+          const { error: recErr } = await supabase
+            .from("assessment_recipients")
+            .insert(
+              form.recipientIds.map((sid) => ({
+                assessment_id: testId,
+                student_id: sid,
+              }))
+            );
+          if (recErr) throw recErr;
+        }
+      }
+
+      setToast(`Test "${form.title}" updated successfully!`);
+      setEditingTrainerTest(null);
+      await loadTrainerData(false);
+    } catch (err) {
+      setError(err.message || "Failed to update test.");
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteTest(testId, skipConfirm = false) {
+    if (!skipConfirm && !window.confirm("Delete this test? Any student attempts will also be removed.")) return;
     try {
       await supabase.from("assessments").delete().eq("id", testId);
       setAssessments((prev) => prev.filter((a) => a.id !== testId));
@@ -4529,6 +4570,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                   )}
 
                   <button
+                    className="button compact"
+                    type="button"
+                    onClick={() => setEditingTrainerTest(test)}
+                    title="Edit test details, questions & proctoring settings"
+                  >
+                    <Pencil size={13} /> Edit
+                  </button>
+
+                  <button
                     className="button compact danger-outline"
                     type="button"
                     title="Delete test"
@@ -6523,6 +6573,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           onClose={() => setEditingMaterial(null)}
           onSave={handleUpdateMaterial}
           onDelete={handleDeleteMaterial}
+        />
+      )}
+
+      {/* Edit Test / Proctored Quiz Modal */}
+      {editingTrainerTest && (
+        <EditTestModal
+          test={editingTrainerTest}
+          students={myAssignedStudents}
+          currentRecipients={assessmentRecipients
+            .filter((r) => r.assessment_id === editingTrainerTest.id && myAssignedStudentIds.has(r.student_id))
+            .map((r) => r.student_id)}
+          supabase={supabase}
+          onClose={() => setEditingTrainerTest(null)}
+          onSave={handleUpdateTrainerTest}
+          onDelete={(t) => handleDeleteTest(t.id, true)}
         />
       )}
 

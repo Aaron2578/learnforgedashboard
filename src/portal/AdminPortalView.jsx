@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import { uploadDocumentAttachment, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
-import { formatSeconds, syncAssessmentQuestions, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
+import { formatSeconds, syncAssessmentQuestions, updateAssessmentRecord, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import EditAssignmentModal from "../components/EditAssignmentModal";
 import EditTestModal from "../components/EditTestModal";
@@ -674,31 +674,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
     setBusy(true);
     setError("");
     try {
-      const proctoring = form.proctoring || {};
-      const totalPoints =
-        form.testType === "built_in" && Array.isArray(form.questions) && form.questions.length > 0
-          ? form.questions.reduce((acc, q) => acc + (q.points || 1), 0)
-          : 100;
-
-      const { error: updateError } = await supabase.from("assessments").update({
-        title: form.title.trim(),
-        description: form.description.trim(),
-        due_at: form.due ? new Date(form.due).toISOString() : null,
-        external_url: form.testType === "external" ? form.externalUrl.trim() : null,
-        duration_minutes: Number(proctoring.durationMinutes) || 30,
-        require_camera: Boolean(proctoring.requireCamera),
-        allow_camera_off: Boolean(proctoring.requireCamera && proctoring.allowCameraOff),
-        track_tab_switches: proctoring.trackTabSwitches !== false,
-        max_tab_switches: Number(proctoring.maxTabSwitches) || 3,
-        passing_percentage: Number(proctoring.passingPercentage) || 50,
-        total_marks: totalPoints,
-        show_marks: form.showMarks !== undefined ? Boolean(form.showMarks) : false,
-      }).eq("id", testId);
-      if (updateError) throw updateError;
-
-      if (form.testType === "built_in" && Array.isArray(form.questions) && form.questions.length > 0) {
-        await syncAssessmentQuestions(supabase, testId, form.questions);
-      }
+      await updateAssessmentRecord(supabase, testId, form);
 
       if (form.recipientIds) {
         await supabase.from("assessment_recipients").delete().eq("assessment_id", testId);
@@ -714,6 +690,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
       await loadAdminData();
     } catch (err) {
       setError(`Could not update test: ${err.message}`);
+      throw err;
     } finally {
       setBusy(false);
     }

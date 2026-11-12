@@ -406,3 +406,36 @@ export async function syncAssessmentQuestions(supabase, assessmentId, normalized
     }
   }
 }
+
+export async function updateAssessmentRecord(supabase, testId, form) {
+  const proctoring = form.proctoring || {};
+  const isBuiltIn = form.testType === "built_in";
+  const hasQuestions = isBuiltIn && Array.isArray(form.questions) && form.questions.length > 0;
+  const totalPoints = hasQuestions
+    ? form.questions.reduce((acc, q) => acc + (q.points || 1), 0)
+    : Number(form.totalMarks) || 100;
+
+  const { error: updateError } = await supabase
+    .from("assessments")
+    .update({
+      title: form.title.trim(),
+      description: form.description.trim(),
+      due_at: form.due ? new Date(form.due).toISOString() : null,
+      external_url: isBuiltIn ? null : form.externalUrl.trim(),
+      duration_minutes: Number(proctoring.durationMinutes) || 30,
+      require_camera: isBuiltIn ? Boolean(proctoring.requireCamera) : false,
+      allow_camera_off: isBuiltIn ? Boolean(proctoring.requireCamera && proctoring.allowCameraOff) : false,
+      track_tab_switches: isBuiltIn ? proctoring.trackTabSwitches !== false : false,
+      max_tab_switches: Number(proctoring.maxTabSwitches) || 3,
+      passing_percentage: Number(proctoring.passingPercentage) || 50,
+      total_marks: totalPoints,
+      show_marks: form.showMarks !== undefined ? Boolean(form.showMarks) : false,
+    })
+    .eq("id", testId);
+
+  if (updateError) throw updateError;
+
+  if (hasQuestions) {
+    await syncAssessmentQuestions(supabase, testId, form.questions);
+  }
+}

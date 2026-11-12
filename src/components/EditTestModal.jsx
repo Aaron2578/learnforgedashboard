@@ -85,7 +85,7 @@ export default function EditTestModal({
       setError("Test title is required.");
       return;
     }
-    if (!recipientIds.length) {
+    if (students.length > 0 && !recipientIds.length) {
       setError("Please select at least one student recipient.");
       return;
     }
