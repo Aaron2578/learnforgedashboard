@@ -32,7 +32,7 @@ import AssignMaterialModal from "../components/AssignMaterialModal";
 import { getDriveDocTypeLabel } from "../lib/driveUtils.js";
 import { cleanAllFileStorage } from "../lib/storageCleanup.js";
 
-export default function AdminDriveView({ supabase, user, query = "", onToast }) {
+export default function AdminDriveView({ supabase, user, query = "", onToast = () => {} }) {
   const [activeTab, setActiveTab] = useState("materials"); // 'materials' | 'student_uploads' | 'requests'
   const [materials, setMaterials] = useState([]);
   const [studentUploads, setStudentUploads] = useState([]);

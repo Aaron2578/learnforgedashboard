@@ -40,7 +40,7 @@ function formatCourseDate(value) {
   }
 }
 
-function AdminManagementView({ view, supabase, user, query, onToast, onNavigate }) {
+function AdminManagementView({ view, supabase, user, query, onToast = () => {}, onNavigate }) {
   const [students, setStudents] = useState([]);
   const [trainers, setTrainers] = useState([]);
   const [trainerStudents, setTrainerStudents] = useState([]);

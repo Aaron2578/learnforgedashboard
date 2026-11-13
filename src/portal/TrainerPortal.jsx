@@ -4323,6 +4323,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           initialStage={previewingTrainerQuiz.attempt ? "review" : "precheck"}
           previewMode={true}
           onClose={() => setPreviewingTrainerQuiz(null)}
+          onToast={setToast}
         />
       );
     }

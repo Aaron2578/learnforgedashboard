@@ -67,6 +67,7 @@ export default function ProctoredExamRunner({
   supabase = null,
   onSubmitted,
   onClose,
+  onToast = null,
 }) {
   const orderedQuestions = useMemo(
     () => [...questions].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
@@ -134,6 +135,19 @@ export default function ProctoredExamRunner({
   const [resultSummary, setResultSummary] = useState(null);
   const [pdfDownloading, setPdfDownloading] = useState(false);
   const [showScoreCardPreview, setShowScoreCardPreview] = useState(false);
+  const [runnerToast, setRunnerToast] = useState("");
+
+  const handleToast = useCallback(
+    (msg) => {
+      if (typeof onToast === "function") {
+        onToast(msg);
+      } else {
+        setRunnerToast(msg);
+        setTimeout(() => setRunnerToast(""), 4500);
+      }
+    },
+    [onToast]
+  );
 
   const fallbackAttemptSummary = useMemo(() => {
     if (!initialAttempt) return null;
@@ -1368,8 +1382,34 @@ export default function ProctoredExamRunner({
         <ScoreCardPreviewModal
           summary={summary}
           onClose={() => setShowScoreCardPreview(false)}
-          onToast={onToast}
+          onToast={handleToast}
         />
+      )}
+
+      {runnerToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            zIndex: 1050,
+            background: "#0f172a",
+            color: "#ffffff",
+            padding: "12px 18px",
+            borderRadius: "8px",
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.35)",
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            border: "1px solid rgba(255, 255, 255, 0.15)",
+          }}
+        >
+          <CheckCircle2 size={16} style={{ color: "#22c55e", flexShrink: 0 }} />
+          <span>{runnerToast}</span>
+        </div>
       )}
     </section>
   );

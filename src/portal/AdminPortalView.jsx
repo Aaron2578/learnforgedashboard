@@ -161,7 +161,7 @@ function AdminTestForm({ onCancel, onCreate, busy, students }) {
   </form>;
 }
 
-function AdminPortalView({ view, supabase, user, query, onToast }) {
+function AdminPortalView({ view, supabase, user, query, onToast = () => {} }) {
   const [assignments, setAssignments] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [tests, setTests] = useState([]);
@@ -890,6 +890,7 @@ function AdminPortalView({ view, supabase, user, query, onToast }) {
         initialStage={previewQuiz.attempt ? "review" : "precheck"}
         previewMode={true}
         onClose={() => setPreviewQuiz(null)}
+        onToast={onToast}
       />
     ) : view === "Tests" ? <section className="admin-work-list">
       {filteredTests.map((test) => {

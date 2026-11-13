@@ -47,12 +47,12 @@ export default function ScoreCardPreviewModal({ summary, onClose, onToast }) {
     setDownloading(true);
     try {
       await downloadScoreCardPdf(summary);
-      if (onToast) {
+      if (typeof onToast === "function") {
         onToast("LearnForge Score Card PDF downloaded successfully!");
       }
     } catch (err) {
       console.error("Score card download error:", err);
-      if (onToast) {
+      if (typeof onToast === "function") {
         onToast("Error downloading Score Card: " + (err.message || "Unknown error"));
       }
     } finally {

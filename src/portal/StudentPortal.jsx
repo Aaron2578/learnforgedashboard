@@ -1245,6 +1245,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
             setActiveTestMode("");
             setActiveReviewData(null);
           }}
+          onToast={setNotice}
         />
       );
     }
