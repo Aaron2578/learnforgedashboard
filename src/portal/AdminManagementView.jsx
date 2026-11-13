@@ -2448,33 +2448,6 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                         </span>
                       </div>
                       <span className="student-item-email">{student.email}</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "3px" }}>
-                        <code
-                          style={{
-                            fontSize: "11px",
-                            background: "#f1f5f9",
-                            padding: "2px 6px",
-                            borderRadius: "4px",
-                            color: "#334155",
-                            fontFamily: "monospace",
-                          }}
-                          title={`Full Student ID: ${student.id}`}
-                        >
-                          ID: {student.id.slice(0, 8)}...
-                        </code>
-                        <button
-                          type="button"
-                          className="text-link"
-                          style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "2px" }}
-                          onClick={() => {
-                            navigator.clipboard.writeText(student.id);
-                            onToast(`Copied Student ID for ${student.full_name || student.email}`);
-                          }}
-                          title="Copy Full Student ID"
-                        >
-                          <Copy size={11} /> Copy ID
-                        </button>
-                      </div>
                       <small className="student-item-date" style={{ marginTop: "3px" }}>
                         Joined {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(student.created_at))}
                       </small>
@@ -2845,23 +2818,6 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
                                 <div>
                                   <strong>{s.full_name || s.email}</strong>
                                   <span style={{ color: "var(--muted)", marginLeft: "6px", fontSize: "11px" }}>({s.email})</span>
-                                </div>
-                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                  <code style={{ fontSize: "10.5px", background: "#f1f5f9", padding: "2px 5px", borderRadius: "4px", color: "#334155" }} title={`Full Student ID: ${s.id}`}>
-                                    ID: {s.id.slice(0, 8)}...
-                                  </code>
-                                  <button
-                                    type="button"
-                                    className="quiet-icon"
-                                    style={{ padding: "2px" }}
-                                    title={`Copy Student ID: ${s.id}`}
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(s.id);
-                                      onToast(`Copied Student ID for ${s.full_name || s.email}`);
-                                    }}
-                                  >
-                                    <Copy size={11} />
-                                  </button>
                                 </div>
                               </div>
                             ))}

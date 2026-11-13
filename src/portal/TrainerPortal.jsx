@@ -247,6 +247,11 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   const [enrollingCourseId, setEnrollingCourseId] = useState("");
   const [enrollBusy, setEnrollBusy] = useState(false);
 
+  // Students Directory State
+  const [trainerStudentSearch, setTrainerStudentSearch] = useState("");
+  const [trainerStudentTimingFilter, setTrainerStudentTimingFilter] = useState("all");
+  const [trainerStudentViewMode, setTrainerStudentViewMode] = useState("cards");
+
   // Messages Tab State
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
@@ -2231,29 +2236,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                       )}
                     </div>
 
-                    {/* Student ID & Timing */}
-                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", marginTop: "10px", fontSize: "12px" }}>
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                        <span style={{ color: "var(--muted)" }}>ID:</span>
-                        <code style={{ fontSize: "11px", background: "#f1f5f9", padding: "2px 5px", borderRadius: "4px" }}>
-                          {student.id.slice(0, 8)}...
-                        </code>
-                        <button
-                          type="button"
-                          className="quiet-icon"
-                          style={{ padding: "2px" }}
-                          title={`Copy Student ID: ${student.id}`}
-                          onClick={() => {
-                            navigator.clipboard.writeText(student.id);
-                            setToast(`Copied Student ID: ${student.id}`);
-                          }}
-                        >
-                          <Copy size={11} />
-                        </button>
-                      </div>
-                      <span style={{ color: "var(--line)" }}>•</span>
-                      <span style={{ color: "var(--ink)", fontWeight: 500 }}>
-                        {student.timing || "Standard timing"}
+                    {/* Program Timing */}
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginTop: "10px", fontSize: "12px" }}>
+                      <span style={{ color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                        <Clock3 size={12} style={{ color: "var(--brand)" }} />
+                        <span style={{ color: "var(--ink)", fontWeight: 500 }}>
+                          {student.timing || "Standard timing"}
+                        </span>
                       </span>
                     </div>
 
@@ -4881,12 +4870,35 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
   // ----------------------------------------------------
   function renderStudents() {
     const listToFilter = myAssignedStudents;
+    const todayStr = localDate();
 
     const filteredStudents = listToFilter.filter((s) => {
-      if (!query.trim()) return true;
-      const q = query.trim().toLowerCase();
-      return (s.full_name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
+      const q = (trainerStudentSearch || query || "").trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        (s.full_name || "").toLowerCase().includes(q) ||
+        (s.email || "").toLowerCase().includes(q) ||
+        enrollments
+          .filter((e) => e.student_id === s.id && myTrainerCourseIds.has(e.course_id))
+          .some((e) => {
+            const c = coursesById[e.course_id];
+            return c && (c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q));
+          });
+
+      const matchesTiming =
+        trainerStudentTimingFilter === "all" ||
+        (s.timing && s.timing.toLowerCase().includes(trainerStudentTimingFilter.toLowerCase()));
+
+      return matchesSearch && matchesTiming;
     });
+
+    const activeEnrollmentsCount = enrollments.filter(
+      (e) => myAssignedStudentIds.has(e.student_id) && myTrainerCourseIds.has(e.course_id)
+    ).length;
+
+    const todayPresentCount = myAssignedStudents.filter((s) =>
+      attendanceRecords.some((r) => r.student_id === s.id && r.attendance_date === todayStr && normalizeAttendanceStatus(r) === "present")
+    ).length;
 
     return (
       <div className="trainer-students-view">
@@ -4898,189 +4910,406 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               {myAssignedStudents.length} student{myAssignedStudents.length === 1 ? "" : "s"} specifically assigned to your mentorship and training programs.
             </p>
           </div>
-        </div>
-
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "16px" }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(22, 163, 74, 0.1)", color: "#15803d", padding: "6px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "12.5px" }}>
-            <Users size={14} /> My Assigned Students ({myAssignedStudents.length})
+          <div className="heading-actions">
+            <button
+              className={`button ${trainerStudentViewMode === "cards" ? "primary" : ""}`}
+              type="button"
+              onClick={() => setTrainerStudentViewMode("cards")}
+              title="Card View"
+            >
+              <LayoutDashboard size={14} /> Cards
+            </button>
+            <button
+              className={`button ${trainerStudentViewMode === "table" ? "primary" : ""}`}
+              type="button"
+              onClick={() => setTrainerStudentViewMode("table")}
+              title="Table View"
+            >
+              <FileSpreadsheet size={14} /> Table
+            </button>
           </div>
         </div>
 
-        <div className="card" style={{ padding: "6px" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table className="admin-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Student</th>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Student ID</th>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Program / Timing</th>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Enrolled Courses</th>
-                  <th style={{ textAlign: "left", padding: "12px 16px" }}>Assignment Status</th>
-                  <th style={{ textAlign: "right", padding: "12px 16px" }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredStudents.map((student) => {
-                  const studentCourses = enrollments
-                    .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
-                    .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
-                  const isAssigned = myAssignedStudentIds.has(student.id);
+        {/* High-level Summary KPI Cards */}
+        <section className="student-admin-summary" style={{ marginBottom: "20px" }}>
+          <article className="card summary-card summary-card-total">
+            <span>Total Assigned</span>
+            <strong>{myAssignedStudents.length}</strong>
+          </article>
+          <article className="card summary-card summary-card-approved">
+            <span>Course Enrollments</span>
+            <strong>{activeEnrollmentsCount}</strong>
+          </article>
+          <article className="card summary-card summary-card-pending">
+            <span>Today's Check-ins</span>
+            <strong>{todayPresentCount} Present</strong>
+          </article>
+        </section>
 
-                  return (
-                    <tr key={student.id} style={{ borderBottom: "1px solid var(--line)", background: isAssigned ? "rgba(240, 253, 244, 0.4)" : undefined }}>
-                      <td style={{ padding: "12px 16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <span className="student-avatar" style={{ width: "34px", height: "34px", fontSize: "12px", background: isAssigned ? "#16a34a" : undefined, color: isAssigned ? "#ffffff" : undefined }}>
-                            {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
-                          </span>
-                          <div>
-                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                              <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>
-                                {student.full_name || "Student"}
-                              </strong>
-                              {isAssigned && (
-                                <span className="badge green" style={{ fontSize: "10px", padding: "1px 5px" }}>
-                                  Assigned
-                                </span>
-                              )}
-                            </div>
-                            <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
-                          </div>
-                        </div>
-                      </td>
+        {/* In-page Search & Filter Toolbar */}
+        <div className="card student-admin-toolbar" style={{ padding: "14px", marginBottom: "20px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+          <label className="search-box" style={{ flex: "1 1 280px", minWidth: "220px", margin: 0 }}>
+            <Search size={15} />
+            <input
+              type="search"
+              aria-label="Search assigned students"
+              placeholder="Search by student name, email, or course..."
+              value={trainerStudentSearch}
+              onChange={(e) => setTrainerStudentSearch(e.target.value)}
+            />
+          </label>
 
-                      <td style={{ padding: "12px 16px" }}>
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
-                          <code
-                            style={{
-                              fontSize: "11px",
-                              background: "#f1f5f9",
-                              padding: "2px 6px",
-                              borderRadius: "4px",
-                              color: "#334155",
-                              fontFamily: "monospace",
-                            }}
-                            title={`Full Student ID: ${student.id}`}
-                          >
-                            {student.id.slice(0, 8)}...
-                          </code>
-                          <button
-                            type="button"
-                            className="quiet-icon"
-                            style={{ padding: "3px" }}
-                            title={`Copy Student ID: ${student.id}`}
-                            onClick={() => {
-                              navigator.clipboard.writeText(student.id);
-                              setToast(`Copied Student ID: ${student.id}`);
-                            }}
-                          >
-                            <Copy size={11} />
-                          </button>
-                        </div>
-                      </td>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>Timing:</span>
+            <select
+              value={trainerStudentTimingFilter}
+              onChange={(e) => setTrainerStudentTimingFilter(e.target.value)}
+              style={{ height: "36px", fontSize: "13px", padding: "0 10px", borderRadius: "8px", border: "1px solid var(--line)" }}
+            >
+              <option value="all">All Timings</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening">Evening</option>
+            </select>
+            {trainerStudentSearch && (
+              <button
+                type="button"
+                className="text-link"
+                style={{ fontSize: "12px" }}
+                onClick={() => setTrainerStudentSearch("")}
+              >
+                Clear search
+              </button>
+            )}
+          </div>
+        </div>
 
-                      <td style={{ padding: "12px 16px", fontSize: "13px" }}>
-                        {student.timing || "Standard Program"}
-                      </td>
+        {trainerStudentViewMode === "cards" ? (
+          <div className="trainer-students-card-grid">
+            {filteredStudents.map((student) => {
+              const studentCourses = enrollments
+                .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
+                .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
+              const isAssigned = myAssignedStudentIds.has(student.id);
+              const todayAtt = attendanceRecords.find(
+                (r) => r.student_id === student.id && r.attendance_date === todayStr
+              );
 
-                      <td style={{ padding: "12px 16px" }}>
-                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                          {studentCourses.map((c) => (
-                            <span
-                              key={c.id}
-                              className="badge blue"
-                              style={{ fontSize: "11px", padding: "2px 6px" }}
-                              title={`${c.code} · ${c.name} (${c.schedule || "Regular"})`}
-                            >
-                              <strong>{c.code}</strong> · {c.name}
+              return (
+                <article key={student.id} className="card trainer-student-card">
+                  {/* Card Header */}
+                  <div className="trainer-student-card-header">
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+                      <span
+                        className="student-avatar"
+                        style={{
+                          width: "42px",
+                          height: "42px",
+                          fontSize: "15px",
+                          background: "#16a34a",
+                          color: "#ffffff",
+                          flexShrink: 0,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                      </span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                          <strong style={{ fontSize: "15px", color: "var(--ink)" }}>
+                            {student.full_name || "Student"}
+                          </strong>
+                          {isAssigned && (
+                            <span className="badge green" style={{ fontSize: "10.5px", padding: "1px 6px" }}>
+                              Assigned
                             </span>
-                          ))}
-                          {!studentCourses.length && <span style={{ color: "var(--muted)", fontSize: "12px" }}>Not enrolled</span>}
+                          )}
                         </div>
-                      </td>
+                        <span style={{ color: "var(--muted)", fontSize: "12.5px", wordBreak: "break-all", display: "block" }}>
+                          {student.email}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-                      <td style={{ padding: "12px 16px" }}>
-                        {isAssigned ? (
-                          <span className="badge green" style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}>
-                            <Check size={11} /> Assigned to You
-                          </span>
-                        ) : (
-                          <span className="badge" style={{ fontSize: "11px", color: "var(--muted)" }}>
-                            Campus Student
-                          </span>
-                        )}
-                      </td>
+                  {/* Program Timing & Attendance Pills */}
+                  <div className="trainer-student-card-meta">
+                    <span className="student-timing-chip" style={{ fontSize: "12px" }}>
+                      <Clock3 size={13} style={{ color: "var(--brand)" }} />
+                      <span>{student.timing || "Standard timing"}</span>
+                    </span>
+                    {todayAtt ? (
+                      <span
+                        className={`badge ${todayAtt.status === "Present" ? "green" : todayAtt.status === "Late" ? "amber" : "rose"}`}
+                        style={{ fontSize: "11px", fontWeight: 700 }}
+                      >
+                        Today: {todayAtt.status}
+                      </span>
+                    ) : (
+                      <span className="badge" style={{ fontSize: "11px", color: "var(--muted)" }}>
+                        Today: Unmarked
+                      </span>
+                    )}
+                  </div>
 
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                        <div style={{ display: "inline-flex", gap: "6px" }}>
-                          <button
-                            className="button compact"
-                            type="button"
-                            onClick={() => {
-                              setTaskSelectedStudents([student.id]);
-                              setShowTaskForm(true);
-                              setActiveTab("Tasks");
-                            }}
-                            title={`Add note or task individually to ${student.full_name || "this student"}`}
-                          >
-                            <CheckCircle2 size={12} /> Note / Task
-                          </button>
-                          <button
-                            className="button compact"
-                            type="button"
-                            style={{ background: "#ecfdf5", color: "#065f46", borderColor: "#a7f3d0" }}
-                            onClick={() => {
-                              setSelectedAssignmentToAssign(myTrainerAssignments[0] || null);
-                              setAssignmentAssignTargetStudentIds([student.id]);
-                              setShowAssignAssignmentModal(true);
-                            }}
-                            title={`Assign coursework assignment individually to ${student.full_name || "this student"}`}
-                          >
-                            <BookOpen size={12} /> Assign Assignment
-                          </button>
-                          <button
-                            className="button compact"
-                            type="button"
-                            style={{ background: "#7c3aed", color: "#fff" }}
-                            onClick={() => {
-                              setSelectedTestToAssign(assessments[0] || null);
-                              setTestTargetStudentIds([student.id]);
-                              setShowAssignTestModal(true);
-                              setActiveTab("Tests");
-                            }}
-                            title="Assign test to this student"
-                          >
-                            <ClipboardList size={12} /> Assign Test
-                          </button>
-                          <button
-                            className="button compact"
-                            type="button"
-                            onClick={() => {
-                              setNewMsgStudentId(student.id);
-                              setShowNewMsgModal(true);
-                              setActiveTab("Messages");
-                            }}
-                            title="Message student"
-                          >
-                            <Mail size={12} /> Message
-                          </button>
-                          <button
-                            className="button compact"
-                            type="button"
-                            onClick={() => setSelectedStudentDetail(student)}
-                            title="View student profile & stats"
-                          >
-                            <Eye size={12} /> Details
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  {/* Enrolled Courses */}
+                  <div style={{ margin: "10px 0" }}>
+                    <div style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--muted)", marginBottom: "5px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      Enrolled Courses ({studentCourses.length})
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                      {studentCourses.map((c) => (
+                        <span
+                          key={c.id}
+                          className="badge blue"
+                          style={{ fontSize: "11px", padding: "2px 7px" }}
+                          title={`${c.code} · ${c.name}`}
+                        >
+                          <strong>{c.code}</strong> · {c.name}
+                        </span>
+                      ))}
+                      {!studentCourses.length && (
+                        <span style={{ color: "var(--muted)", fontSize: "12px", fontStyle: "italic" }}>
+                          No active courses
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions Grid */}
+                  <div className="trainer-student-card-actions">
+                    <div className="trainer-student-actions-primary">
+                      <button
+                        className="button primary compact"
+                        type="button"
+                        onClick={() => setSelectedStudentDetail(student)}
+                        title="View student profile & stats"
+                      >
+                        <Eye size={13} /> View Profile
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        style={{ background: "#7c3aed", color: "#fff", borderColor: "#7c3aed" }}
+                        onClick={() => {
+                          setSelectedTestToAssign(assessments[0] || null);
+                          setTestTargetStudentIds([student.id]);
+                          setShowAssignTestModal(true);
+                          setActiveTab("Tests");
+                        }}
+                        title="Assign test to this student"
+                      >
+                        <ClipboardList size={13} /> Assign Test
+                      </button>
+                    </div>
+
+                    <div className="trainer-student-actions-secondary">
+                      <button
+                        className="button compact"
+                        type="button"
+                        style={{ background: "#ecfdf5", color: "#065f46", borderColor: "#a7f3d0" }}
+                        onClick={() => {
+                          setSelectedAssignmentToAssign(myTrainerAssignments[0] || null);
+                          setAssignmentAssignTargetStudentIds([student.id]);
+                          setShowAssignAssignmentModal(true);
+                        }}
+                        title="Assign coursework assignment"
+                      >
+                        <BookOpen size={12} /> Assignment
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => {
+                          setTaskSelectedStudents([student.id]);
+                          setShowTaskForm(true);
+                          setActiveTab("Tasks");
+                        }}
+                        title="Add note or task"
+                      >
+                        <CheckCircle2 size={12} /> Note/Task
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => {
+                          setNewMsgStudentId(student.id);
+                          setShowNewMsgModal(true);
+                          setActiveTab("Messages");
+                        }}
+                        title="Message student"
+                      >
+                        <Mail size={12} /> Message
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+            {!filteredStudents.length && (
+              <div className="card empty-state" style={{ gridColumn: "1 / -1", padding: "36px 16px" }}>
+                <Users size={28} style={{ color: "var(--muted)", margin: "0 auto 10px" }} />
+                <strong>No students match your filter</strong>
+                <span>Try clearing your search query or timing filter.</span>
+              </div>
+            )}
           </div>
-        </div>
+        ) : (
+          /* Table View (Cleaned, No Student ID) */
+          <div className="card" style={{ padding: "6px" }}>
+            <div className="table-scroll">
+              <table className="admin-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "12px 16px" }}>Student</th>
+                    <th style={{ textAlign: "left", padding: "12px 16px" }}>Program / Timing</th>
+                    <th style={{ textAlign: "left", padding: "12px 16px" }}>Enrolled Courses</th>
+                    <th style={{ textAlign: "left", padding: "12px 16px" }}>Today's Check-in</th>
+                    <th style={{ textAlign: "right", padding: "12px 16px" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStudents.map((student) => {
+                    const studentCourses = enrollments
+                      .filter((e) => e.student_id === student.id && myTrainerCourseIds.has(e.course_id))
+                      .map((e) => coursesById[e.course_id] || { id: e.course_id, code: "COURSE", name: "Enrolled Course" });
+                    const isAssigned = myAssignedStudentIds.has(student.id);
+                    const todayAtt = attendanceRecords.find(
+                      (r) => r.student_id === student.id && r.attendance_date === todayStr
+                    );
+
+                    return (
+                      <tr key={student.id} style={{ borderBottom: "1px solid var(--line)", background: isAssigned ? "rgba(240, 253, 244, 0.4)" : undefined }}>
+                        <td style={{ padding: "12px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <span className="student-avatar" style={{ width: "34px", height: "34px", fontSize: "12px", background: isAssigned ? "#16a34a" : undefined, color: isAssigned ? "#ffffff" : undefined }}>
+                              {(student.full_name || student.email || "S").slice(0, 1).toUpperCase()}
+                            </span>
+                            <div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <strong style={{ fontSize: "13.5px", color: "var(--ink)" }}>
+                                  {student.full_name || "Student"}
+                                </strong>
+                                {isAssigned && (
+                                  <span className="badge green" style={{ fontSize: "10px", padding: "1px 5px" }}>
+                                    Assigned
+                                  </span>
+                                )}
+                              </div>
+                              <small style={{ color: "var(--muted)", fontSize: "12px" }}>{student.email}</small>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td style={{ padding: "12px 16px", fontSize: "13px" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                            <Clock3 size={12} style={{ color: "var(--brand)" }} />
+                            <span>{student.timing || "Standard Program"}</span>
+                          </span>
+                        </td>
+
+                        <td style={{ padding: "12px 16px" }}>
+                          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                            {studentCourses.map((c) => (
+                              <span
+                                key={c.id}
+                                className="badge blue"
+                                style={{ fontSize: "11px", padding: "2px 6px" }}
+                                title={`${c.code} · ${c.name} (${c.schedule || "Regular"})`}
+                              >
+                                <strong>{c.code}</strong> · {c.name}
+                              </span>
+                            ))}
+                            {!studentCourses.length && <span style={{ color: "var(--muted)", fontSize: "12px" }}>Not enrolled</span>}
+                          </div>
+                        </td>
+
+                        <td style={{ padding: "12px 16px" }}>
+                          {todayAtt ? (
+                            <span
+                              className={`badge ${todayAtt.status === "Present" ? "green" : todayAtt.status === "Late" ? "amber" : "rose"}`}
+                              style={{ fontSize: "11px", fontWeight: 700 }}
+                            >
+                              {todayAtt.status}
+                            </span>
+                          ) : (
+                            <span className="badge" style={{ fontSize: "11px", color: "var(--muted)" }}>
+                              Unmarked
+                            </span>
+                          )}
+                        </td>
+
+                        <td style={{ padding: "12px 16px", textAlign: "right" }}>
+                          <div style={{ display: "inline-flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => setSelectedStudentDetail(student)}
+                              title="View student profile & stats"
+                            >
+                              <Eye size={12} /> Details
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              style={{ background: "#7c3aed", color: "#fff" }}
+                              onClick={() => {
+                                setSelectedTestToAssign(assessments[0] || null);
+                                setTestTargetStudentIds([student.id]);
+                                setShowAssignTestModal(true);
+                                setActiveTab("Tests");
+                              }}
+                              title="Assign test to this student"
+                            >
+                              <ClipboardList size={12} /> Assign Test
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              style={{ background: "#ecfdf5", color: "#065f46", borderColor: "#a7f3d0" }}
+                              onClick={() => {
+                                setSelectedAssignmentToAssign(myTrainerAssignments[0] || null);
+                                setAssignmentAssignTargetStudentIds([student.id]);
+                                setShowAssignAssignmentModal(true);
+                              }}
+                              title="Assign coursework assignment"
+                            >
+                              <BookOpen size={12} /> Assignment
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => {
+                                setTaskSelectedStudents([student.id]);
+                                setShowTaskForm(true);
+                                setActiveTab("Tasks");
+                              }}
+                              title="Add note or task"
+                            >
+                              <CheckCircle2 size={12} /> Note/Task
+                            </button>
+                            <button
+                              className="button compact"
+                              type="button"
+                              onClick={() => {
+                                setNewMsgStudentId(student.id);
+                                setShowNewMsgModal(true);
+                                setActiveTab("Messages");
+                              }}
+                              title="Message student"
+                            >
+                              <Mail size={12} /> Message
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -5754,29 +5983,8 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
             </div>
 
             <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
-              {/* IDs and Metadata */}
+              {/* Student Metadata */}
               <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)", display: "flex", flexWrap: "wrap", gap: "14px" }}>
-                <div>
-                  <span style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Student ID</span>
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: "5px", marginTop: "2px" }}>
-                    <code style={{ fontSize: "11px", background: "#fff", padding: "2px 6px", borderRadius: "4px", border: "1px solid var(--line)" }}>
-                      {selectedStudentDetail.id}
-                    </code>
-                    <button
-                      type="button"
-                      className="quiet-icon"
-                      style={{ padding: "3px" }}
-                      title="Copy Student ID"
-                      onClick={() => {
-                        navigator.clipboard.writeText(selectedStudentDetail.id);
-                        setToast(`Copied Student ID: ${selectedStudentDetail.id}`);
-                      }}
-                    >
-                      <Copy size={12} />
-                    </button>
-                  </div>
-                </div>
-
                 <div>
                   <span style={{ fontSize: "11px", color: "var(--muted)", textTransform: "uppercase", display: "block" }}>Program Timing</span>
                   <strong style={{ fontSize: "13px", color: "var(--ink)", display: "block", marginTop: "2px" }}>
