@@ -10341,13 +10341,58 @@ body,
     min-width: 580px !important;
   }
 
+  /* Trainer Seed Pre-configured Banner on Mobile */
+  .trainer-seed-banner {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    padding: 14px 12px !important;
+  }
+
+  .trainer-seed-banner > div:first-child {
+    width: 100% !important;
+  }
+
+  .trainer-seed-banner > div:last-child {
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .trainer-seed-banner .button {
+    width: 100% !important;
+    justify-content: center !important;
+    min-height: 38px !important;
+  }
+
+  /* Admin Toolbar on Mobile */
+  .student-admin-toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .student-admin-toolbar .search-box {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .student-admin-toolbar > button.button {
+    width: 100% !important;
+    min-height: 40px !important;
+    justify-content: center !important;
+  }
+
   /* Trainer Student Cards on Mobile */
-  .trainer-students-card-grid {
+  .trainer-students-card-grid,
+  .trainer-cards-grid {
     grid-template-columns: 1fr !important;
     gap: 12px !important;
   }
 
-  .trainer-student-card {
+  .trainer-student-card,
+  .trainer-card-item {
     padding: 14px 12px !important;
     border-radius: 12px !important;
   }

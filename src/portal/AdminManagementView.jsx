@@ -2634,7 +2634,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
       {/* Pre-configured Trainer Account Callout */}
       <div
-        className="card"
+        className="card trainer-seed-banner"
         style={{
           background: "linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)",
           border: "1px solid #bfdbfe",
@@ -2648,7 +2648,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           marginBottom: "16px",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: "1 1 280px" }}>
           <div
             style={{
               width: "42px",
@@ -2659,21 +2659,22 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              flexShrink: 0,
             }}
           >
             <GraduationCap size={22} />
           </div>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               <strong style={{ fontSize: "15px", color: "#1e3a8a" }}>Lead Trainer Account Ready</strong>
               <span className="badge green"><i />Pre-configured</span>
             </div>
-            <div style={{ fontSize: "13px", color: "#3b82f6", marginTop: "2px" }}>
+            <div style={{ fontSize: "13px", color: "#3b82f6", marginTop: "2px", wordBreak: "break-all" }}>
               Email: <strong>trainer@learnforge.com</strong> | Password: <strong>Trainer@LearnForge2026!</strong>
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", flex: "0 1 auto" }}>
           <button
             type="button"
             className="button compact"
@@ -2696,7 +2697,7 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
 
       <section className="card student-admin-directory">
         <div className="student-admin-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <div className="search-box" style={{ maxWidth: "340px", flex: 1 }}>
+          <div className="search-box" style={{ maxWidth: "340px", flex: 1, minWidth: "220px" }}>
             <Search size={15} />
             <input
               type="search"
@@ -2714,188 +2715,195 @@ function AdminManagementView({ view, supabase, user, query, onToast, onNavigate 
           </button>
         </div>
 
-        <section className="student-card-grid">
+        <section className="admin-work-list student-cards-grid trainer-cards-grid">
           {trainers
             .filter((t) => {
               const q = trainerSearch.trim().toLowerCase();
               if (!q) return true;
               return [t.full_name, t.email, t.timing].some((v) => v && v.toLowerCase().includes(q));
             })
-            .map((trainer) => (
-              <article className="card student-manage-card" key={trainer.id}>
-                <div className="student-card-top">
-                  <div className="student-card-profile">
-                    <span className="student-avatar" style={{ background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", color: "#ffffff" }}>
-                      {(trainer.full_name || trainer.email).slice(0, 1).toUpperCase()}
-                    </span>
-                    <div className="student-card-identity">
-                      <strong>{trainer.full_name || "Trainer"}</strong>
-                      <span className="student-card-email">{trainer.email}</span>
-                      <div style={{ marginTop: "4px", display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                        <span className="badge blue" style={{ fontSize: "11px" }}>
-                          <GraduationCap size={11} style={{ marginRight: "3px" }} /> Trainer
-                        </span>
-                        {trainer.timing && (
-                          <span className="badge" style={{ fontSize: "11px", background: "#f1f5f9", color: "#475569" }}>
-                            <Clock3 size={11} style={{ marginRight: "3px" }} /> {trainer.timing}
+            .map((trainer) => {
+              const assignedStudentIds = new Set(
+                trainerStudents.filter((ts) => ts.trainer_id === trainer.id).map((ts) => ts.student_id)
+                  .concat(students.filter((s) => s.trainer_id === trainer.id).map((s) => s.id))
+              );
+              const assignedList = students.filter((s) => assignedStudentIds.has(s.id));
+
+              return (
+                <article className="card student-card-item trainer-card-item" key={trainer.id}>
+                  {/* Top Profile Header */}
+                  <div className="student-item-top">
+                    <div className="student-item-profile">
+                      <span
+                        className="student-avatar"
+                        style={{
+                          width: "44px",
+                          height: "44px",
+                          fontSize: "16px",
+                          flexShrink: 0,
+                          background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+                          color: "#ffffff",
+                          fontWeight: 750,
+                        }}
+                      >
+                        {(trainer.full_name || trainer.email).slice(0, 1).toUpperCase()}
+                      </span>
+                      <div className="student-item-details">
+                        <div className="student-item-name-row">
+                          <strong className="student-item-name">{trainer.full_name || "Trainer"}</strong>
+                          <span className={`portal-status ${trainer.is_approved ? "submitted" : "pending"}`}>
+                            {trainer.is_approved ? "Active" : "Suspended"}
                           </span>
+                        </div>
+                        <span className="student-item-email">{trainer.email}</span>
+                        {trainer.created_at && (
+                          <small className="student-item-date" style={{ marginTop: "2px" }}>
+                            Joined {new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(trainer.created_at))}
+                          </small>
                         )}
-                        <span
-                          className="badge green"
-                          style={{ fontSize: "11px", cursor: "pointer" }}
-                          onClick={() => setAssigningTrainer(trainer)}
-                          title="Click to manage assigned students"
-                        >
-                          <Users size={11} style={{ marginRight: "3px" }} />
-                          {trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length} Assigned Students
-                        </span>
                       </div>
                     </div>
                   </div>
-                  <span className={`portal-status ${trainer.is_approved ? "submitted" : "pending"}`}>
-                    {trainer.is_approved ? "Active" : "Suspended"}
-                  </span>
-                </div>
 
-                {/* Trainer ID & Assigned Students Details */}
-                <div style={{ marginTop: "12px", padding: "10px 12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "6px" }}>
-                    <span style={{ fontSize: "11px", color: "var(--muted)", fontFamily: "monospace" }}>
-                      Trainer ID: <strong>{trainer.id}</strong>
+                  {/* Meta Information Container */}
+                  <div className="student-item-meta">
+                    <span className="student-timing-chip">
+                      <GraduationCap size={12} /> Role: <strong>Trainer</strong>
                     </span>
-                    <button
-                      type="button"
-                      className="text-link"
-                      style={{ fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}
-                      onClick={() => {
-                        navigator.clipboard.writeText(trainer.id);
-                        onToast(`Trainer ID copied: ${trainer.id}`);
-                      }}
-                    >
-                      <Copy size={11} /> Copy Trainer ID
-                    </button>
-                  </div>
-
-                  {(() => {
-                    const assignedStudentIds = new Set(
-                      trainerStudents.filter((ts) => ts.trainer_id === trainer.id).map((ts) => ts.student_id)
-                        .concat(students.filter((s) => s.trainer_id === trainer.id).map((s) => s.id))
-                    );
-                    const assignedList = students.filter((s) => assignedStudentIds.has(s.id));
-
-                    return (
-                      <div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                          <strong style={{ fontSize: "12px", color: "#1e3a8a", display: "flex", alignItems: "center", gap: "4px" }}>
-                            <Users size={13} /> Assigned Students ({assignedList.length}):
-                          </strong>
-                          <button
-                            type="button"
-                            className="button compact"
-                            style={{ padding: "2px 8px", fontSize: "11px" }}
-                            onClick={() => setAssigningTrainer(trainer)}
-                          >
-                            + Assign / Edit
-                          </button>
-                        </div>
-
-                        {assignedList.length > 0 ? (
-                          <div style={{ display: "grid", gap: "4px" }}>
-                            {assignedList.map((s) => (
-                              <div
-                                key={s.id}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  padding: "6px 8px",
-                                  background: "#ffffff",
-                                  border: "1px solid var(--line)",
-                                  borderRadius: "6px",
-                                  fontSize: "12px",
-                                }}
-                              >
-                                <div>
-                                  <strong>{s.full_name || s.email}</strong>
-                                  <span style={{ color: "var(--muted)", marginLeft: "6px", fontSize: "11px" }}>({s.email})</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic", padding: "4px 0" }}>
-                            No students assigned yet. Click "Assign Students" to assign students.
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                <div className="student-card-bottom" style={{ borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" }}>
-                  <div className="student-actions-row-secondary" style={{ width: "100%", display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
-                    <button
-                      className="button compact"
-                      type="button"
-                      disabled={busy}
+                    {trainer.timing && (
+                      <span className="student-timing-chip">
+                        <Clock3 size={12} /> Shift: <strong>{trainer.timing}</strong>
+                      </span>
+                    )}
+                    <span
+                      className="student-timing-chip"
+                      style={{ background: "#eff6ff", color: "#2563eb", borderColor: "#bfdbfe", cursor: "pointer" }}
                       onClick={() => setAssigningTrainer(trainer)}
-                      style={{ background: "#eff6ff", color: "#2563eb", borderColor: "#bfdbfe", fontWeight: 600 }}
-                      title={`Assign students to ${trainer.full_name || trainer.email}`}
+                      title="Click to manage assigned students"
                     >
-                      <Users size={13} />
-                      <span>Assign Students ({trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length})</span>
-                    </button>
-
-                    <button
-                      className="button compact"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        navigator.clipboard.writeText(`Trainer Account: ${trainer.email}\nPortal URL: ${window.location.origin}`);
-                        onToast(`Login details copied for ${trainer.email}`);
-                      }}
-                      title="Copy login info"
-                    >
-                      <Copy size={13} />
-                      <span>Copy Info</span>
-                    </button>
-
-                    <button
-                      className="button compact"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => toggleTrainerStatus(trainer)}
-                      title={trainer.is_approved ? "Suspend trainer account" : "Activate trainer account"}
-                    >
-                      {trainer.is_approved ? "Suspend" : <><Check size={13} /> Activate</>}
-                    </button>
-
-                    <button
-                      className="button compact"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => demoteToStudent(trainer)}
-                      title="Switch role from Trainer to Student"
-                    >
-                      <Users size={13} />
-                      <span>Make Student</span>
-                    </button>
-
-                    <button
-                      className="button compact danger-icon"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => deleteTrainer(trainer)}
-                      title="Delete trainer account"
-                      aria-label="Delete trainer account"
-                    >
-                      <Trash2 size={13} />
-                      <span>Delete</span>
-                    </button>
+                      <Users size={12} /> Assigned: <strong>{assignedList.length} Students</strong>
+                    </span>
                   </div>
-                </div>
-              </article>
-            ))}
+
+                  {/* Assigned Students Details Panel */}
+                  <div style={{ marginTop: "6px", marginBottom: "14px", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid var(--line)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "6px" }}>
+                      <strong style={{ fontSize: "12.5px", color: "var(--ink)", display: "flex", alignItems: "center", gap: "5px" }}>
+                        <Users size={13} style={{ color: "#2563eb" }} /> Assigned Students ({assignedList.length}):
+                      </strong>
+                      <button
+                        type="button"
+                        className="button compact"
+                        style={{ padding: "2px 8px", fontSize: "11px" }}
+                        onClick={() => setAssigningTrainer(trainer)}
+                      >
+                        + Assign / Edit
+                      </button>
+                    </div>
+
+                    {assignedList.length > 0 ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "6px" }}>
+                        {assignedList.map((s) => (
+                          <div
+                            key={s.id}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              padding: "6px 10px",
+                              background: "#ffffff",
+                              border: "1px solid var(--line)",
+                              borderRadius: "6px",
+                              fontSize: "12px",
+                              minWidth: 0,
+                            }}
+                          >
+                            <span
+                              className="student-avatar"
+                              style={{ width: "24px", height: "24px", fontSize: "10px", flexShrink: 0 }}
+                            >
+                              {(s.full_name || s.email).slice(0, 1).toUpperCase()}
+                            </span>
+                            <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              <strong style={{ color: "var(--ink)" }}>{s.full_name || "Student"}</strong>
+                              <small style={{ color: "var(--muted)", marginLeft: "4px" }}>({s.email})</small>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: "12px", color: "var(--muted)", fontStyle: "italic", padding: "4px 0" }}>
+                        No students assigned yet. Click "+ Assign / Edit" to assign students.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="student-item-actions">
+                    <div className="student-actions-row-primary">
+                      <button
+                        className="button primary compact"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setAssigningTrainer(trainer)}
+                        title={`Assign students to ${trainer.full_name || trainer.email}`}
+                      >
+                        <Users size={13} />
+                        <span>Assign Students ({trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length})</span>
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          navigator.clipboard.writeText(`Trainer Account: ${trainer.email}\nPortal URL: ${window.location.origin}`);
+                          onToast(`Login details copied for ${trainer.email}`);
+                        }}
+                        title="Copy login info"
+                      >
+                        <Copy size={13} />
+                        <span>Copy Info</span>
+                      </button>
+                    </div>
+
+                    <div className="student-actions-row-secondary">
+                      <button
+                        className={`button compact ${trainer.is_approved ? "" : "button-approve-accent"}`}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => toggleTrainerStatus(trainer)}
+                        title={trainer.is_approved ? "Suspend trainer account" : "Activate trainer account"}
+                      >
+                        {trainer.is_approved ? "Suspend" : <><Check size={13} /> Activate</>}
+                      </button>
+
+                      <button
+                        className="button compact"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => demoteToStudent(trainer)}
+                        title="Switch role from Trainer to Student"
+                      >
+                        <Users size={13} />
+                        <span>Make Student</span>
+                      </button>
+
+                      <button
+                        className="button compact danger-icon"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => deleteTrainer(trainer)}
+                        title="Delete trainer account"
+                        aria-label="Delete trainer account"
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
 
           {trainers.length === 0 && (
             <div className="card portal-empty">
