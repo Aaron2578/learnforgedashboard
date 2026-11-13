@@ -23,7 +23,7 @@ function safeSlug(value = "score-card") {
   );
 }
 
-function buildReferenceCode(summary) {
+export function buildReferenceCode(summary) {
   const raw = `${summary.attemptId || summary.submittedAt || Date.now()}-${summary.studentName || "LF"}`;
   let hash = 0;
   for (let i = 0; i < raw.length; i++) {

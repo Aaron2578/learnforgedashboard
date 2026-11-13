@@ -31,6 +31,7 @@ import {
   formatTimerClock,
 } from "../lib/quizUtils.js";
 import { downloadScoreCardPdf } from "../lib/scoreCardPdf.js";
+import ScoreCardPreviewModal from "./ScoreCardPreviewModal.jsx";
 
 function WebcamVideo({ stream, className = "" }) {
   const videoRef = useRef(null);
@@ -132,6 +133,7 @@ export default function ProctoredExamRunner({
   const [reviewFilter, setReviewFilter] = useState("all"); // "all" | "correct" | "incorrect" | "unanswered"
   const [resultSummary, setResultSummary] = useState(null);
   const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [showScoreCardPreview, setShowScoreCardPreview] = useState(false);
 
   const fallbackAttemptSummary = useMemo(() => {
     if (!initialAttempt) return null;
@@ -1091,17 +1093,10 @@ export default function ProctoredExamRunner({
               <button
                 type="button"
                 className="button primary compact"
-                disabled={pdfDownloading}
-                onClick={async () => {
-                  setPdfDownloading(true);
-                  try {
-                    await downloadScoreCardPdf(summary);
-                  } finally {
-                    setPdfDownloading(false);
-                  }
-                }}
+                onClick={() => setShowScoreCardPreview(true)}
+                title="Preview and download your official LearnForge Score Card"
               >
-                <Download size={14} /> {pdfDownloading ? "Generating PDF…" : "Download Score Card (PDF)"}
+                <Award size={14} /> View / Download Score Card
               </button>
             )}
             <button
@@ -1367,6 +1362,14 @@ export default function ProctoredExamRunner({
           <strong>Marks &amp; Answer Review Withheld</strong>
           <span>Your instructor has temporarily hidden scores and answer keys for this assessment. Check back once marks are released.</span>
         </div>
+      )}
+
+      {showScoreCardPreview && summary && (
+        <ScoreCardPreviewModal
+          summary={summary}
+          onClose={() => setShowScoreCardPreview(false)}
+          onToast={onToast}
+        />
       )}
     </section>
   );

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, BookOpen, CalendarClock, Camera, Check, CheckCircle2, ClipboardList, Clock3, Code2,
+  ArrowLeft, ArrowRight, Award, BookOpen, CalendarClock, Camera, Check, CheckCircle2, ClipboardList, Clock3, Code2,
   Copy, Download, ExternalLink, Eye, FileSpreadsheet, FileText, GraduationCap, HardDrive, LayoutDashboard, Link2,
   Lock, LogOut, Mail, MapPin, Menu, MessageSquare, Monitor, Paperclip, Plus, Send,
   Shield, ShieldCheck, Sparkles, Trash2, Unlock, Upload, Users, X,
@@ -8,6 +8,7 @@ import {
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import ProctoredExamRunner from "../components/ProctoredExamRunner";
+import ScoreCardPreviewModal from "../components/ScoreCardPreviewModal.jsx";
 import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadExportUrl, resolveStorageSignedUrl, triggerDocumentDownload } from "../lib/driveUtils.js";
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
@@ -143,6 +144,8 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const [activeTestMode, setActiveTestMode] = useState(""); // "" | "exam" | "review"
   const [activeReviewData, setActiveReviewData] = useState(null);
   const [downloadingScoreCardId, setDownloadingScoreCardId] = useState("");
+  const [previewScoreCardSummary, setPreviewScoreCardSummary] = useState(null);
+  const [loadingScoreCardId, setLoadingScoreCardId] = useState("");
   const [submissionDraft, setSubmissionDraft] = useState(null);
   const [submissionModeByAssignment, setSubmissionModeByAssignment] = useState({});
   const [driveSubTab, setDriveSubTab] = useState("materials");
@@ -799,6 +802,43 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
     }
   }
 
+  async function handleOpenScoreCardPreview(test, attempt) {
+    if (!test || !attempt) return;
+    setLoadingScoreCardId(test.id);
+    setError("");
+    try {
+      let reviewQuestions = [];
+      if (!test.external_url) {
+        try {
+          const { data } = await supabase.rpc("get_assessment_review", {
+            p_assessment_id: test.id,
+          });
+          if (Array.isArray(data?.questions)) {
+            reviewQuestions = data.questions;
+          }
+        } catch {
+          // fallback cleanly to summary without question table if unavailable
+        }
+      }
+      const courseName = test.course_id ? coursesById[test.course_id]?.name || "" : "";
+      const summary = buildScoreCardSummary({
+        assessment: test,
+        attempt,
+        studentProfile: {
+          full_name: activeStudent?.full_name || "",
+          email: activeStudent?.email || "",
+        },
+        courseName,
+        reviewQuestions,
+      });
+      setPreviewScoreCardSummary(summary);
+    } catch (err) {
+      setError(err.message || "Could not load Score Card.");
+    } finally {
+      setLoadingScoreCardId("");
+    }
+  }
+
   async function handleDownloadScoreCard(test, attempt) {
     if (!test || !attempt) return;
     setDownloadingScoreCardId(test.id);
@@ -1287,14 +1327,15 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                     <button
                       type="button"
                       className="button primary compact"
-                      disabled={downloadingScoreCardId === test.id}
-                      onClick={() => handleDownloadScoreCard(test, attempt)}
+                      disabled={loadingScoreCardId === test.id}
+                      onClick={() => handleOpenScoreCardPreview(test, attempt)}
+                      title="Preview and download your official LearnForge Score Card"
                     >
-                      <Download size={13} />
+                      <Award size={13} />
                       <span>
-                        {downloadingScoreCardId === test.id
-                          ? "Generating PDF…"
-                          : "Download Score Card (PDF)"}
+                        {loadingScoreCardId === test.id
+                          ? "Loading Preview…"
+                          : "View / Download Score Card"}
                       </span>
                     </button>
                   )}
@@ -1318,14 +1359,15 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
                   <button
                     type="button"
                     className="button primary compact"
-                    disabled={downloadingScoreCardId === test.id}
-                    onClick={() => handleDownloadScoreCard(test, attempt)}
+                    disabled={loadingScoreCardId === test.id}
+                    onClick={() => handleOpenScoreCardPreview(test, attempt)}
+                    title="Preview and download your official LearnForge Score Card"
                   >
-                    <Download size={13} />
+                    <Award size={13} />
                     <span>
-                      {downloadingScoreCardId === test.id
-                        ? "Generating PDF…"
-                        : "Download Score Card (PDF)"}
+                      {loadingScoreCardId === test.id
+                        ? "Loading Preview…"
+                        : "View / Download Score Card"}
                     </span>
                   </button>
                 </div>
@@ -2778,6 +2820,14 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         }}
         onMarkCompleted={viewingDocument.testId ? () => markExternalTestCompleted(viewingDocument.testId) : null}
         onClose={() => setViewingDocument(null)}
+      />
+    )}
+
+    {previewScoreCardSummary && (
+      <ScoreCardPreviewModal
+        summary={previewScoreCardSummary}
+        onClose={() => setPreviewScoreCardSummary(null)}
+        onToast={setNotice}
       />
     )}
   </div>;
