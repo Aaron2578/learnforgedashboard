@@ -14,8 +14,10 @@ import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from 
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 import { buildScoreCardSummary, formatSeconds } from "../lib/quizUtils.js";
 import { downloadScoreCardPdf } from "../lib/scoreCardPdf.js";
+import UserProfileModal from "../components/UserProfileModal.jsx";
+import { lazyWithRetry } from "../lib/lazyWithRetry.js";
 
-const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
+const OnlineCompiler = lazyWithRetry(() => import("../components/OnlineCompiler.jsx"));
 
 const STUDENT_NAV = [
   { label: "My learning", icon: LayoutDashboard },
@@ -161,6 +163,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const [syllabusScope, setSyllabusScope] = useState("all");
   const [expandedCourseSyllabus, setExpandedCourseSyllabus] = useState(() => new Set());
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
 
   const loadPortal = useCallback(async (forceLoading = false) => {
     const studentId = effectiveUser?.id;
@@ -236,7 +239,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       supabase.from("attendance_records").select("id, course_id, attendance_date, status, note").eq("student_id", studentId).order("attendance_date", { ascending: false }),
       supabase.from("student_notifications").select("id, title, body, read_at, created_at").eq("student_id", studentId).order("created_at", { ascending: false }),
       supabase.from("course_materials").select("*").order("created_at", { ascending: false }),
-      supabase.from("download_requests").select("*").eq("student_id", studentId),
+      supabase.from("download_requests").select("*").eq("student_id", studentId).order("requested_at", { ascending: false }),
       materialRecipientsQuery,
       assessmentRecipientsQuery,
       supabase.from("course_enrollments").select("course_id").eq("student_id", studentId).then((r) => (r.error ? { data: [] } : r)),
@@ -369,8 +372,28 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         }
         debouncedReload();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, debouncedReload)
-      .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, debouncedReload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "download_requests" }, (payload) => {
+        // Instant optimistic patch for download requests
+        if (payload.new && payload.new.student_id === studentId) {
+          setDownloadRequests((prev) => {
+            const filtered = prev.filter((r) => r.id !== payload.new.id);
+            return [payload.new, ...filtered];
+          });
+        } else if (payload.eventType === "DELETE" && payload.old) {
+          setDownloadRequests((prev) => prev.filter((r) => r.id !== payload.old.id));
+        }
+        debouncedReload();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "student_notifications" }, (payload) => {
+        // Instant optimistic patch for incoming notifications
+        if (payload.new && payload.new.student_id === studentId) {
+          setNotifications((prev) => {
+            const filtered = prev.filter((n) => n.id !== payload.new.id);
+            return [payload.new, ...filtered];
+          });
+        }
+        debouncedReload();
+      })
       .subscribe();
 
     return () => {
@@ -378,6 +401,22 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       supabase.removeChannel(channel);
     };
   }, [supabase, effectiveUser?.id, debouncedReload]);
+
+  // Gentle background synchronization and focus refresh so downloads and approvals are always current
+  useEffect(() => {
+    const handleFocus = () => {
+      loadPortal(false);
+    };
+    window.addEventListener("focus", handleFocus);
+    const interval = setInterval(() => {
+      loadPortal(false);
+    }, 12000);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+    };
+  }, [loadPortal]);
 
   useEffect(() => {
     const studentId = effectiveUser?.id;
@@ -417,14 +456,57 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       setActiveView("My learning");
     }
   }, [loading, activeView, hasItLabAccess]);
-  const requestByMaterial = useMemo(
-    () => new Map((downloadRequests || []).filter((r) => r.material_id).map((r) => [r.material_id, r])),
-    [downloadRequests]
-  );
-  const requestByTest = useMemo(
-    () => new Map((downloadRequests || []).filter((r) => r.assessment_id).map((r) => [r.assessment_id, r])),
-    [downloadRequests]
-  );
+  const requestByMaterial = useMemo(() => {
+    const map = new Map();
+    for (const r of (downloadRequests || [])) {
+      if (!r.material_id) continue;
+      const existing = map.get(r.material_id);
+      if (!existing) {
+        map.set(r.material_id, r);
+        continue;
+      }
+      // If any request is approved, give approved priority
+      if (existing.status === "approved") continue;
+      if (r.status === "approved") {
+        map.set(r.material_id, r);
+      } else if (existing.status !== "pending" && r.status === "pending") {
+        map.set(r.material_id, r);
+      } else {
+        const existingTime = new Date(existing.reviewed_at || existing.requested_at || 0).getTime();
+        const rTime = new Date(r.reviewed_at || r.requested_at || 0).getTime();
+        if (rTime > existingTime) {
+          map.set(r.material_id, r);
+        }
+      }
+    }
+    return map;
+  }, [downloadRequests]);
+
+  const requestByTest = useMemo(() => {
+    const map = new Map();
+    for (const r of (downloadRequests || [])) {
+      if (!r.assessment_id) continue;
+      const existing = map.get(r.assessment_id);
+      if (!existing) {
+        map.set(r.assessment_id, r);
+        continue;
+      }
+      // If any request is approved, give approved priority
+      if (existing.status === "approved") continue;
+      if (r.status === "approved") {
+        map.set(r.assessment_id, r);
+      } else if (existing.status !== "pending" && r.status === "pending") {
+        map.set(r.assessment_id, r);
+      } else {
+        const existingTime = new Date(existing.reviewed_at || existing.requested_at || 0).getTime();
+        const rTime = new Date(r.reviewed_at || r.requested_at || 0).getTime();
+        if (rTime > existingTime) {
+          map.set(r.assessment_id, r);
+        }
+      }
+    }
+    return map;
+  }, [downloadRequests]);
   const unreadMessages = messages.filter((message) => message.sender_id !== effectiveUser?.id && !message.read_at).length;
   const permittedAssignmentIds = useMemo(() => {
     return new Set(assignmentRecipients.filter((r) => r.student_id === effectiveUser?.id).map((r) => r.assignment_id));
@@ -492,6 +574,7 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       title,
       subtitle,
       url: finalUrl,
+      filePath,
       directDownloadUrl: directDownload,
       fileName: fileName || filePath || "",
       fileType: fileType || "",
@@ -500,6 +583,20 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       downloadStatus: downloadStatusOverride || existingRequest?.status || null,
     });
   }
+
+  // Keep viewingDocument's downloadStatus immediately in sync with latest downloadRequests
+  useEffect(() => {
+    if (!viewingDocument) return;
+    const currentReq = viewingDocument.materialId
+      ? requestByMaterial.get(viewingDocument.materialId)
+      : viewingDocument.testId
+      ? requestByTest.get(viewingDocument.testId)
+      : null;
+    const currentStatus = currentReq?.status || null;
+    if (currentStatus && currentStatus !== viewingDocument.downloadStatus) {
+      setViewingDocument((curr) => (curr ? { ...curr, downloadStatus: currentStatus } : null));
+    }
+  }, [downloadRequests, requestByMaterial, requestByTest, viewingDocument]);
 
   async function submitDownloadRequest(materialId, testId, reason = "") {
     setBusy(true);
@@ -545,49 +642,53 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
 
   async function downloadApprovedItem(material) {
     try {
+      setBusy(true);
+      setError("");
+      setNotice(`Starting download for “${material.title || "document"}”…`);
+
       if (material.file_path) {
-        if (material.file_path.startsWith("data:") || material.file_path.startsWith("http")) {
+        try {
+          await triggerDocumentDownload(
+            supabase,
+            material.file_path,
+            material.file_name || `${material.title || "document"}.pdf`,
+            material.drive_url
+          );
+          setNotice(`Download started for “${material.title || "document"}”!`);
+          return;
+        } catch (downloadErr) {
+          console.warn("triggerDocumentDownload fallback:", downloadErr);
+        }
+
+        // Direct fallback: resolve signed url
+        const resolvedUrl = await resolveStorageSignedUrl(supabase, material.file_path, material.drive_url);
+        if (resolvedUrl) {
           const a = document.createElement("a");
-          a.href = material.file_path;
+          a.href = resolvedUrl;
           a.download = material.file_name || `${material.title || "document"}.pdf`;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
           document.body.appendChild(a);
           a.click();
-          document.body.removeChild(a);
+          a.remove();
+          setNotice(`Download opened for “${material.title || "document"}”!`);
           return;
         }
-
-        let bucket = "course-materials";
-        let cleanPath = material.file_path;
-        if (material.file_path.startsWith("course-materials:")) {
-          cleanPath = material.file_path.replace("course-materials:", "");
-        } else if (material.file_path.startsWith("assignment-files:")) {
-          bucket = "assignment-files";
-          cleanPath = material.file_path.replace("assignment-files:", "");
-        }
-
-        let { data, error: signedError } = await supabase.storage
-          .from(bucket)
-          .createSignedUrl(cleanPath, 120);
-
-        if (!signedError && data?.signedUrl) {
-          window.open(data.signedUrl, "_blank");
-        } else {
-          const otherBucket = bucket === "course-materials" ? "assignment-files" : "course-materials";
-          const { data: fallbackData } = await supabase.storage
-            .from(otherBucket)
-            .createSignedUrl(cleanPath, 120);
-          if (fallbackData?.signedUrl) {
-            window.open(fallbackData.signedUrl, "_blank");
-          } else {
-            throw new Error(signedError?.message || "File could not be found in storage.");
-          }
-        }
-      } else if (material.drive_url) {
-        const downloadUrl = getDriveDownloadExportUrl(material.drive_url);
-        window.open(downloadUrl, "_blank");
       }
+
+      if (material.drive_url) {
+        const downloadUrl = getDriveDownloadExportUrl(material.drive_url) || material.drive_url;
+        window.open(downloadUrl, "_blank", "noopener,noreferrer");
+        setNotice(`Download link opened for “${material.title || "document"}”.`);
+        return;
+      }
+
+      throw new Error("No file or Drive URL is attached to this material.");
     } catch (err) {
+      console.error("Download error:", err);
       setError(`Download error: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2638,11 +2739,18 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       <nav className="side-nav">{visibleStudentNav.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="student-support"><ShieldCheck size={16} /><span><strong>Your work is private</strong><small>Only you and your institution can view your submissions.</small></span></div>
-      <div className="profile">
+      <div
+        className="profile clickable"
+        onClick={() => setProfileModalOpen(true)}
+        role="button"
+        tabIndex={0}
+        title="Click to view profile, upload resume, feedback & settings"
+        style={{ cursor: "pointer" }}
+      >
         <span className="profile-avatar">{(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span>
         <span className="profile-copy">
           <strong>{activeStudent?.full_name || effectiveUser?.email}</strong>
-          <small>{activeStudent?.timing ? `Timing: ${activeStudent.timing}` : (isAdminPreview ? "Student (Preview)" : "Student")}</small>
+          <small>{activeStudent?.timing ? `Timing: ${activeStudent.timing}` : (isAdminPreview ? "Student (Preview)" : "Student · Click for profile")}</small>
         </span>
       </div>
       {isAdminPreview ? (
@@ -2719,9 +2827,16 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <span className="top-avatar" title={effectiveUser?.email}>
+          <button
+            type="button"
+            className="top-avatar clickable"
+            onClick={() => setProfileModalOpen(true)}
+            title={`Profile & Settings: ${activeStudent?.full_name || effectiveUser?.email}`}
+            style={{ cursor: "pointer", border: "none", padding: 0 }}
+            aria-label="Open profile and settings"
+          >
             {(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}
-          </span>
+          </button>
           {isAdminPreview && (
             <button
               className="button primary compact"
@@ -2811,12 +2926,33 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         onRequestDownload={(reason) =>
           submitDownloadRequest(viewingDocument.materialId, viewingDocument.testId, reason)
         }
-        onDownload={() => {
+        onDownload={async () => {
+          if (viewingDocument.materialId) {
+            const mat = materials.find((m) => m.id === viewingDocument.materialId);
+            if (mat) {
+              await downloadApprovedItem(mat);
+              return;
+            }
+          }
+          if (viewingDocument.filePath) {
+            try {
+              await triggerDocumentDownload(
+                supabase,
+                viewingDocument.filePath,
+                viewingDocument.fileName || `${viewingDocument.title || "document"}.pdf`,
+                viewingDocument.url
+              );
+              setNotice("Download started!");
+              return;
+            } catch (dlErr) {
+              console.warn("Viewer download fallback:", dlErr);
+            }
+          }
           if (viewingDocument.directDownloadUrl) {
-            window.open(viewingDocument.directDownloadUrl, "_blank");
+            window.open(viewingDocument.directDownloadUrl, "_blank", "noopener,noreferrer");
           } else if (viewingDocument.url) {
             const dlUrl = getDriveDownloadExportUrl(viewingDocument.url);
-            window.open(dlUrl, "_blank");
+            window.open(dlUrl || viewingDocument.url, "_blank", "noopener,noreferrer");
           }
         }}
         onMarkCompleted={viewingDocument.testId ? () => markExternalTestCompleted(viewingDocument.testId) : null}
@@ -2829,6 +2965,21 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         summary={previewScoreCardSummary}
         onClose={() => setPreviewScoreCardSummary(null)}
         onToast={setNotice}
+      />
+    )}
+
+    {profileModalOpen && (
+      <UserProfileModal
+        user={effectiveUser || user}
+        profile={activeStudent || profile}
+        supabase={supabase}
+        isOpen={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        onProfileUpdated={async () => {
+          await loadPortal();
+        }}
+        onToast={setNotice}
+        onSignOut={onSignOut}
       />
     )}
   </div>;

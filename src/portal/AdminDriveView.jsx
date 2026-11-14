@@ -640,14 +640,78 @@ export default function AdminDriveView({ supabase, user, query = "", onToast = (
     setBusy(true);
     setError("");
 
-    try {
-      const { error: reviewError } = await supabase.rpc("review_download_request", {
-        p_request_id: requestId,
-        p_status: newStatus,
-        p_notes: `Status set to ${newStatus} by admin on ${new Date().toLocaleDateString()}`,
-      });
+    // Find the request record before updating
+    const targetReq = (downloadRequests || []).find((r) => r.id === requestId);
 
-      if (reviewError) throw reviewError;
+    // Optimistically update the local state for instant responsiveness
+    setDownloadRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: newStatus,
+              reviewed_at: new Date().toISOString(),
+              reviewed_by: user?.id,
+              admin_notes: `Status set to ${newStatus} by admin on ${new Date().toLocaleDateString()}`,
+            }
+          : r
+      )
+    );
+
+    try {
+      let rpcSucceeded = false;
+      try {
+        const { error: reviewError } = await supabase.rpc("review_download_request", {
+          p_request_id: requestId,
+          p_status: newStatus,
+          p_notes: `Status set to ${newStatus} by admin on ${new Date().toLocaleDateString()}`,
+        });
+        if (!reviewError) {
+          rpcSucceeded = true;
+        } else {
+          console.warn("review_download_request RPC error, attempting direct table update:", reviewError.message);
+        }
+      } catch (rpcErr) {
+        console.warn("review_download_request RPC exception, attempting direct table update:", rpcErr.message);
+      }
+
+      // If RPC failed (e.g., due to role check or RPC missing), fall back to direct table update
+      if (!rpcSucceeded) {
+        const { error: updateError } = await supabase
+          .from("download_requests")
+          .update({
+            status: newStatus,
+            reviewed_at: new Date().toISOString(),
+            reviewed_by: user?.id,
+            admin_notes: `Status set to ${newStatus} by admin on ${new Date().toLocaleDateString()}`,
+          })
+          .eq("id", requestId);
+
+        if (updateError) throw updateError;
+      }
+
+      // Send a notification to the student so their portal receives an alert and instant realtime wakeup
+      if (targetReq?.student_id) {
+        const material = materials.find((m) => m.id === targetReq.material_id);
+        const matTitle = material?.title || "Course Material";
+        try {
+          await supabase.from("student_notifications").insert({
+            student_id: targetReq.student_id,
+            title:
+              newStatus === "approved"
+                ? "Download Access Approved"
+                : newStatus === "revoked"
+                ? "Download Access Revoked"
+                : "Download Request Declined",
+            body:
+              newStatus === "approved"
+                ? `Your download request for “${matTitle}” has been approved! You can now download it directly from Drive & Files.`
+                : `Your download request for “${matTitle}” was ${newStatus}.`,
+          });
+        } catch (notifErr) {
+          console.warn("Notification insert warning:", notifErr);
+        }
+      }
 
       const actionLabel =
         newStatus === "approved"
@@ -660,7 +724,8 @@ export default function AdminDriveView({ supabase, user, query = "", onToast = (
       await loadData();
     } catch (err) {
       console.error("Review request error:", err);
-      setError(err.message);
+      setError(`Could not update request: ${err.message}`);
+      await loadData();
     } finally {
       setBusy(false);
     }

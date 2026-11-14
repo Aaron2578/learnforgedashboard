@@ -56,8 +56,10 @@ import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadE
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 import { formatSeconds, syncAssessmentQuestions, updateAssessmentRecord, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
+import UserProfileModal from "../components/UserProfileModal.jsx";
+import { lazyWithRetry } from "../lib/lazyWithRetry.js";
 
-const OnlineCompiler = lazy(() => import("../components/OnlineCompiler.jsx"));
+const OnlineCompiler = lazyWithRetry(() => import("../components/OnlineCompiler.jsx"));
 
 const TRAINER_NAV = [
   { label: "Overview", icon: LayoutDashboard },
@@ -244,6 +246,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   // Student Detail Modal
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [enrollingCourseId, setEnrollingCourseId] = useState("");
   const [enrollBusy, setEnrollBusy] = useState(false);
 
@@ -1707,14 +1710,38 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   async function handleReviewDownloadRequest(requestId, status, studentName) {
     try {
+      const targetReq = (downloadRequests || []).find((r) => r.id === requestId);
       await supabase
         .from("download_requests")
         .update({
           status,
           reviewed_at: new Date().toISOString(),
           reviewed_by: user.id,
+          admin_notes: `Status set to ${status} by trainer on ${new Date().toLocaleDateString()}`,
         })
         .eq("id", requestId);
+
+      if (targetReq?.student_id) {
+        const mat = (materials || []).find((m) => m.id === targetReq.material_id);
+        const matTitle = mat?.title || "Course Material";
+        try {
+          await supabase.from("student_notifications").insert({
+            student_id: targetReq.student_id,
+            title:
+              status === "approved"
+                ? "Download Access Approved"
+                : status === "revoked"
+                ? "Download Access Revoked"
+                : "Download Request Declined",
+            body:
+              status === "approved"
+                ? `Your download request for “${matTitle}” has been approved by your instructor! You can now download it directly from Drive & Files.`
+                : `Your download request for “${matTitle}” was ${status}.`,
+          });
+        } catch (notifErr) {
+          console.warn("Notification insert warning:", notifErr);
+        }
+      }
 
       setToast(status === "approved" ? `Download approved for ${studentName}!` : `Request declined for ${studentName}.`);
       await loadTrainerData(false);
@@ -5384,13 +5411,20 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           </span>
         </div>
 
-        <div className="profile">
+        <div
+          className="profile clickable"
+          onClick={() => setProfileModalOpen(true)}
+          role="button"
+          tabIndex={0}
+          title="Click to view profile, upload resume, feedback & settings"
+          style={{ cursor: "pointer" }}
+        >
           <span className="profile-avatar">
             {((isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "TR").slice(0, 2).toUpperCase()}
           </span>
           <span className="profile-copy">
             <strong>{(isAdminPreview ? activeTrainer?.full_name : (profile?.full_name || user?.email)) || "Trainer"}</strong>
-            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor"}</small>
+            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor · Profile & Settings"}</small>
           </span>
         </div>
 
@@ -5475,9 +5509,16 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               />
             </label>
 
-            <span className="top-avatar" title={user?.email}>
+            <button
+              type="button"
+              className="top-avatar clickable"
+              onClick={() => setProfileModalOpen(true)}
+              title={`Profile & Settings: ${profile?.full_name || user?.email}`}
+              style={{ cursor: "pointer", border: "none", padding: 0 }}
+              aria-label="Open profile and settings"
+            >
               {(profile?.full_name || "TR").slice(0, 2).toUpperCase()}
-            </span>
+            </button>
 
             {isAdminPreview ? (
               <button
@@ -6848,6 +6889,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               window.open(dl, "_blank");
             }
           }}
+        />
+      )}
+
+      {profileModalOpen && (
+        <UserProfileModal
+          user={user}
+          profile={profile}
+          supabase={supabase}
+          isOpen={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          onProfileUpdated={async () => {
+            await loadTrainerData(false);
+          }}
+          onToast={setToast}
+          onSignOut={onSignOut}
         />
       )}
     </div>
