@@ -56,6 +56,7 @@ import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadE
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 import { formatSeconds, syncAssessmentQuestions, updateAssessmentRecord, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
+import EditTrainerModal from "../components/EditTrainerModal.jsx";
 import { lazyWithRetry } from "../lib/lazyWithRetry.js";
 
 const OnlineCompiler = lazyWithRetry(() => import("../components/OnlineCompiler.jsx"));
@@ -245,6 +246,7 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   // Student Detail Modal
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
+  const [editingMyProfile, setEditingMyProfile] = useState(false);
   const [enrollingCourseId, setEnrollingCourseId] = useState("");
   const [enrollBusy, setEnrollBusy] = useState(false);
 
@@ -423,6 +425,25 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
       setToast("Course removed from student.");
     }
     setEnrollBusy(false);
+  }
+
+  async function handleUpdateMyProfile(trainerId, updates) {
+    setBusy(true);
+    setError("");
+    try {
+      const { error: updateErr } = await supabase.from("profiles").update(updates).eq("id", trainerId);
+      if (updateErr) throw updateErr;
+      setEditingMyProfile(false);
+      setToast("Trainer profile updated successfully!");
+      if (profile && profile.id === trainerId) {
+        Object.assign(profile, updates);
+      }
+      await loadTrainerData(false);
+    } catch (err) {
+      setError("Failed to update profile: " + (err.message || "Unknown error"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   // Quick Mappings
@@ -1888,6 +1909,15 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
                 onClick={() => setActiveTab("Gradebook")}
               >
                 <BarChart3 size={15} /> Gradebook
+              </button>
+              <button
+                className="button"
+                style={{ background: "rgba(255, 255, 255, 0.22)", color: "#ffffff", border: "1px solid rgba(255, 255, 255, 0.35)", fontWeight: 600 }}
+                type="button"
+                onClick={() => setEditingMyProfile(true)}
+                title="Edit your trainer profile and shift timing"
+              >
+                <Pencil size={15} /> Edit Profile
               </button>
             </div>
           </div>
@@ -5409,13 +5439,21 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           </span>
         </div>
 
-        <div className="profile">
+        <div
+          className="profile"
+          style={{ cursor: "pointer" }}
+          onClick={() => setEditingMyProfile(true)}
+          title="Click to edit trainer profile"
+        >
           <span className="profile-avatar">
             {((isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "TR").slice(0, 2).toUpperCase()}
           </span>
           <span className="profile-copy">
-            <strong>{(isAdminPreview ? activeTrainer?.full_name : (profile?.full_name || user?.email)) || "Trainer"}</strong>
-            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor"}</small>
+            <strong style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              {(isAdminPreview ? activeTrainer?.full_name : (profile?.full_name || user?.email)) || "Trainer"}
+              <Pencil size={11} style={{ opacity: 0.6 }} />
+            </strong>
+            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor (Click to edit)"}</small>
           </span>
         </div>
 
@@ -6873,6 +6911,14 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               window.open(dl, "_blank");
             }
           }}
+        />
+      )}
+
+      {editingMyProfile && (
+        <EditTrainerModal
+          trainer={activeTrainer || profile || { id: activeTrainerId, email: user?.email }}
+          onClose={() => setEditingMyProfile(false)}
+          onSave={handleUpdateMyProfile}
         />
       )}
     </div>

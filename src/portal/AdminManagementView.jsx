@@ -8,6 +8,7 @@ import { getFunctionErrorMessage } from "../lib/functionErrors.js";
 import EditCourseModal from "../components/EditCourseModal";
 import EditRecordModal from "../components/EditRecordModal";
 import EditStudentModal from "../components/EditStudentModal";
+import EditTrainerModal from "../components/EditTrainerModal";
 import EditMaterialModal from "../components/EditMaterialModal";
 import AttendanceCalendar from "../components/AttendanceCalendar";
 import SecureDocumentViewer from "../components/SecureDocumentViewer";
@@ -60,6 +61,7 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
   const [editingCourse, setEditingCourse] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
+  const [editingTrainer, setEditingTrainer] = useState(null);
   const [inviteMode, setInviteMode] = useState("single");
   const [studentStatus, setStudentStatus] = useState("all");
   const [studentSearch, setStudentSearch] = useState("");
@@ -796,6 +798,22 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
       await loadData();
     }
     setBusy(false);
+  }
+
+  async function updateTrainerProfile(trainerId, updates) {
+    setBusy(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.from("profiles").update(updates).eq("id", trainerId);
+      if (updateError) throw updateError;
+      setEditingTrainer(null);
+      onToast("Trainer profile updated successfully.");
+      await loadData();
+    } catch (err) {
+      setError(err.message || "Failed to update trainer profile.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSaveTrainerStudents(trainerId, selectedStudentIds) {
@@ -2744,13 +2762,23 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
                           background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
                           color: "#ffffff",
                           fontWeight: 750,
+                          cursor: "pointer",
                         }}
+                        onClick={() => setEditingTrainer(trainer)}
+                        title="Click to edit trainer profile"
                       >
                         {(trainer.full_name || trainer.email).slice(0, 1).toUpperCase()}
                       </span>
                       <div className="student-item-details">
                         <div className="student-item-name-row">
-                          <strong className="student-item-name">{trainer.full_name || "Trainer"}</strong>
+                          <strong
+                            className="student-item-name"
+                            style={{ cursor: "pointer" }}
+                            onClick={() => setEditingTrainer(trainer)}
+                            title="Click to edit trainer profile"
+                          >
+                            {trainer.full_name || "Trainer"}
+                          </strong>
                           <span className={`portal-status ${trainer.is_approved ? "submitted" : "pending"}`}>
                             {trainer.is_approved ? "Active" : "Suspended"}
                           </span>
@@ -2763,6 +2791,16 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
                         )}
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      className="button compact"
+                      onClick={() => setEditingTrainer(trainer)}
+                      title="Edit trainer profile and shift timing"
+                      style={{ gap: "5px", padding: "4px 10px", fontSize: "12px", marginLeft: "auto" }}
+                    >
+                      <Pencil size={12} />
+                      <span>Edit Profile</span>
+                    </button>
                   </div>
 
                   {/* Meta Information Container */}
@@ -2770,9 +2808,23 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
                     <span className="student-timing-chip">
                       <GraduationCap size={12} /> Role: <strong>Trainer</strong>
                     </span>
-                    {trainer.timing && (
-                      <span className="student-timing-chip">
-                        <Clock3 size={12} /> Shift: <strong>{trainer.timing}</strong>
+                    {trainer.timing ? (
+                      <span
+                        className="student-timing-chip"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setEditingTrainer(trainer)}
+                        title="Click to edit shift timing"
+                      >
+                        <Clock3 size={12} /> Shift: <strong>{trainer.timing}</strong> <Pencil size={10} style={{ marginLeft: "3px", opacity: 0.6 }} />
+                      </span>
+                    ) : (
+                      <span
+                        className="student-timing-chip"
+                        style={{ color: "#94a3b8", borderStyle: "dashed", cursor: "pointer" }}
+                        onClick={() => setEditingTrainer(trainer)}
+                        title="Click to set shift timing"
+                      >
+                        <Clock3 size={12} /> Shift: <em>Unassigned</em> <Pencil size={10} style={{ marginLeft: "3px", opacity: 0.6 }} />
                       </span>
                     )}
                     <span
@@ -2850,6 +2902,16 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
                       >
                         <Users size={13} />
                         <span>Assign Students ({trainerStudents.filter((ts) => ts.trainer_id === trainer.id).length})</span>
+                      </button>
+                      <button
+                        className="button compact"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setEditingTrainer(trainer)}
+                        title="Edit trainer profile and details"
+                      >
+                        <Pencil size={13} />
+                        <span>Edit Profile</span>
                       </button>
                       <button
                         className="button compact"
@@ -3520,6 +3582,15 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
         onClose={() => setEditingStudent(null)}
         onSave={updateStudentProfile}
         onDelete={deleteStudent}
+      />
+    )}
+
+    {editingTrainer && (
+      <EditTrainerModal
+        trainer={editingTrainer}
+        onClose={() => setEditingTrainer(null)}
+        onSave={updateTrainerProfile}
+        onDelete={deleteTrainer}
       />
     )}
 

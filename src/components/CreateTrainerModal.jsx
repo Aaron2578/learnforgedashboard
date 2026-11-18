@@ -10,7 +10,7 @@ function generateStrongPassword() {
   return pass;
 }
 
-export default function CreateTrainerModal({ onClose, onCreated, supabase, onToast }) {
+export default function CreateTrainerModal({ onClose, onCreated, supabase, onToast = () => {} }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("Trainer@LearnForge2026!");

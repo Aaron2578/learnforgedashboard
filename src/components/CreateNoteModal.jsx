@@ -25,7 +25,7 @@ export default function CreateNoteModal({
   user,
   onClose,
   onCreated,
-  onToast,
+  onToast = () => {},
 }) {
   const [title, setTitle] = useState("");
   const [courseId, setCourseId] = useState(initialCourseId || "");
