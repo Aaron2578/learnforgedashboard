@@ -804,7 +804,12 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
     setBusy(true);
     setError("");
     try {
-      const { error: updateError } = await supabase.from("profiles").update(updates).eq("id", trainerId);
+      const allowedKeys = ["full_name", "timing", "is_approved"];
+      const cleanUpdates = {};
+      for (const k of allowedKeys) {
+        if (k in updates) cleanUpdates[k] = updates[k];
+      }
+      const { error: updateError } = await supabase.from("profiles").update(cleanUpdates).eq("id", trainerId);
       if (updateError) throw updateError;
       setEditingTrainer(null);
       onToast("Trainer profile updated successfully.");

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GraduationCap, X, Clock3, Check, Trash2 } from "lucide-react";
+import { GraduationCap, X, Clock3, Trash2 } from "lucide-react";
 
 const TIMING_PRESETS = [
   "Full Day (09:00 AM - 05:00 PM)",
@@ -12,8 +12,6 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
   const [fullName, setFullName] = useState(trainer.full_name || "");
   const [timing, setTiming] = useState(trainer.timing || "");
   const [isApproved, setIsApproved] = useState(trainer.is_approved !== false);
-  const [phone, setPhone] = useState(trainer.phone || "");
-  const [bio, setBio] = useState(trainer.bio || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -31,8 +29,6 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
         full_name: fullName.trim(),
         timing: timing.trim(),
         is_approved: isApproved,
-        phone: phone.trim(),
-        bio: bio.trim(),
       });
     } catch (err) {
       setError(err.message || "Failed to update trainer profile.");
@@ -47,7 +43,7 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" style={{ maxWidth: "560px" }}>
+      <div className="modal" role="dialog" aria-modal="true" style={{ maxWidth: "540px" }}>
         <div className="modal-heading">
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <span
@@ -67,7 +63,7 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
             </span>
             <div>
               <h2>Edit Trainer Profile</h2>
-              <p>Update instructor name, shift timing, phone, and account status.</p>
+              <p>Update instructor name, shift timing, and account status.</p>
             </div>
           </div>
           <button type="button" className="quiet-icon" onClick={onClose} aria-label="Close modal">
@@ -88,7 +84,7 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
             <input
               type="email"
               disabled
-              value={trainer.email}
+              value={trainer.email || ""}
               style={{ background: "#f8fafc", color: "var(--muted)" }}
             />
           </label>
@@ -134,30 +130,6 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
                 </button>
               ))}
             </div>
-          </label>
-
-          <div className="form-row two-col" style={{ marginTop: "14px", display: "grid", gridTemplateColumns: "1fr", gap: "12px" }}>
-            <label className="form-field">
-              <span>Phone / Contact Number (Optional)</span>
-              <input
-                type="tel"
-                maxLength={30}
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+91 98765 43210"
-              />
-            </label>
-          </div>
-
-          <label className="form-field" style={{ marginTop: "14px" }}>
-            <span>Instructor Bio / Specialization (Optional)</span>
-            <textarea
-              rows={2}
-              maxLength={300}
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              placeholder="e.g. Lead Full Stack Instructor · React, Python, Data Science"
-            />
           </label>
 
           <div

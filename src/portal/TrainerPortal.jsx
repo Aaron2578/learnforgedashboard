@@ -431,12 +431,17 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
     setBusy(true);
     setError("");
     try {
-      const { error: updateErr } = await supabase.from("profiles").update(updates).eq("id", trainerId);
+      const allowedKeys = ["full_name", "timing", "is_approved"];
+      const cleanUpdates = {};
+      for (const k of allowedKeys) {
+        if (k in updates) cleanUpdates[k] = updates[k];
+      }
+      const { error: updateErr } = await supabase.from("profiles").update(cleanUpdates).eq("id", trainerId);
       if (updateErr) throw updateErr;
       setEditingMyProfile(false);
       setToast("Trainer profile updated successfully!");
       if (profile && profile.id === trainerId) {
-        Object.assign(profile, updates);
+        Object.assign(profile, cleanUpdates);
       }
       await loadTrainerData(false);
     } catch (err) {
