@@ -14,7 +14,6 @@ import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote } from 
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 import { buildScoreCardSummary, formatSeconds } from "../lib/quizUtils.js";
 import { downloadScoreCardPdf } from "../lib/scoreCardPdf.js";
-import UserProfileModal from "../components/UserProfileModal.jsx";
 import { lazyWithRetry } from "../lib/lazyWithRetry.js";
 
 const OnlineCompiler = lazyWithRetry(() => import("../components/OnlineCompiler.jsx"));
@@ -163,7 +162,6 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
   const [syllabusScope, setSyllabusScope] = useState("all");
   const [expandedCourseSyllabus, setExpandedCourseSyllabus] = useState(() => new Set());
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
 
   const loadPortal = useCallback(async (forceLoading = false) => {
     const studentId = effectiveUser?.id;
@@ -2739,18 +2737,11 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
       <nav className="side-nav">{visibleStudentNav.map((item) => <button key={item.label} className={`nav-link ${activeView === item.label ? "active" : ""}`} type="button" onClick={() => navigate(item.label)} aria-current={activeView === item.label ? "page" : undefined} title={item.label}><item.icon className="nav-icon" size={18} /><span>{item.label}</span>{item.label === "Messages" && unreadConversations > 0 && <span className="nav-count">{unreadConversations}</span>}{item.label === "Updates" && notifications.filter((notification) => !notification.read_at).length > 0 && <span className="nav-count">{notifications.filter((notification) => !notification.read_at).length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="student-support"><ShieldCheck size={16} /><span><strong>Your work is private</strong><small>Only you and your institution can view your submissions.</small></span></div>
-      <div
-        className="profile clickable"
-        onClick={() => setProfileModalOpen(true)}
-        role="button"
-        tabIndex={0}
-        title="Click to view profile, upload resume, feedback & settings"
-        style={{ cursor: "pointer" }}
-      >
+      <div className="profile">
         <span className="profile-avatar">{(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}</span>
         <span className="profile-copy">
           <strong>{activeStudent?.full_name || effectiveUser?.email}</strong>
-          <small>{activeStudent?.timing ? `Timing: ${activeStudent.timing}` : (isAdminPreview ? "Student (Preview)" : "Student · Click for profile")}</small>
+          <small>{activeStudent?.timing ? `Timing: ${activeStudent.timing}` : (isAdminPreview ? "Student (Preview)" : "Student")}</small>
         </span>
       </div>
       {isAdminPreview ? (
@@ -2827,16 +2818,9 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <button
-            type="button"
-            className="top-avatar clickable"
-            onClick={() => setProfileModalOpen(true)}
-            title={`Profile & Settings: ${activeStudent?.full_name || effectiveUser?.email}`}
-            style={{ cursor: "pointer", border: "none", padding: 0 }}
-            aria-label="Open profile and settings"
-          >
+          <span className="top-avatar" title={effectiveUser?.email}>
             {(activeStudent?.full_name || "ST").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "ST"}
-          </button>
+          </span>
           {isAdminPreview && (
             <button
               className="button primary compact"
@@ -2965,21 +2949,6 @@ function StudentPortal({ user, profile, supabase, onSignOut, isAdminPreview, onE
         summary={previewScoreCardSummary}
         onClose={() => setPreviewScoreCardSummary(null)}
         onToast={setNotice}
-      />
-    )}
-
-    {profileModalOpen && (
-      <UserProfileModal
-        user={effectiveUser || user}
-        profile={activeStudent || profile}
-        supabase={supabase}
-        isOpen={profileModalOpen}
-        onClose={() => setProfileModalOpen(false)}
-        onProfileUpdated={async () => {
-          await loadPortal();
-        }}
-        onToast={setNotice}
-        onSignOut={onSignOut}
       />
     )}
   </div>;

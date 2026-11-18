@@ -56,7 +56,6 @@ import { extractDriveUrl, cleanNoteBody, getDriveDocTypeLabel, getDriveDownloadE
 import { isHolidayRecord, normalizeAttendanceStatus, cleanAttendanceNote, insertAttendanceWithFallback } from "../lib/attendanceUtils.js";
 import { getCourseLabRecommendations, isItCourse } from "../lib/courseUtils.js";
 import { formatSeconds, syncAssessmentQuestions, updateAssessmentRecord, validateAndNormalizeQuizJson } from "../lib/quizUtils.js";
-import UserProfileModal from "../components/UserProfileModal.jsx";
 import { lazyWithRetry } from "../lib/lazyWithRetry.js";
 
 const OnlineCompiler = lazyWithRetry(() => import("../components/OnlineCompiler.jsx"));
@@ -246,7 +245,6 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
 
   // Student Detail Modal
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [enrollingCourseId, setEnrollingCourseId] = useState("");
   const [enrollBusy, setEnrollBusy] = useState(false);
 
@@ -5411,20 +5409,13 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
           </span>
         </div>
 
-        <div
-          className="profile clickable"
-          onClick={() => setProfileModalOpen(true)}
-          role="button"
-          tabIndex={0}
-          title="Click to view profile, upload resume, feedback & settings"
-          style={{ cursor: "pointer" }}
-        >
+        <div className="profile">
           <span className="profile-avatar">
             {((isAdminPreview ? activeTrainer?.full_name : profile?.full_name) || "TR").slice(0, 2).toUpperCase()}
           </span>
           <span className="profile-copy">
             <strong>{(isAdminPreview ? activeTrainer?.full_name : (profile?.full_name || user?.email)) || "Trainer"}</strong>
-            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor · Profile & Settings"}</small>
+            <small>{isAdminPreview ? `Instructor (${activeTrainer?.email || "Preview"})` : "Instructor"}</small>
           </span>
         </div>
 
@@ -5509,16 +5500,9 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               />
             </label>
 
-            <button
-              type="button"
-              className="top-avatar clickable"
-              onClick={() => setProfileModalOpen(true)}
-              title={`Profile & Settings: ${profile?.full_name || user?.email}`}
-              style={{ cursor: "pointer", border: "none", padding: 0 }}
-              aria-label="Open profile and settings"
-            >
+            <span className="top-avatar" title={user?.email}>
               {(profile?.full_name || "TR").slice(0, 2).toUpperCase()}
-            </button>
+            </span>
 
             {isAdminPreview ? (
               <button
@@ -6889,21 +6873,6 @@ export default function TrainerPortal({ user, profile, supabase, onSignOut, onEx
               window.open(dl, "_blank");
             }
           }}
-        />
-      )}
-
-      {profileModalOpen && (
-        <UserProfileModal
-          user={user}
-          profile={profile}
-          supabase={supabase}
-          isOpen={profileModalOpen}
-          onClose={() => setProfileModalOpen(false)}
-          onProfileUpdated={async () => {
-            await loadTrainerData(false);
-          }}
-          onToast={setToast}
-          onSignOut={onSignOut}
         />
       )}
     </div>

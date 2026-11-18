@@ -36,7 +36,6 @@ import AdminManagementView from "./portal/AdminManagementView.jsx";
 import AdminDriveView from "./portal/AdminDriveView.jsx";
 import TrainerPortal from "./portal/TrainerPortal.jsx";
 import StudentPortal from "./portal/StudentPortal.jsx";
-import UserProfileModal from "./components/UserProfileModal.jsx";
 import { lazyWithRetry } from "./lib/lazyWithRetry.js";
 
 const OnlineCompiler = lazyWithRetry(() => import("./components/OnlineCompiler.jsx"));
@@ -359,7 +358,6 @@ function App({ user, profile, supabase, onSignOut }) {
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState("");
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [storageStats, setStorageStats] = useState(null);
   const [pendingDownloadsCount, setPendingDownloadsCount] = useState(0);
   const notificationRef = useRef(null);
@@ -726,20 +724,7 @@ function App({ user, profile, supabase, onSignOut }) {
           </div>
         </div>}
         <div className="help-card"><span className="help-icon"><CircleAlert size={16} /></span><strong>Need a hand?</strong><p>Our support team is here to help you make the most of LearnForge.</p><a href="mailto:support@learnforge.example">Contact support <ArrowRight size={12} /></a></div>
-        <div
-          className="profile clickable"
-          onClick={() => setProfileModalOpen(true)}
-          role="button"
-          tabIndex={0}
-          title="Click to view profile, upload resume, feedback & settings"
-          style={{ cursor: "pointer" }}
-        >
-          <span className="profile-avatar">{(profile?.full_name || "AM").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span>
-          <span className="profile-copy">
-            <strong>{profile?.full_name || "Administrator"}</strong>
-            <small>Admin · Profile &amp; Settings</small>
-          </span>
-        </div>
+        <div className="profile"><span className="profile-avatar">{(profile?.full_name || "AM").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span className="profile-copy"><strong>{profile?.full_name || "Administrator"}</strong><small>Admin</small></span></div>
         <button className="signout-button" type="button" onClick={onSignOut} title="Sign out" aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
       </aside>
 
@@ -755,16 +740,7 @@ function App({ user, profile, supabase, onSignOut }) {
                 {!data.notifications.length && <div className="empty-state">You’re all caught up.</div>}
               </div>}
             </div>
-            <button
-              type="button"
-              className="top-avatar clickable"
-              onClick={() => setProfileModalOpen(true)}
-              title={`Profile & Settings: ${profile?.full_name || user?.email}`}
-              style={{ cursor: "pointer", border: "none", padding: 0 }}
-              aria-label="Open profile and settings"
-            >
-              {(profile?.full_name || "AM").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}
-            </button>
+            <span className="top-avatar" title={profile?.email || user?.email}>{(profile?.full_name || "AM").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span>
           </div>
         </header>
 
@@ -772,17 +748,6 @@ function App({ user, profile, supabase, onSignOut }) {
       </main>
       {modalOpen && <AddModal type={addType} onTypeChange={setAddType} onClose={() => setModalOpen(false)} onCreate={addRecord} />}
       {editingEvent && <EditEventModal event={editingEvent} onClose={() => setEditingEvent(null)} onSave={updateEvent} onDelete={removeEvent} />}
-      {profileModalOpen && (
-        <UserProfileModal
-          user={user}
-          profile={profile}
-          supabase={supabase}
-          isOpen={profileModalOpen}
-          onClose={() => setProfileModalOpen(false)}
-          onToast={setToast}
-          onSignOut={onSignOut}
-        />
-      )}
       <Toast message={toast} onDismiss={() => setToast("")} />
     </div>
   );
