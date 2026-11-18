@@ -2,9 +2,9 @@ import { useState } from "react";
 import { GraduationCap, X, Clock3, Trash2 } from "lucide-react";
 
 const TIMING_PRESETS = [
-  "Full Day (09:00 AM - 05:00 PM)",
-  "Morning (09:00 AM - 01:00 PM)",
-  "Afternoon (01:00 PM - 05:00 PM)",
+  "Full Time (09:30 AM - 06:30 PM)",
+  "Morning (09:30 AM - 01:30 PM)",
+  "Afternoon (01:30 PM - 06:30 PM)",
   "Evening (05:00 PM - 09:00 PM)",
 ];
 
@@ -108,7 +108,7 @@ export default function EditTrainerModal({ trainer, onClose, onSave, onDelete })
               maxLength={100}
               value={timing}
               onChange={(e) => setTiming(e.target.value)}
-              placeholder="e.g. Full Day (09:00 AM - 05:00 PM)"
+              placeholder="e.g. Full Time (09:30 AM - 06:30 PM)"
             />
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
               {TIMING_PRESETS.map((preset) => (

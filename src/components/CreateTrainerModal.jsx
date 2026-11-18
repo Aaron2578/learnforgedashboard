@@ -15,7 +15,7 @@ export default function CreateTrainerModal({ onClose, onCreated, supabase, onToa
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("Trainer@LearnForge2026!");
   const [showPassword, setShowPassword] = useState(true);
-  const [timing, setTiming] = useState("10:00 AM - 12:00 PM");
+  const [timing, setTiming] = useState("Full Time (09:30 AM - 06:30 PM)");
   const [customTiming, setCustomTiming] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -304,11 +304,12 @@ export default function CreateTrainerModal({ onClose, onCreated, supabase, onToa
                   onChange={(e) => setTiming(e.target.value)}
                   disabled={saving}
                 >
+                  <option value="Full Time (09:30 AM - 06:30 PM)">Full Time (09:30 AM - 06:30 PM)</option>
+                  <option value="Morning (09:30 AM - 01:30 PM)">Morning Shift (09:30 AM - 01:30 PM)</option>
+                  <option value="Afternoon (01:30 PM - 06:30 PM)">Afternoon Shift (01:30 PM - 06:30 PM)</option>
                   <option value="10:00 AM - 12:00 PM">Morning Batch (10:00 AM - 12:00 PM)</option>
-                  <option value="09:00 AM - 01:00 PM">Morning Full (09:00 AM - 01:00 PM)</option>
                   <option value="02:00 PM - 04:00 PM">Afternoon Batch (02:00 PM - 04:00 PM)</option>
                   <option value="05:00 PM - 07:00 PM">Evening Batch (05:00 PM - 07:00 PM)</option>
-                  <option value="Full Day (09:00 AM - 05:00 PM)">Full Day (09:00 AM - 05:00 PM)</option>
                   <option value="Custom">Custom Shift / Timing...</option>
                 </select>
               </label>

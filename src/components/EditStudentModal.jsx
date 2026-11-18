@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { Users, X } from "lucide-react";
+import { Users, X, Clock3 } from "lucide-react";
+
+const STUDENT_TIMING_PRESETS = [
+  "Full Time (09:30 AM - 06:30 PM)",
+  "Morning (09:30 AM - 01:30 PM)",
+  "Afternoon (01:30 PM - 06:30 PM)",
+  "Morning Batch (10:00 AM - 12:00 PM)",
+  "Evening (05:00 PM - 07:00 PM)",
+];
 
 export default function EditStudentModal({ student, trainers = [], onClose, onSave, onDelete }) {
   const [fullName, setFullName] = useState(student.full_name || "");
@@ -91,9 +99,29 @@ export default function EditStudentModal({ student, trainers = [], onClose, onSa
               maxLength={100}
               value={timing}
               onChange={(e) => setTiming(e.target.value)}
-              placeholder="e.g. 10:00 AM - 12:00 PM (or Morning / Evening batch)"
+              placeholder="e.g. Full Time (09:30 AM - 06:30 PM)"
             />
-            <small style={{ display: "block", marginTop: "3px", color: "var(--muted)", fontSize: "11.5px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
+              {STUDENT_TIMING_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className="button compact"
+                  style={{
+                    fontSize: "11px",
+                    padding: "3px 8px",
+                    background: timing === preset ? "#eff6ff" : "#f8fafc",
+                    borderColor: timing === preset ? "#93c5fd" : "#e2e8f0",
+                    color: timing === preset ? "#1d4ed8" : "#475569",
+                    fontWeight: timing === preset ? 700 : 500,
+                  }}
+                  onClick={() => setTiming(preset)}
+                >
+                  <Clock3 size={11} /> {preset}
+                </button>
+              ))}
+            </div>
+            <small style={{ display: "block", marginTop: "4px", color: "var(--muted)", fontSize: "11.5px" }}>
               Set this student's individual lecture or batch time. Appears on their dashboard.
             </small>
           </label>

@@ -2481,7 +2481,7 @@ function AdminManagementView({ view, supabase, user, query, onToast = () => {}, 
                 {/* Meta Information Container (Timing, Notes & Courses) */}
                 <div className="student-item-meta">
                   <span className="student-timing-chip">
-                    <Clock3 size={12} /> Class Timing: <strong>{student.timing || "10:00 AM - 12:00 PM"}</strong>
+                    <Clock3 size={12} /> Class Timing: <strong>{student.timing || "Full Time (09:30 AM - 06:30 PM)"}</strong>
                   </span>
 
                   {(() => {
